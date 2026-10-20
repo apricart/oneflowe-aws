@@ -58,6 +58,7 @@ function filterConditions(query: WarehouseOrderListQuery, now: Date): SQL[] {
     conditions.push(sql`(${isDelivered} AND COALESCE(${orders.deliveredAt}, ${orders.fulfilledAt}) >= ${since})`)
   }
   if (query.stage !== null) conditions.push(sql`${stage} = ${query.stage}`)
+  if (query.paymentStatus !== null) conditions.push(eq(orders.paymentStatus, query.paymentStatus))
   if (query.organizationId !== null) conditions.push(eq(orders.organizationId, query.organizationId))
   if (query.branchId !== null) conditions.push(eq(orders.branchId, query.branchId))
   if (query.search) {

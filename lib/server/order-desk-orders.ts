@@ -6,6 +6,7 @@ import { branches, budgets, globalProducts, orderItems, orders, organizations, r
 import { db } from "@/lib/db"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isOrderDelivered, normalizeFulfillmentStatus, type FulfillmentStatus } from "@/lib/fulfillment-status"
+import { normalizePaymentStatus } from "@/lib/payment-status"
 import { STAGES_BEFORE_TAX_INVOICE, isBeforeTaxInvoiceStage } from "@/lib/invoice-policy"
 import { deskOrderActions, type DeskOrderActions, type IntakeChannel } from "@/lib/order-desk-access"
 import {
@@ -110,6 +111,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
   // Filters only narrow what the reach above already allows.
   if (query.organizationId !== null) conditions.push(eq(orders.organizationId, query.organizationId))
   if (query.branchId !== null) conditions.push(eq(orders.branchId, query.branchId))
+  if (query.paymentStatus !== null) conditions.push(eq(orderSelectColumns.paymentStatus, query.paymentStatus))
   if (query.search) {
     // A parameter, with the LIKE wildcards in what was typed escaped.
     const pattern = `%${escapeLikePattern(query.search)}%`
@@ -144,6 +146,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       correctionRequestNote: orders.correctionRequestNote,
       rejectionReason: orders.rejectionReason,
       fulfillmentStatus: orders.fulfillmentStatus,
+      paymentStatus: orderSelectColumns.paymentStatus,
       organizationId: orders.organizationId,
       organizationName: organizations.name,
       branchId: orders.branchId,
@@ -201,6 +204,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       ...row,
       ...deskOrderActions(row),
       fulfillmentStatus: normalizeFulfillmentStatus(row.fulfillmentStatus),
+      paymentStatus: normalizePaymentStatus(row.paymentStatus),
       totalCents: Number(row.totalCents),
       refundedCents: Number(row.refundedCents ?? 0),
       pendingRefundCents: pendingByOrder.get(row.id) ?? 0,

@@ -198,6 +198,28 @@ describe("OrderPortalPage cart dialog", () => {
       expect(document.querySelector('[data-slot="dialog-overlay"][data-state="open"]')).toBeNull()
     })
   })
+
+  it("shows the complete branch address for the default delivery option", async () => {
+    mocks.useBranches.mockReturnValue({
+      data: {
+        items: [{
+          id: 2,
+          name: "Test branch",
+          address: "ACB 456",
+          city: "Karachi",
+          province: "Sindh",
+        }],
+      },
+    })
+
+    render(<OrderPortalPage />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Add .* to Cart/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Cart" }))
+    fireEvent.click(screen.getByRole("button", { name: /Proceed to checkout/ }))
+
+    expect(await screen.findByText("ACB 456, Karachi, Sindh (default)")).toBeTruthy()
+  })
 })
 
 describe("OrderPortalPage cart persistence", () => {

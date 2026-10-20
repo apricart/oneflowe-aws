@@ -44,6 +44,7 @@ function order(id: number, overrides: Record<string, unknown> = {}) {
     userName: "Ahmed Khan",
     userId: "u-1",
     employeeId: "E-1",
+    financialApproverLevel: 2,
     ...overrides,
   }
 }
@@ -104,6 +105,15 @@ describe("Order Report", () => {
     expect(screen.getAllByText("TID-0002").length).toBeGreaterThan(0)
     const report = callsTo("/api/v1/analytics/summary").find((call) => call.url.includes("ordersOnly=true"))!
     expect(report.url).toContain("organizationId=5")
+  })
+
+  it("shows the approving Financial Approver's assigned level", async () => {
+    routes([[order(1, { financialApproverLevel: 2 })]])
+    renderWithApp(<OrderReportPage />)
+    await openReports()
+
+    expect(await screen.findByText("Financial Approver Level")).toBeTruthy()
+    expect(screen.getAllByText("Level 2").length).toBeGreaterThan(0)
   })
 
   it("sends the status filter and the search to the server, not just the page on screen", async () => {

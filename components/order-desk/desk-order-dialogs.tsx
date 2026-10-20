@@ -19,6 +19,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import type { FulfillmentStatus } from "@/lib/fulfillment-status"
+import type { PaymentStatus } from "@/lib/payment-status"
 import { ORDER_CORRECTION_TEXT_MAX_LENGTH } from "@/lib/order-correction"
 import { CANCELLATION_REASON_MAX_LENGTH, type IntakeChannel } from "@/lib/order-desk-access"
 import {
@@ -39,6 +40,7 @@ export type DeskOrder = {
   tid: string
   status: string
   fulfillmentStatus: FulfillmentStatus
+  paymentStatus?: PaymentStatus
   /** Set while an Apricart Executive has it back with the desk for correction. */
   returnedForCorrectionAt: string | null
   correctionRequestNote: string | null

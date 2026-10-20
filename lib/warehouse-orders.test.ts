@@ -31,6 +31,7 @@ describe("the queue's query string", () => {
       value: {
         view: "open",
         stage: null,
+        paymentStatus: null,
         organizationId: null,
         branchId: null,
         search: "",
@@ -43,12 +44,13 @@ describe("the queue's query string", () => {
   })
 
   it("reads every filter", () => {
-    const result = parse("view=delivered&stage=out_for_delivery&organizationId=4&branchId=9&q=%20INV-7%20&days=7&lines=1&page=3&limit=50")
+    const result = parse("view=delivered&stage=out_for_delivery&paymentStatus=paid&organizationId=4&branchId=9&q=%20INV-7%20&days=7&lines=1&page=3&limit=50")
     expect(result).toEqual({
       ok: true,
       value: {
         view: "delivered",
         stage: "OUT_FOR_DELIVERY",
+        paymentStatus: "PAID",
         organizationId: 4,
         branchId: 9,
         search: "INV-7",
@@ -71,6 +73,7 @@ describe("the queue's query string", () => {
     ["an unknown key", "orgId=4"],
     ["an unknown view", "view=pending"],
     ["an unknown stage", "stage=FULFILLED"],
+    ["an unknown payment status", "paymentStatus=SETTLED"],
     ["a non-numeric organization", "organizationId=1%20OR%201%3D1"],
     ["a negative branch", "branchId=-3"],
     ["a decimal branch", "branchId=3.5"],

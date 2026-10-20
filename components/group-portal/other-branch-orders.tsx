@@ -17,11 +17,13 @@ import {
   type OrderStatusPillOption,
 } from "@/components/orders/order-list-chrome"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { useDebounce } from "@/hooks/use-debounce"
 import { fetcher } from "@/lib/fetcher"
 import { FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { type OrderStatusFilter } from "@/lib/order-status"
+import { PAYMENT_STATUS_LABELS, type PaymentStatus } from "@/lib/payment-status"
 import { formatQuantity } from "@/lib/quantity"
 import { cn, formatPKR } from "@/lib/utils"
 
@@ -81,6 +83,7 @@ function formatDate(value: string | null | undefined): string {
  */
 export function OtherBranchOrders() {
   const [status, setStatus] = useState<OrderStatusFilter>("all")
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState("")
   const [openOrder, setOpenOrder] = useState<BranchOrder | null>(null)
@@ -93,15 +96,20 @@ export function OtherBranchOrders() {
       createdByRole: "ORDER_PORTAL",
     })
     if (status !== "all") params.set("status", status)
+    if (status === "fulfilled" && paymentStatus) params.set("paymentStatus", paymentStatus)
     if (debouncedSearch) params.set("q", debouncedSearch)
     return `/api/v1/orders?${params.toString()}`
-  }, [debouncedSearch, page, status])
+  }, [debouncedSearch, page, paymentStatus, status])
 
   // A different filter or search describes a different set of orders, so the
   // page the user was on would strand them on an empty one.
   useEffect(() => {
     setPage(1)
-  }, [debouncedSearch, status])
+  }, [debouncedSearch, paymentStatus, status])
+
+  useEffect(() => {
+    if (status !== "fulfilled" && paymentStatus !== null) setPaymentStatus(null)
+  }, [paymentStatus, status])
 
   const { data, error, isLoading, isValidating, mutate } = useSWR<BranchOrdersResponse>(
     endpoint,
@@ -120,7 +128,33 @@ export function OtherBranchOrders() {
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <OrderStatusPills value={status} options={STATUS_TABS} onChange={setStatus} />
+        <div className="flex flex-wrap items-center gap-2">
+          <OrderStatusPills
+            value={status}
+            options={STATUS_TABS}
+            onChange={(nextStatus) => {
+              setStatus(nextStatus)
+              if (nextStatus !== "fulfilled") setPaymentStatus(null)
+            }}
+          />
+          {status === "fulfilled" && (
+            <div className="flex items-center rounded-xl border border-slate-200/60 bg-slate-100/60 p-1 dark:border-slate-700/50 dark:bg-slate-800/50" role="group" aria-label="Filter fulfilled orders by payment status">
+              {([null, "PAID", "UNPAID"] as const).map((nextPaymentStatus) => (
+                <Button
+                  key={nextPaymentStatus ?? "all"}
+                  type="button"
+                  size="sm"
+                  variant={paymentStatus === nextPaymentStatus ? "secondary" : "ghost"}
+                  aria-pressed={paymentStatus === nextPaymentStatus}
+                  onClick={() => { setPage(1); setPaymentStatus(nextPaymentStatus) }}
+                  className="h-8 rounded-lg px-3 text-xs font-bold"
+                >
+                  {nextPaymentStatus ? PAYMENT_STATUS_LABELS[nextPaymentStatus] : "All payments"}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
         <OrderListSearch
           value={search}
           onChange={setSearch}

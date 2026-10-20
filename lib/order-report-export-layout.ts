@@ -19,6 +19,7 @@ export type OrderReportExportColumnKey =
   | "initiatedDate"
   | "approver"
   | "approvalLevel"
+  | "financialApproverLevel"
   | "approverDesignation"
   | "approvedDate"
   | "deliveredDate"
@@ -53,6 +54,7 @@ export const ORDER_REPORT_EXPORT_COLUMNS: readonly OrderReportExportColumn[] = [
   { key: "initiatedDate", label: "Initiated Date" },
   { key: "approver", label: "Approver" },
   { key: "approvalLevel", label: "Approval Level" },
+  { key: "financialApproverLevel", label: "Financial Approver Level" },
   { key: "approverDesignation", label: "Approver Designation" },
   { key: "approvedDate", label: "Approved Date" },
   { key: "deliveredDate", label: "Delivered Date" },
@@ -90,6 +92,8 @@ export interface OrderReportExportRecord {
   approverDesignation?: string | null
   /** The band the order was decided at (1 = highest), null when unlevelled. */
   approvalLevel?: number | null
+  /** The approving Financial Approver's current assigned level, if any. */
+  financialApproverLevel?: number | null
   fulfillerName?: string | null
   createdAt?: ReportDate
   approvedAt?: ReportDate
@@ -180,6 +184,8 @@ export function resolveOrderReportExportValue(
       return toText(order.approverName)
     case "approvalLevel":
       return approverLevelOf(order.approvalLevel).approverLevel
+    case "financialApproverLevel":
+      return approverLevelOf(order.financialApproverLevel).approverLevel
     case "approverDesignation":
       return toText(order.approverDesignation)
     case "approvedDate":

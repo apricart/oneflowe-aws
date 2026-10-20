@@ -50,6 +50,7 @@ import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
 import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
+import { parsePaymentStatusFilter, type PaymentStatus } from "@/lib/payment-status"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isGroupPortalOrder,type OrderCreatorRole } from "@/lib/group-order-visibility"
 import { parseOrderCreatorRoleFilter } from "@/lib/order-creator-filter"
@@ -159,6 +160,7 @@ function parseOrderListQuery(
     deliveryFilter: OrderDeliveryFilter | null
     fulfillmentStatusFilter: FulfillmentStatus | null
     invoiceStatusFilter: InvoiceStatus | null
+    paymentStatusFilter: PaymentStatus | null
     orderBy: SQL[]
   }
   | { ok: false; error: string } {
@@ -170,6 +172,8 @@ function parseOrderListQuery(
   if (!fulfillmentStatusFilter.ok) return { ok: false, error: fulfillmentStatusFilter.message }
   const invoiceStatusFilter = parseInvoiceStatusFilter(params.invoiceStatus)
   if (!invoiceStatusFilter.ok) return { ok: false, error: invoiceStatusFilter.message }
+  const paymentStatusFilter = parsePaymentStatusFilter(params.paymentStatus)
+  if (!paymentStatusFilter.ok) return { ok: false, error: paymentStatusFilter.message }
   const listOrder = resolveOrderListOrder(params.searchParams, pricesHidden)
   if (!listOrder.ok) return listOrder
   return {
@@ -178,6 +182,7 @@ function parseOrderListQuery(
     deliveryFilter: deliveryFilter.filter,
     fulfillmentStatusFilter: fulfillmentStatusFilter.filter,
     invoiceStatusFilter: invoiceStatusFilter.filter,
+    paymentStatusFilter: paymentStatusFilter.status,
     orderBy: listOrder.orderBy,
   }
 }
@@ -218,6 +223,7 @@ function getOrderListParams(req: NextRequest) {
     delivery: searchParams.get("delivery"),
     fulfillmentStatus: searchParams.get("fulfillmentStatus"),
     invoiceStatus: searchParams.get("invoiceStatus"),
+    paymentStatus: searchParams.get("paymentStatus"),
     groupIds: parseNumberList(searchParams.get("groupIds") || undefined),
     months: parseNumberList(searchParams.get("months") || undefined, 1, 12),
     years: parseNumberList(searchParams.get("years") || undefined, 2000, 2100),
@@ -471,6 +477,7 @@ function addOrderStatusConditions(
   deliveryFilter: OrderDeliveryFilter | null,
   fulfillmentStatus: FulfillmentStatus | null,
   invoiceStatus: InvoiceStatus | null = null,
+  paymentStatus: PaymentStatus | null = null,
 ) {
   const requestedStatuses = getOrderStatusesForFilter(statusFilter)
   if (requestedStatuses.length > 0) {
@@ -492,6 +499,9 @@ function addOrderStatusConditions(
   if (invoiceStatus) {
     conditions.push(sql`${invoiceStatusSql} = ${invoiceStatus}`)
   }
+  if (paymentStatus) {
+    conditions.push(sql`${orderSelectColumns.paymentStatus} = ${paymentStatus}`)
+  }
 }
 
 function getOrderListSummaryTotal(statusFilter: string, summaryRow: any, deliveryFilter: OrderDeliveryFilter | null = null) {
@@ -507,6 +517,7 @@ async function getOrderListPaginationTotal(input: {
   deliveryFilter: OrderDeliveryFilter | null
   fulfillmentStatus: FulfillmentStatus | null
   invoiceStatus: InvoiceStatus | null
+  paymentStatus: PaymentStatus | null
   conditions: any[]
 }) {
   const summaryTotal = Number(getOrderListSummaryTotal(
@@ -516,7 +527,7 @@ async function getOrderListPaginationTotal(input: {
   ))
   // The summary cards do not count by fulfilment or invoice status, so either
   // filter needs its own count.
-  if (!input.fulfillmentStatus && !input.invoiceStatus) return summaryTotal
+  if (!input.fulfillmentStatus && !input.invoiceStatus && !input.paymentStatus) return summaryTotal
 
   const { conditions } = input
   const listCondition = conditions.length ? and(...conditions) : undefined
@@ -1300,6 +1311,7 @@ export async function GET(req: NextRequest) {
       listQuery.deliveryFilter,
       listQuery.fulfillmentStatusFilter,
       listQuery.invoiceStatusFilter,
+      listQuery.paymentStatusFilter,
     )
 
     // --- Audit Logging for Group Access ---
@@ -1435,6 +1447,7 @@ export async function GET(req: NextRequest) {
       deliveryFilter: listQuery.deliveryFilter,
       fulfillmentStatus: listQuery.fulfillmentStatusFilter,
       invoiceStatus: listQuery.invoiceStatusFilter,
+      paymentStatus: listQuery.paymentStatusFilter,
       conditions,
     })
 

@@ -70,6 +70,11 @@ import {
   parseInvoiceStatusFilter,
   type InvoiceStatus,
 } from "@/lib/invoice-status"
+import {
+  PAYMENT_STATUS_LABELS,
+  parsePaymentStatusFilter,
+  type PaymentStatus,
+} from "@/lib/payment-status"
 
 type DateRange = {
   startDate: Date
@@ -142,16 +147,19 @@ function requestedListTab(searchParams: Pick<URLSearchParams, "get">): {
   deliveryFilter: OrderDeliveryFilter | null
   fulfillmentStatusFilter: FulfillmentStatus | null
   invoiceStatusFilter: InvoiceStatus | null
+  paymentStatusFilter: PaymentStatus | null
 } {
   const delivery = parseOrderDeliveryFilter(searchParams.get("delivery"))
   const deliveryFilter = delivery.ok ? delivery.filter : null
   const fulfillmentStatus = parseFulfillmentStatusFilter(searchParams.get("fulfillmentStatus"))
   const invoiceStatus = parseInvoiceStatusFilter(searchParams.get("invoiceStatus"))
+  const paymentStatus = parsePaymentStatusFilter(searchParams.get("paymentStatus"))
   return {
     statusFilter: deliveryFilter ? "approved" : getOrderStatusFilter(searchParams.get("status")),
     deliveryFilter,
     fulfillmentStatusFilter: fulfillmentStatus.ok ? fulfillmentStatus.filter : null,
     invoiceStatusFilter: invoiceStatus.ok ? invoiceStatus.filter : null,
+    paymentStatusFilter: paymentStatus.ok ? paymentStatus.status : null,
   }
 }
 
@@ -162,6 +170,7 @@ function OrdersManagementContent() {
     deliveryFilter: requestedDeliveryFilter,
     fulfillmentStatusFilter: requestedFulfillmentStatusFilter,
     invoiceStatusFilter: requestedInvoiceStatusFilter,
+    paymentStatusFilter: requestedPaymentStatusFilter,
   } = requestedListTab(searchParams)
   const { data: session } = useSession()
   const {
@@ -210,6 +219,9 @@ function OrdersManagementContent() {
   const [invoiceStatusFilter, setInvoiceStatusFilter] = useState<InvoiceStatus | null>(
     requestedInvoiceStatusFilter,
   )
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<PaymentStatus | null>(
+    requestedPaymentStatusFilter,
+  )
   // Local Hierarchical Filter State
   const [reportBranchIds, setReportBranchIds] = useState<string[]>([])
   const [reportGroupIds, setReportGroupIds] = useState<string[]>([])
@@ -220,7 +232,8 @@ function OrdersManagementContent() {
     setDeliveryFilter(requestedDeliveryFilter)
     setFulfillmentStatusFilter(requestedFulfillmentStatusFilter)
     setInvoiceStatusFilter(requestedInvoiceStatusFilter)
-  }, [requestedStatusFilter, requestedDeliveryFilter, requestedFulfillmentStatusFilter, requestedInvoiceStatusFilter])
+    setPaymentStatusFilter(requestedPaymentStatusFilter)
+  }, [requestedStatusFilter, requestedDeliveryFilter, requestedFulfillmentStatusFilter, requestedInvoiceStatusFilter, requestedPaymentStatusFilter])
 
 
   const handleDateChange = useCallback(({ range, preset, months = [], years = [] }: GlobalDateFilterChange) => {
@@ -243,6 +256,7 @@ function OrdersManagementContent() {
     deliveryFilter !== null ||
     fulfillmentStatusFilter !== null ||
     invoiceStatusFilter !== null ||
+    paymentStatusFilter !== null ||
     splitFilter !== "all"
 
   const resetOrderFilters = useCallback(() => {
@@ -258,6 +272,7 @@ function OrdersManagementContent() {
     setDeliveryFilter(null)
     setFulfillmentStatusFilter(null)
     setInvoiceStatusFilter(null)
+    setPaymentStatusFilter(null)
     setSplitFilter("all")
   }, [])
 
@@ -336,12 +351,16 @@ function OrdersManagementContent() {
       params.set("invoiceStatus", invoiceStatusFilter)
     }
 
+    if (paymentStatusFilter) {
+      params.set("paymentStatus", paymentStatusFilter)
+    }
+
     if (debouncedSearchQuery) {
       params.set("q", debouncedSearchQuery)
     }
 
     return params.toString()
-  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, deliveryFilter, fulfillmentStatusFilter, invoiceStatusFilter])
+  }, [organizationId, branchId, branchIds, reportBranchIds, reportGroupIds, dateRange, selectedMonths, selectedYears, statusFilter, isInitialized, debouncedSearchQuery, deliveryFilter, fulfillmentStatusFilter, invoiceStatusFilter, paymentStatusFilter])
 
   const ordersEndpoint = useMemo(() => {
     if (ordersQuery === null) return null
@@ -365,12 +384,19 @@ function OrdersManagementContent() {
     && ordersData?.capabilities?.canRejectOrders,
   )
   const showSplitFilter = statusFilter === "fulfilled" || statusFilter === "refunded"
+  const showPaymentFilter = statusFilter === "fulfilled" && deliveryFilter === null
 
   useEffect(() => {
     if (!showSplitFilter && splitFilter !== "all") {
       setSplitFilter("all")
     }
   }, [showSplitFilter, splitFilter])
+
+  useEffect(() => {
+    if (!showPaymentFilter && paymentStatusFilter !== null) {
+      setPaymentStatusFilter(null)
+    }
+  }, [showPaymentFilter, paymentStatusFilter])
 
   // Filter and search orders
   const filteredOrders = useMemo(
@@ -593,6 +619,7 @@ function OrdersManagementContent() {
                         setCurrentPage(1)
                         setStatusFilter(status)
                         setDeliveryFilter(null)
+                        if (status !== "fulfilled") setPaymentStatusFilter(null)
                       }}
                       variant={isSelected ? "secondary" : "ghost"}
                       size="sm"
@@ -629,6 +656,28 @@ function OrdersManagementContent() {
                     </span>
                   </Button>
                 </div>
+
+                {showPaymentFilter && (
+                  <div
+                    className="flex shrink-0 items-center rounded-xl border border-slate-200/50 bg-slate-100/60 p-1 dark:border-slate-700/50 dark:bg-slate-800/50"
+                    role="group"
+                    aria-label="Filter fulfilled orders by payment status"
+                  >
+                    {([null, "PAID", "UNPAID"] as const).map((paymentStatus) => (
+                      <Button
+                        key={paymentStatus ?? "all"}
+                        type="button"
+                        size="sm"
+                        variant={paymentStatusFilter === paymentStatus ? "secondary" : "ghost"}
+                        aria-pressed={paymentStatusFilter === paymentStatus}
+                        onClick={() => { setCurrentPage(1); setPaymentStatusFilter(paymentStatus) }}
+                        className="h-8 rounded-lg px-3 text-xs font-bold"
+                      >
+                        {paymentStatus ? PAYMENT_STATUS_LABELS[paymentStatus] : "All payments"}
+                      </Button>
+                    ))}
+                  </div>
+                )}
 
                 <div className="group relative w-full min-w-0 sm:w-[280px] sm:shrink-0">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-indigo-500" />

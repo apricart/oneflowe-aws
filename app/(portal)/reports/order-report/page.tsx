@@ -20,6 +20,7 @@ import { approverLevelOf } from "@/lib/consolidated-invoice"
 import { getOrderDerivedStatus } from "@/lib/order-status"
 import { getOrderStatusDisplay } from "@/lib/order-status-display"
 import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
+import { PAYMENT_STATUS_LABELS, type PaymentStatus } from "@/lib/payment-status"
 import { Role } from "@/lib/rbac"
 import { sanitizeSpreadsheetRow } from "@/lib/spreadsheet"
 import {
@@ -103,6 +104,7 @@ const ALL_COLUMNS: ColumnDef[] = [
     { key: "deliveryStatus", label: "Delivery Status", defaultVisible: true },
     { key: "paymentStatus", label: "Payment", defaultVisible: true },
     { key: "approvalLevel", label: "Approval Level", defaultVisible: true },
+    { key: "financialApproverLevel", label: "Financial Approver Level", defaultVisible: true },
     { key: "approver", label: "Approver", defaultVisible: true },
     { key: "quantityOrdered", label: "Qty Ordered", defaultVisible: true },
     { key: "quantityDelivered", label: "Qty Delivered", defaultVisible: true },
@@ -162,6 +164,7 @@ export default function OrderReportPage() {
     const [groupOrderFilter, setGroupOrderFilter] = useState("")
     const debouncedGroupOrderFilter = useDebounce(groupOrderFilter.trim(), 300)
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all")
+    const [paymentStatusFilter, setPaymentStatusFilter] = useState<PaymentStatus | null>(null)
     const [currentPage, setCurrentPage] = useState(1)
     // Sorted on the server so it covers every page, starting from the order the
     // report already used (newest first). A new sort starts again from page 1.
@@ -346,6 +349,7 @@ export default function OrderReportPage() {
     if (reportMonths.length > 0) reportParams.set("months", reportMonths.join(","))
     if (reportYears.length > 0) reportParams.set("years", reportYears.join(","))
     if (statusFilter !== "all") reportParams.set("status", statusFilter)
+    if (statusFilter === "fulfilled" && paymentStatusFilter) reportParams.set("paymentStatus", paymentStatusFilter)
     if (debouncedReportSearch) reportParams.set("q", debouncedReportSearch)
     if (showsGroupOrders && debouncedGroupOrderFilter) {
         reportParams.set("groupOrderRef", debouncedGroupOrderFilter)
@@ -395,6 +399,7 @@ export default function OrderReportPage() {
 
     const resetReportFilters = useCallback(() => {
         setStatusFilter("all")
+        setPaymentStatusFilter(null)
         setReportSearch("")
         setGroupOrderFilter("")
         setReportMonths([])
@@ -438,9 +443,10 @@ export default function OrderReportPage() {
                 (order.employeeId && String(order.employeeId).toLowerCase().includes(reportSearch.toLowerCase())) ||
                 (order.userId?.toLowerCase().includes(reportSearch.toLowerCase()))
             const matchesStatus = statusFilter === 'all' || order.status?.toLowerCase() === statusFilter.toLowerCase();
-            return matchesSearch && matchesStatus;
+            const matchesPaymentStatus = paymentStatusFilter === null || order.paymentStatus === paymentStatusFilter
+            return matchesSearch && matchesStatus && matchesPaymentStatus;
         })
-    }, [reportOrders, reportSearch, statusFilter])
+    }, [reportOrders, reportSearch, statusFilter, paymentStatusFilter])
     const lastVisibleOrder = Math.min(
         (currentPage - 1) * ORDER_REPORT_PAGE_SIZE + filteredOrders.length,
         totalReportOrders,
@@ -448,7 +454,11 @@ export default function OrderReportPage() {
 
     useEffect(() => {
         setCurrentPage(1)
-    }, [debouncedReportSearch, statusFilter, dateRange, reportMonths, reportYears, reportOrgIds, reportGroupIds, reportBranchIds, organizationId, contextBranchId])
+    }, [debouncedReportSearch, statusFilter, paymentStatusFilter, dateRange, reportMonths, reportYears, reportOrgIds, reportGroupIds, reportBranchIds, organizationId, contextBranchId])
+
+    useEffect(() => {
+        if (statusFilter !== "fulfilled" && paymentStatusFilter !== null) setPaymentStatusFilter(null)
+    }, [paymentStatusFilter, statusFilter])
 
     useEffect(() => {
         if (reportData?.pagination && currentPage > totalReportPages) {
@@ -659,6 +669,7 @@ export default function OrderReportPage() {
         isVisible("deliveryStatus"),
         isVisible("paymentStatus"),
         isVisible("approvalLevel"),
+        isVisible("financialApproverLevel"),
         isVisible("approver"),
         isVisible("quantityOrdered"),
         isVisible("quantityDelivered"),
@@ -911,12 +922,21 @@ export default function OrderReportPage() {
                         {/* Report Controls */}
                         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-6 bg-white dark:bg-slate-900/40 p-5 rounded-[2.5rem] border border-slate-200/60 dark:border-slate-800/60 shadow-sm backdrop-blur-xl">
                             <div className="flex flex-wrap items-center gap-2.5 p-1 bg-slate-50 dark:bg-slate-950/50 rounded-[1.25rem] border border-slate-100 dark:border-slate-800/50">
-                                <button type="button" onClick={() => setStatusFilter("all")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "all" ? "bg-white dark:bg-slate-800 text-indigo-600 shadow-md ring-1 ring-slate-200 dark:ring-slate-700" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>All</button>
-                                <button type="button" onClick={() => setStatusFilter("pending")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "pending" ? "bg-white dark:bg-slate-800 text-slate-700 shadow-md ring-1 ring-slate-200 dark:ring-slate-700" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Pending Approval</button>
-                                <button type="button" onClick={() => setStatusFilter("approved")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "approved" ? "bg-blue-500 text-white shadow-lg shadow-blue-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Active</button>
+                                <button type="button" onClick={() => { setStatusFilter("all"); setPaymentStatusFilter(null) }} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "all" ? "bg-white dark:bg-slate-800 text-indigo-600 shadow-md ring-1 ring-slate-200 dark:ring-slate-700" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>All</button>
+                                <button type="button" onClick={() => { setStatusFilter("pending"); setPaymentStatusFilter(null) }} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "pending" ? "bg-white dark:bg-slate-800 text-slate-700 shadow-md ring-1 ring-slate-200 dark:ring-slate-700" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Pending Approval</button>
+                                <button type="button" onClick={() => { setStatusFilter("approved"); setPaymentStatusFilter(null) }} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "approved" ? "bg-blue-500 text-white shadow-lg shadow-blue-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Active</button>
                                 <button type="button" onClick={() => setStatusFilter("fulfilled")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "fulfilled" ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Fulfilled</button>
-                                <button type="button" onClick={() => setStatusFilter("refunded")} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "refunded" ? "bg-rose-500 text-white shadow-lg shadow-rose-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Refunds</button>
+                                <button type="button" onClick={() => { setStatusFilter("refunded"); setPaymentStatusFilter(null) }} className={cn("px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300", statusFilter === "refunded" ? "bg-rose-500 text-white shadow-lg shadow-rose-500/20" : "text-slate-500 hover:text-slate-800 dark:hover:text-slate-200")}>Refunds</button>
                             </div>
+                            {statusFilter === "fulfilled" && (
+                                <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1 dark:border-slate-800 dark:bg-slate-950/50" role="group" aria-label="Filter fulfilled orders by payment status">
+                                    {([null, "PAID", "UNPAID"] as const).map((nextPaymentStatus) => (
+                                        <Button key={nextPaymentStatus ?? "all"} type="button" size="sm" variant={paymentStatusFilter === nextPaymentStatus ? "secondary" : "ghost"} aria-pressed={paymentStatusFilter === nextPaymentStatus} onClick={() => setPaymentStatusFilter(nextPaymentStatus)} className="h-8 rounded-lg px-3 text-[10px] font-black uppercase tracking-widest">
+                                            {nextPaymentStatus ? PAYMENT_STATUS_LABELS[nextPaymentStatus] : "All payments"}
+                                        </Button>
+                                    ))}
+                                </div>
+                            )}
                             <div className="flex flex-wrap items-center gap-3">
                                 <div className="relative group/search">
                                     <div className="absolute inset-0 bg-indigo-500/5 rounded-2xl blur-md opacity-0 group-focus-within/search:opacity-100 transition-opacity"></div>
@@ -1064,6 +1084,7 @@ export default function OrderReportPage() {
                                         {isVisible("deliveryStatus") && <col className="w-[140px]" />}
                                         {isVisible("paymentStatus") && <col className="w-[110px]" />}
                                         {isVisible("approvalLevel") && <col className="w-[110px]" />}
+                                        {isVisible("financialApproverLevel") && <col className="w-[145px]" />}
                                         {isVisible("approver") && <col className="w-[190px]" />}
                                         {isVisible("quantityOrdered") && <col className="w-[90px]" />}
                                         {isVisible("quantityDelivered") && <col className="w-[90px]" />}
@@ -1095,6 +1116,7 @@ export default function OrderReportPage() {
                                             {isVisible("deliveryStatus") && <TableHead aria-sort={ariaSortFor(reportSort, "deliveryStatus")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">{sortHead("deliveryStatus", "Delivery")}</TableHead>}
                                             {isVisible("paymentStatus") && <TableHead aria-sort={ariaSortFor(reportSort, "paymentStatus")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500 text-center">{sortHead("paymentStatus", "Payment")}</TableHead>}
                                             {isVisible("approvalLevel") && <TableHead aria-sort={ariaSortFor(reportSort, "approvalLevel")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">{sortHead("approvalLevel", "Approval Level")}</TableHead>}
+                                            {isVisible("financialApproverLevel") && <TableHead className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">Financial Approver Level</TableHead>}
                                             {isVisible("approver") && <TableHead aria-sort={ariaSortFor(reportSort, "approver")} className="h-14 px-3 2xl:px-4 text-[10px] font-black uppercase tracking-widest text-slate-500">{sortHead("approver", "Approver")}</TableHead>}
                                             {isVisible("quantityOrdered") && <TableHead aria-sort={ariaSortFor(reportSort, "quantityOrdered")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-slate-500 whitespace-normal">{sortHead("quantityOrdered", "Qty Ordered")}</TableHead>}
                                             {isVisible("quantityDelivered") && <TableHead aria-sort={ariaSortFor(reportSort, "quantityDelivered")} className="h-14 px-2 text-center text-[9px] font-black uppercase leading-tight tracking-wide text-emerald-600 whitespace-normal">{sortHead("quantityDelivered", "Qty Delivered")}</TableHead>}
@@ -1223,6 +1245,17 @@ export default function OrderReportPage() {
                                                                 ? (
                                                                     <Badge variant="outline" className="rounded-xl border-indigo-200 bg-indigo-50 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-indigo-600 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300">
                                                                         {approverLevelOf(order.approvalLevel).approverLevel}
+                                                                    </Badge>
+                                                                )
+                                                                : <span className="text-[10px] font-bold text-slate-400">—</span>}
+                                                        </TableCell>
+                                                    )}
+                                                    {isVisible("financialApproverLevel") && (
+                                                        <TableCell className="px-2 py-5 text-center">
+                                                            {approverLevelOf(order.financialApproverLevel).approverLevel
+                                                                ? (
+                                                                    <Badge variant="outline" className="rounded-xl border-violet-200 bg-violet-50 px-2 py-1 text-[9px] font-black uppercase tracking-wide text-violet-600 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-300">
+                                                                        {approverLevelOf(order.financialApproverLevel).approverLevel}
                                                                     </Badge>
                                                                 )
                                                                 : <span className="text-[10px] font-bold text-slate-400">—</span>}

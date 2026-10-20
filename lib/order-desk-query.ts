@@ -1,3 +1,5 @@
+import { parsePaymentStatusFilter, type PaymentStatus } from "@/lib/payment-status"
+
 /**
  * The query string of the Order Desk's own order list, parsed and bounded.
  *
@@ -32,6 +34,7 @@ export type DeskOrderListQuery = {
   organizationId: number | null
   branchId: number | null
   status: DeskOrderStatusFilter
+  paymentStatus: PaymentStatus | null
   /** Matched against the order number and the customer reference. Empty means none. */
   search: string
   page: number
@@ -66,6 +69,8 @@ export function parseDeskOrderListQuery(params: URLSearchParams): DeskOrderListQ
   if (!(DESK_ORDER_STATUS_FILTERS as readonly string[]).includes(rawStatus)) {
     return { ok: false, error: `status must be one of: ${DESK_ORDER_STATUS_FILTERS.join(", ")}` }
   }
+  const paymentStatus = parsePaymentStatusFilter(params.get("paymentStatus"))
+  if (!paymentStatus.ok) return { ok: false, error: paymentStatus.message }
 
   const search = (params.get("q") ?? "").trim()
   if (search.length > DESK_ORDER_SEARCH_MAX_LENGTH) {
@@ -78,6 +83,7 @@ export function parseDeskOrderListQuery(params: URLSearchParams): DeskOrderListQ
       organizationId: organizationId.value,
       branchId: branchId.value,
       status: rawStatus as DeskOrderStatusFilter,
+      paymentStatus: paymentStatus.status,
       search,
       page: boundedInt(params.get("page"), 1, DESK_ORDER_PAGE_MAX),
       limit: boundedInt(params.get("limit"), DESK_ORDER_PAGE_SIZE_DEFAULT, DESK_ORDER_PAGE_SIZE_MAX),
