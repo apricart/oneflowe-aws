@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test"
 
 import { E2E_PASSWORD } from "./support/environment"
 import { apiSession, closeRoleRenameNoticeWhenShown, placeOrder, post, signIn, testDatabaseUrl } from "./support/session"
+import { verifyJoinEmail } from "./support/join-email"
 import { destroyTenant, queryTestDb, seedTenant, tenantNames, type Tenant } from "./support/tenant"
 
 /**
@@ -92,6 +93,8 @@ test.describe.serial("joining an organization with approval levels, and ordering
     try {
       const page = await context.newPage()
       await openJoinWithCode(page)
+      // The address is proven by an emailed code before the form is shown.
+      await verifyJoinEmail(page, { joinCode: JOIN_CODE, localPart: initiatorLocal, domain: EMAIL_DOMAIN })
 
       // The department form, with one approver card per level and its band.
       await expect(page.getByRole("heading", { name: "Financial Approver Levels" })).toBeVisible({ timeout: 150_000 })
@@ -100,7 +103,7 @@ test.describe.serial("joining an organization with approval levels, and ordering
       await expect(page.getByRole("button", { name: "Send request" })).toHaveCount(0)
 
       await page.locator("#signup-full-name").fill("Level Applicant")
-      await page.locator("#signup-email").fill(initiatorLocal)
+      await expect(page.locator("#signup-email")).toHaveValue(initiatorLocal)
       // The organization's prefix, then the part of the email before the "@".
       await expect(page.locator("#signup-username")).toHaveValue(new RegExp(`^[a-z0-9]{1,3}-${initiatorLocal}$`))
       await page.locator("#signup-phone").fill(applicantPhone)

@@ -694,6 +694,34 @@
       "when": 1791086400000,
       "tag": "20261023120000_add_apricart_support_role",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1791090000000,
+      "tag": "20261024120000_branch_hierarchy",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1791093600000,
+      "tag": "20261025120000_join_email_verification",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1791097200000,
+      "tag": "20261026120000_join_request_branch_city",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1791100800000,
+      "tag": "20261027120000_warehouse_city_organizations",
+      "breakpoints": true
     }
   ]
 }

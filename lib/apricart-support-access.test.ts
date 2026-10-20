@@ -11,6 +11,7 @@ import {
   APRICART_SUPPORT_ROLE,
   apricartSupportAccessChangeError,
   apricartSupportUserShapeError,
+  hasApricartSupportOrderReadScope,
   isApricartSupportApiRequestAllowed,
 } from "@/lib/apricart-support-access"
 import { mayCreateOrder } from "@/lib/order-creation-access"
@@ -21,7 +22,7 @@ import { canAssignRole, canManageUser } from "@/lib/server/user-access-policy"
 import { systemRoleSchema } from "@/lib/server/mutation-validation"
 import { canManageSupportThread, supportThreadVisibilityScope } from "@/lib/support-access"
 import { usesPortalChrome } from "@/lib/portal-chrome"
-import { SUPPORT_APRICART_ROLES, supportSideForRole } from "@/lib/support-thread"
+import { SUPPORT_APRICART_ROLES, SUPPORT_WHOLE_QUEUE_ROLES, supportSideForRole } from "@/lib/support-thread"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 
 const read = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
@@ -51,8 +52,11 @@ describe("the Apricart Support role", () => {
     expect(ROLE_TEMPLATES.APRICART_SUPPORT).toBeDefined()
   })
 
-  it("is Apricart's side of every support conversation, with Super Admin and no one else", () => {
-    expect([...SUPPORT_APRICART_ROLES]).toEqual(["SUPER_ADMIN", APRICART_SUPPORT_ROLE])
+  it("reads Apricart's whole queue, with Super Admin and no one else", () => {
+    // The warehouse is also on Apricart's side, but only for its own branches'
+    // threads (plans/OF-WAREHOUSE-support-queue.md).
+    expect([...SUPPORT_WHOLE_QUEUE_ROLES]).toEqual(["SUPER_ADMIN", APRICART_SUPPORT_ROLE])
+    expect([...SUPPORT_APRICART_ROLES]).toEqual(["SUPER_ADMIN", APRICART_SUPPORT_ROLE, "WAREHOUSE"])
     expect(supportSideForRole(APRICART_SUPPORT_ROLE)).toBe("APRICART")
     expect(canManageSupportThread(APRICART_SUPPORT_ROLE)).toBe(true)
     expect(
@@ -66,6 +70,20 @@ describe("the Apricart Support role", () => {
     // The admin shell's sidebar, bell and context call endpoints outside its
     // allowlist, so the support layout gives it a bar of its own instead.
     expect(usesPortalChrome(APRICART_SUPPORT_ROLE)).toBe(false)
+  })
+
+  it("gets platform-wide order reads only with its exact tenant-less live scope", () => {
+    const scope = {
+      role: APRICART_SUPPORT_ROLE,
+      userId: "agent-1",
+      organizationId: null,
+      branchId: null,
+    }
+    expect(hasApricartSupportOrderReadScope(APRICART_SUPPORT_ROLE, "agent-1", scope)).toBe(true)
+    expect(hasApricartSupportOrderReadScope(APRICART_SUPPORT_ROLE, "agent-2", scope)).toBe(false)
+    expect(hasApricartSupportOrderReadScope(APRICART_SUPPORT_ROLE, "agent-1", { ...scope, organizationId: 7 })).toBe(false)
+    expect(hasApricartSupportOrderReadScope(APRICART_SUPPORT_ROLE, "agent-1", { ...scope, branchId: 9 })).toBe(false)
+    expect(hasApricartSupportOrderReadScope("SUPER_ADMIN", "agent-1", scope)).toBe(false)
   })
 
   it("is Apricart's own staff in the activity log, never a tenant role", () => {
@@ -87,6 +105,12 @@ describe("the API allowlist", () => {
     ["POST", "/api/v1/users/me/change-password"],
     ["POST", "/api/v1/users/me/email-verification/send"],
     ["POST", "/api/v1/users/me/email-verification/verify"],
+    ["GET", "/api/v1/orders"],
+    ["GET", "/api/v1/orders/42"],
+    ["GET", "/api/v1/orders/42/refunds"],
+    ["GET", "/api/v1/orders/42/delivery-challan"],
+    ["GET", "/api/v1/orders/42/delivery-challan/7/file"],
+    ["GET", "/api/v1/analytics/earliest-record"],
   ])("admits %s %s", (method, path) => {
     expect(isApricartSupportApiRequestAllowed(method, path)).toBe(true)
   })
@@ -105,10 +129,17 @@ describe("the API allowlist", () => {
     ["GET", "/api/v1/support/threads/42/extra"],
     ["GET", "/api/v1/support/attachments/7/raw"],
     ["GET", "/api/v1/support-export"],
-    // Nothing of the rest of the platform.
-    ["GET", "/api/v1/orders"],
-    ["GET", "/api/v1/orders/42"],
+    // Orders are readable, never writable.
+    ["POST", "/api/v1/orders"],
+    ["PUT", "/api/v1/orders/42"],
+    ["DELETE", "/api/v1/orders/42"],
+    ["POST", "/api/v1/orders/42/approve"],
+    ["POST", "/api/v1/orders/42/reject"],
+    ["POST", "/api/v1/orders/42/return-for-correction"],
+    ["POST", "/api/v1/orders/42/send-token-email"],
     ["POST", "/api/v1/orders/42/refunds"],
+    ["POST", "/api/v1/orders/42/delivery-challan"],
+    ["GET", "/api/v1/orders/not-a-number"],
     ["GET", "/api/v1/receipts/42/download"],
     ["GET", "/api/v1/organizations"],
     ["GET", "/api/v1/users"],
@@ -134,6 +165,12 @@ describe("the API allowlist", () => {
         // The visibility and triage rules are lib/support-access.ts's; every
         // support handler refuses a non-participant before reading anything.
         expect(source, rule.route).toContain("isSupportParticipantRole(")
+      } else if (rule.route.startsWith("app/api/v1/orders/")) {
+        expect(rule.methods).toEqual(["GET"])
+        expect(source, rule.route).toMatch(/APRICART_SUPPORT|ORDER_DETAIL_READ_ROLES|isApricartSupportRole/)
+      } else if (rule.route === "app/api/v1/analytics/earliest-record/route.ts") {
+        expect(rule.methods).toEqual(["GET"])
+        expect(source).toContain("APRICART_SUPPORT_ROLE")
       } else {
         // The password-change endpoints every signed-in account must reach.
         expect(rule.route).toMatch(/^app\/api\/v1\/users\/me\//)
@@ -162,8 +199,8 @@ describe("the API allowlist", () => {
     )
   })
 
-  it("confines the role's pages to the support area", () => {
-    expect(APRICART_SUPPORT_AREAS).toEqual(["/support"])
+  it("confines the role's pages to support and read-only orders", () => {
+    expect(APRICART_SUPPORT_AREAS).toEqual(["/support", "/orders"])
     expect(APRICART_SUPPORT_HOME).toBe("/support")
     expect(read("app/(auth)/login/page.tsx")).toContain("if (isApricartSupportRole(role)) return APRICART_SUPPORT_HOME")
     expect(read("app/support/layout.tsx")).toContain("if (isApricartSupportRole(role)) {")
@@ -190,14 +227,15 @@ describe("no support module decides Apricart's side by naming Super Admin", () =
 
   it("mails the agent but gives it no bell row it could never read", () => {
     const notifications = read("lib/server/support-notifications.ts")
-    expect(notifications).toContain("inArray(roles.name, [...SUPPORT_APRICART_ROLES])")
-    expect(notifications).toContain("rows.filter(({ recipient }) => !isApricartSupportRole(recipient.role))")
+    expect(notifications).toContain("inArray(roles.name, [...SUPPORT_WHOLE_QUEUE_ROLES])")
+    expect(notifications).toContain("rows.filter(({ recipient }) => hasSupportBell(recipient.role))")
+    expect(notifications).toContain("return !isApricartSupportRole(role) && !isWarehouseRole(role)")
   })
 
-  it("lets a thread be assigned to the agent", () => {
+  it("lets a thread be assigned to the agent, and to no fenced Apricart role", () => {
     const service = read("lib/server/support-threads.ts")
     const assignee = service.slice(service.indexOf("async function resolveAssignee"))
-    expect(assignee.slice(0, assignee.indexOf("\n}\n"))).toContain("inArray(roles.name, [...SUPPORT_APRICART_ROLES])")
+    expect(assignee.slice(0, assignee.indexOf("\n}\n"))).toContain("inArray(roles.name, [...SUPPORT_WHOLE_QUEUE_ROLES])")
   })
 })
 

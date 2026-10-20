@@ -59,6 +59,12 @@ import {
   resolveScopedBranchIds,
 } from "@/lib/server/multi-branch-scope"
 import {
+  type JoinEmailProof,
+  JoinEmailProofRejected,
+  spendJoinEmailProof,
+} from "@/lib/server/join-email-verification"
+import {
+  JOIN_EMAIL_UNVERIFIED_FAILURE,
   MAX_PENDING_REQUESTS_PER_ORGANIZATION,
   identityConflictReason,
   type JoinRequestFailure,
@@ -152,6 +158,8 @@ export type DepartmentJoinSubmission = {
   approvalLevelsSnapshot: ApprovalLevelBand[]
   submittedIp: string | null
   submittedUserAgent: string | null
+  /** The verify step's proof that the applicant receives mail at `email`. */
+  emailProof: JoinEmailProof
 }
 
 /**
@@ -247,6 +255,8 @@ export async function createDepartmentJoinRequest(
 
   try {
     return await db.transaction(async (tx) => {
+      // Spent with the insert, as on the standard form.
+      await spendJoinEmailProof(tx, { ...submission.emailProof, organizationId, email: submission.email })
       const [created] = await tx
         .insert(organizationJoinRequests)
         .values({
@@ -269,6 +279,7 @@ export async function createDepartmentJoinRequest(
           passwordHash: submission.passwordHash,
           submittedIp: submission.submittedIp,
           submittedUserAgent: submission.submittedUserAgent,
+          emailVerifiedAt: new Date(),
         })
         .returning({ id: organizationJoinRequests.id })
 
@@ -279,6 +290,8 @@ export async function createDepartmentJoinRequest(
           organizationId,
           costCenterId: entry.crc,
           requestedBranchName: entry.name,
+          requestedBranchCity: entry.city,
+          requestedBranchProvince: entry.province,
         })),
       ])
       await tx.insert(organizationJoinRequestApprovers).values(submission.approvers.map((approver) => ({
@@ -296,6 +309,7 @@ export async function createDepartmentJoinRequest(
       return { id: created.id }
     })
   } catch (caughtError: any) {
+    if (caughtError instanceof JoinEmailProofRejected) return JOIN_EMAIL_UNVERIFIED_FAILURE
     // The partial unique indexes on a pending email/username decide a race
     // between two simultaneous submissions, as on the standard form.
     const code = String(caughtError?.code ?? caughtError?.cause?.code ?? "")
@@ -311,6 +325,8 @@ type StoredRequestBranch = {
   existingBranchId: number | null
   costCenterId: string | null
   requestedBranchName: string | null
+  requestedBranchCity: string | null
+  requestedBranchProvince: string | null
   resolvedBranchId: number | null
 }
 
@@ -333,6 +349,8 @@ export async function loadRequestChildren(executor: Executor, requestId: number)
         existingBranchId: organizationJoinRequestBranches.existingBranchId,
         costCenterId: organizationJoinRequestBranches.costCenterId,
         requestedBranchName: organizationJoinRequestBranches.requestedBranchName,
+        requestedBranchCity: organizationJoinRequestBranches.requestedBranchCity,
+        requestedBranchProvince: organizationJoinRequestBranches.requestedBranchProvince,
         resolvedBranchId: organizationJoinRequestBranches.resolvedBranchId,
       })
       .from(organizationJoinRequestBranches)
@@ -431,6 +449,8 @@ export type DepartmentJoinReview = {
     firstName: string
     lastName: string
     email: string
+    /** The applicant proved this address by an emailed code; false once Head Office changed it. */
+    emailVerified: boolean
     username: string
     usernameTaken: boolean
     phone: string | null
@@ -448,6 +468,9 @@ export type DepartmentJoinReview = {
     costCenterId: string | null
     /** The name the applicant gave a branch to create; null when it gave none. */
     requestedName: string | null
+    /** The listed city, and its province, the applicant gave a branch to create; null when it gave none. */
+    requestedCity: string | null
+    requestedProvince: string | null
     /**
      * A CRC still to resolve that exactly one active branch of this
      * organization already carries: Head Office must choose between that
@@ -507,6 +530,7 @@ export async function loadDepartmentJoinReview(input: {
       employeeId: organizationJoinRequests.employeeId,
       department: organizationJoinRequests.department,
       ipExtension: organizationJoinRequests.ipExtension,
+      emailVerifiedAt: organizationJoinRequests.emailVerifiedAt,
       decisionReason: organizationJoinRequests.decisionReason,
       decidedAt: organizationJoinRequests.decidedAt,
       createdAt: organizationJoinRequests.createdAt,
@@ -578,6 +602,7 @@ export async function loadDepartmentJoinReview(input: {
       firstName: stored.firstName,
       lastName: stored.lastName,
       email: stored.email,
+      emailVerified: stored.emailVerifiedAt !== null,
       username: stored.username,
       usernameTaken: stored.status === "pending" ? await usernameExists(stored.username) : false,
       phone: stored.phone,
@@ -597,6 +622,8 @@ export async function loadDepartmentJoinReview(input: {
         name: branchId === null ? null : branchNames.get(branchId) ?? null,
         costCenterId: row.costCenterId,
         requestedName: row.requestedBranchName,
+        requestedCity: row.requestedBranchCity,
+        requestedProvince: row.requestedBranchProvince,
         crcMatch: matchedId !== undefined && matchedName !== undefined ? { branchId: matchedId, name: matchedName } : null,
       }
     }),
@@ -626,7 +653,7 @@ export async function loadDepartmentJoinReview(input: {
     approvalLevelsApply: usesDepartmentSignup(settings),
     emailDomain: settings.emailDomain,
     warehouseCities: stored.status === "pending" && newBranchCount > 0
-      ? await loadWarehouseServedCities(db, PAKISTAN_CITIES.map((city) => city.name))
+      ? await loadWarehouseServedCities(db, input.organizationId, PAKISTAN_CITIES.map((city) => city.name))
       : [],
     decisionReason: stored.decisionReason,
     decidedAt: stored.decidedAt,

@@ -87,6 +87,15 @@ afterEach(() => {
 })
 
 describe("choosing a KPI card", () => {
+  it("shows and searches numeric order IDs for the warehouse dashboard", () => {
+    render(<DeliveryDashboard dashboardEndpoint="/api/v1/warehouse/workload" warehouseOrderIdTools />)
+
+    expect(screen.getByRole("columnheader", { name: "Order ID" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "T1" }).closest("tr")?.textContent).toContain("1")
+    fireEvent.change(screen.getByLabelText("Order ID"), { target: { value: "4" } })
+    expect(new URL(requested.at(-1) ?? "", "http://localhost").searchParams.get("orderId")).toBe("4")
+  })
+
   it("lists only that card's orders, names the card on the list, and counts them", () => {
     render(<DeliveryDashboard dashboardEndpoint="/api/v1/warehouse/workload" />)
     expect(screen.getByText("Orders, newest first")).toBeTruthy()

@@ -109,4 +109,18 @@ describe("Orders page", () => {
     fireEvent.click(screen.getByText("Refresh"))
     await waitFor(() => expect(callsTo("/api/v1/orders").length).toBeGreaterThan(before))
   })
+
+  it("gives Apricart Support the cross-tenant directory in view-only mode", async () => {
+    resetUi({ id: "support-1", role: "APRICART_SUPPORT", organizationId: null, branchId: null })
+    routes()
+
+    renderWithApp(<OrdersManagementPage />)
+
+    await waitFor(() => expect(screen.getAllByText("TID-0001").length).toBeGreaterThan(0))
+    expect(lastOrdersCall()).not.toContain("organizationId=")
+    expect(screen.getByText("View only")).toBeTruthy()
+    expect(screen.getByRole("columnheader", { name: "Organization" })).toBeTruthy()
+    expect(screen.queryByRole("columnheader", { name: "Fulfillment Token" })).toBeNull()
+    expect(screen.queryByRole("columnheader", { name: "Action" })).toBeNull()
+  })
 })

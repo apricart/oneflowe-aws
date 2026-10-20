@@ -19,6 +19,7 @@ import {
 } from "@/lib/server/group-refund-rules"
 import { PROPAGATION_MODES } from "@/lib/group-price-propagation"
 import { BRANCH_REGIONS } from "@/lib/branch-region"
+import { BRANCH_HIERARCHY_ROLES } from "@/lib/branch-hierarchy"
 import {
   HEAD_COUNT_REQUEST_DECISIONS,
   MAX_BRANCH_HEAD_COUNT,
@@ -33,6 +34,8 @@ import {
   JOINABLE_ROLES,
   JOIN_CODE_MAX_LENGTH,
   JOIN_DECISIONS,
+  JOIN_EMAIL_OTP_PATTERN,
+  JOIN_EMAIL_PROOF_PATTERN,
   joinCodeError,
   normalizeJoinCode,
 } from "@/lib/organization-join"
@@ -263,6 +266,9 @@ export const userAccessUpdateSchema = z.object({
  */
 const branchHeadCount = z.number().int().min(0).max(MAX_BRANCH_HEAD_COUNT)
 
+/** A parent branch id, kept inside a Postgres `integer`; null = no parent. */
+const parentBranchIdField = z.union([z.number().int().positive().max(2_147_483_647), z.null()])
+
 export const branchCreateSchema = z.object({
   organizationId: positiveId,
   name: z.string().trim().min(2).max(100),
@@ -275,6 +281,10 @@ export const branchCreateSchema = z.object({
   region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
   // How many people work there; null or absent = not provided.
   headCount: z.union([branchHeadCount, z.null()]).optional(),
+  // Parent / child / standalone (absent = standalone); a child names its
+  // parent. The pairing is checked by branchHierarchyInputError in the route.
+  hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
+  parentBranchId: parentBranchIdField.optional(),
 }).strict()
 
 export const branchUpdateSchema = z.object({
@@ -289,6 +299,9 @@ export const branchUpdateSchema = z.object({
   region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
   // Null clears it back to "not provided".
   headCount: z.union([branchHeadCount, z.null()]).optional(),
+  // Either alone or both; planned by planBranchHierarchyChange in the route.
+  hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
+  parentBranchId: parentBranchIdField.optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one branch field is required",
 })
@@ -631,6 +644,16 @@ export const warehouseBranchAssignmentsUpdateSchema = z.object({
  */
 export const warehouseCityAssignmentUpdateSchema = z.object({
   city: z.string().trim().min(1).max(WAREHOUSE_CITY_MAX_LENGTH),
+  assigned: z.boolean(),
+}).strict()
+
+/**
+ * Chooses or withdraws one organization a warehouse user's cities apply to;
+ * one per request, like a city. A JSON integer, never a string.
+ * See plans/OF-WAREHOUSE-city-assignments-by-organization.md.
+ */
+export const warehouseCityOrganizationUpdateSchema = z.object({
+  organizationId: z.number().int().positive().max(2_147_483_647),
   assigned: z.boolean(),
 }).strict()
 
@@ -1145,6 +1168,29 @@ export const joinLookupSchema = z.object({
   code: joinCodeSchema,
 }).strict()
 
+/*
+ * Proving the applicant's address before the join form
+ * (plans/OF-JOIN-email-otp-verification.md). The request names the join code,
+ * never an organization; the verify step names only the challenge.
+ */
+const joinEmailSchema = z.string().trim().pipe(z.email().max(255))
+
+export const joinEmailCodeRequestSchema = z.object({
+  code: joinCodeSchema,
+  email: joinEmailSchema,
+}).strict()
+
+export const joinEmailCodeVerifySchema = z.object({
+  challengeId: z.uuid("Request a new code and try again"),
+  otp: z.string().trim().regex(JOIN_EMAIL_OTP_PATTERN, "Enter the 6-digit code from the email"),
+}).strict()
+
+/** The proof the verify step answered, carried by either join submission. */
+const joinEmailVerificationSchema = z.object({
+  challengeId: z.uuid("Verify your email address again"),
+  proof: z.string().regex(JOIN_EMAIL_PROOF_PATTERN, "Verify your email address again"),
+}, { error: "Verify your email address before sending the form" }).strict()
+
 /**
  * A join submission.
  *
@@ -1178,6 +1224,7 @@ export const joinRequestSubmitSchema = z.object({
   contactPerson: nullableText(255).optional(),
   location: nullableText(255).optional(),
   address: nullableText(2_000).optional(),
+  emailVerification: joinEmailVerificationSchema,
 }).strict()
 
 /**
@@ -1236,6 +1283,30 @@ const requestedBranchNameSchema = z.string().trim()
   .min(NEW_BRANCH_FIELD_RULES.name.min, `A new branch's name needs at least ${NEW_BRANCH_FIELD_RULES.name.min} characters`)
   .max(NEW_BRANCH_FIELD_RULES.name.max, `A new branch's name can be at most ${NEW_BRANCH_FIELD_RULES.name.max} characters`)
 
+/*
+ * The city a branch still to be created is in, chosen by the applicant from
+ * Pakistan's list and stored in the list's spelling, and its province, which
+ * must be that city's own (plans/OF-JOIN-applicant-new-branch-city.md).
+ */
+const requestedBranchCitySchema = z.string().trim().max(NEW_BRANCH_FIELD_RULES.city.max)
+  .refine((city) => findPakistanCity(city) !== null, `New branch: ${UNLISTED_CITY_MESSAGE.toLowerCase()}`)
+  .transform((city) => findPakistanCity(city)?.name ?? city)
+const requestedBranchProvinceSchema = z.string().trim().max(NEW_BRANCH_FIELD_RULES.province.max)
+
+function requestedBranchProvinceIsTheCitys(
+  branch: { city?: string; province?: string },
+  context: z.RefinementCtx,
+): void {
+  if ((branch.city === undefined) !== (branch.province === undefined)) {
+    context.addIssue({ code: "custom", path: ["province"], message: "New branch: give its city and province together" })
+    return
+  }
+  const city = branch.city === undefined ? null : findPakistanCity(branch.city)
+  if (city && branch.province !== city.province) {
+    context.addIssue({ code: "custom", path: ["province"], message: `New branch: ${city.name} is in ${city.province}` })
+  }
+}
+
 export const departmentJoinSubmitSchema = z.object({
   formVersion: z.literal(DEPARTMENT_SIGNUP_FORM_VERSION),
   code: joinCodeSchema,
@@ -1246,14 +1317,21 @@ export const departmentJoinSubmitSchema = z.object({
   ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
   employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
   department: z.enum(DEPARTMENTS),
-  // An existing branch picked by name, or a new branch: its name and its CRC number.
+  // An existing branch picked by name, or a new branch: its name, its CRC
+  // number, and the city and province it is in.
   branches: z.array(z.union([
     z.object({ branchId: positiveId }).strict(),
-    z.object({ name: requestedBranchNameSchema, crc: signupCrcSchema }).strict(),
+    z.object({
+      name: requestedBranchNameSchema,
+      crc: signupCrcSchema,
+      city: requestedBranchCitySchema,
+      province: requestedBranchProvinceSchema,
+    }).strict().superRefine(requestedBranchProvinceIsTheCitys),
   ])).min(1).max(SIGNUP_MAX_BRANCHES),
   addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES),
   approvers: z.array(signupApproverSchema).min(1).max(MAX_APPROVAL_LEVELS),
   termsAccepted: z.literal(true),
+  emailVerification: joinEmailVerificationSchema,
 }).strict()
 
 /** One field of a new branch, refused with a message that names it (`NEW_BRANCH_FIELD_RULES`). */
@@ -1335,11 +1413,17 @@ export const departmentJoinUpdateSchema = z.object({
     ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
     employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
     department: z.enum(DEPARTMENTS),
-    // A new branch's name is optional here: a request submitted before names
-    // were asked for has none, and Head Office names it at approval anyway.
+    // A new branch's name and city are optional here: a request submitted
+    // before they were asked for has none, and Head Office gives both at
+    // approval anyway.
     branches: z.array(z.union([
       z.object({ branchId: positiveId }).strict(),
-      z.object({ crc: signupCrcSchema, name: requestedBranchNameSchema.optional() }).strict(),
+      z.object({
+        crc: signupCrcSchema,
+        name: requestedBranchNameSchema.optional(),
+        city: requestedBranchCitySchema.optional(),
+        province: requestedBranchProvinceSchema.optional(),
+      }).strict().superRefine(requestedBranchProvinceIsTheCitys),
     ])).min(1).max(SIGNUP_MAX_BRANCHES)
       .refine((list) => editedBranchListError(list) === null, { message: "The same branch is listed twice" }),
     addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES)

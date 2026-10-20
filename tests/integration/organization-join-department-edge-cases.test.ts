@@ -7,6 +7,7 @@ import * as mockedNextAuth from "next-auth"
 import * as decideRoute from "@/app/api/v1/join-requests/[id]/route"
 import * as lookupRoute from "@/app/api/v1/join/lookup/route"
 import * as submitRoute from "@/app/api/v1/join/requests/route"
+import { submitWithJoinEmailProof } from "./helpers/join-email-proof"
 import * as joinCodeRoute from "@/app/api/v1/organizations/join-code/route"
 import {
   auditLogs,
@@ -46,6 +47,8 @@ import {
 
 const TEMPORARY_PASSWORD = "Temp-Pass-2026!x"
 const STRONG_PASSWORD = "Join-Flow-2026!x"
+/** Where every new branch submitted here says it is (plans/OF-JOIN-applicant-new-branch-city.md). */
+const KARACHI = { city: "Karachi", province: "Sindh" }
 
 const mocks = vi.hoisted(() => ({
   hashPassword: vi.fn(async (plain: string) => `hashed:${plain}`),
@@ -137,7 +140,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
   async function submit(body: Record<string, unknown>) {
     signIn(null)
-    return submitRoute.POST(jsonRequest("/api/v1/join/requests", "POST", body))
+    return submitWithJoinEmailProof(submitRoute.POST)(jsonRequest("/api/v1/join/requests", "POST", body))
   }
 
   async function submitAccepted(body: Record<string, unknown>) {
@@ -273,13 +276,13 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
   describe("submitting", () => {
     it("keeps a CRC two active branches share as a CRC, for Head Office to map", async () => {
-      const stored = await submitAccepted(signup({ branches: [{ crc: sharedCrc.toLowerCase(), name: "New Depot" }] }))
+      const stored = await submitAccepted(signup({ branches: [{ crc: sharedCrc.toLowerCase(), name: "New Depot", ...KARACHI }] }))
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
       expect(rows).toEqual([expect.objectContaining({ existingBranchId: null, costCenterId: sharedCrc })])
     })
 
     it("treats a CRC that only a retired branch carries as a new one", async () => {
-      const stored = await submitAccepted(signup({ branches: [{ crc: retiredCrc, name: "New Depot" }] }))
+      const stored = await submitAccepted(signup({ branches: [{ crc: retiredCrc, name: "New Depot", ...KARACHI }] }))
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
       expect(rows).toEqual([expect.objectContaining({ existingBranchId: null, costCenterId: retiredCrc })])
     })
@@ -287,7 +290,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     it("stores a branch picked twice, or a CRC typed twice in different case, once", async () => {
       const crc = `IT-TWICE-${unique()}`.toUpperCase()
       const stored = await submitAccepted(signup({
-        branches: [{ branchId: fixtures.northBranchId }, { branchId: fixtures.northBranchId }, { crc, name: "New Depot" }, { crc: ` ${crc.toLowerCase()} `, name: "New Depot" }],
+        branches: [{ branchId: fixtures.northBranchId }, { branchId: fixtures.northBranchId }, { crc, name: "New Depot", ...KARACHI }, { crc: ` ${crc.toLowerCase()} `, name: "New Depot", ...KARACHI }],
       }))
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
       expect(rows).toHaveLength(2)
@@ -299,12 +302,15 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
 
     it.each([
-      ["eleven branches", { branches: Array.from({ length: 11 }, (_, index) => ({ crc: `IT-MANY-${index}`, name: "New Depot" })) }],
+      ["eleven branches", { branches: Array.from({ length: 11 }, (_, index) => ({ crc: `IT-MANY-${index}`, name: "New Depot", ...KARACHI })) }],
       ["six addresses", { addresses: Array.from({ length: 6 }, (_, index) => `Plot ${index + 10}, Clifton`) }],
       ["no address", { addresses: [] }],
       ["no branch", { branches: [] }],
-      ["a new branch named only by its CRC", { branches: [{ crc: "IT-NO-NAME" }] }],
-      ["a new branch with a one-letter name", { branches: [{ crc: "IT-SHORT-NAME", name: "K" }] }],
+      ["a new branch named only by its CRC", { branches: [{ crc: "IT-NO-NAME", ...KARACHI }] }],
+      ["a new branch with a one-letter name", { branches: [{ crc: "IT-SHORT-NAME", name: "K", ...KARACHI }] }],
+      ["a new branch with no city", { branches: [{ crc: "IT-NO-CITY", name: "New Depot" }] }],
+      ["a new branch in a city not on the list", { branches: [{ crc: "IT-ODD-CITY", name: "New Depot", city: "Atlantis", province: "Sindh" }] }],
+      ["a new branch under another city's province", { branches: [{ crc: "IT-ODD-PROV", name: "New Depot", city: "Karachi", province: "Punjab" }] }],
       ["an unknown department", { department: "Treasury" }],
       ["an IP extension of two digits", { ipExtension: "12" }],
       ["a password below the policy", { password: "short" }],
@@ -416,7 +422,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
     it("when the new branch's name is already taken — after the branch would have been created", async () => {
       const crc = `IT-DUP-${unique()}`.toUpperCase()
-      const body = signup({ branches: [{ crc, name: "New Depot" }] })
+      const body = signup({ branches: [{ crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       const response = await patch(stored.id, {
@@ -431,7 +437,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
     it("when an address is given no branch — after a new branch was created for it", async () => {
       const crc = `IT-ADDR-${unique()}`.toUpperCase()
-      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot" }] })
+      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       const fresh = item.branches.find((row: any) => row.kind === "new")
@@ -446,7 +452,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
 
     it("when a CRC is mapped onto another organization's branch", async () => {
-      const body = signup({ branches: [{ crc: `IT-MAP-${unique()}`, name: "New Depot" }] })
+      const body = signup({ branches: [{ crc: `IT-MAP-${unique()}`, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       const response = await patch(stored.id, {
@@ -459,7 +465,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
 
     it("when a CRC to create arrives with no details at all", async () => {
-      const body = signup({ branches: [{ crc: `IT-BARE-${unique()}`, name: "New Depot" }] })
+      const body = signup({ branches: [{ crc: `IT-BARE-${unique()}`, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       const response = await patch(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
@@ -700,7 +706,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
     it("creates a new approver for one CRC still to be created as a Branch Admin of the new branch", async () => {
       const crc = `IT-ROLE-${unique()}`.toUpperCase()
-      const body = signup({ branches: [{ crc, name: "New Depot" }] })
+      const body = signup({ branches: [{ crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { response } = await approveAsReviewed(stored)
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
@@ -710,7 +716,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
     it("creates a new approver for several branches as a Group User assigned to all of them", async () => {
       const crc = `IT-ROLE-${unique()}`.toUpperCase()
-      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot" }] })
+      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item, response } = await approveAsReviewed(stored)
       expect(item.approvers[1].resolution).toEqual({ kind: "create", role: "GROUP_USER" })
@@ -722,7 +728,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
 
     it("decides a new approver's role on the final branches when a CRC is mapped onto one already listed", async () => {
-      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc: `IT-MAPPED-${unique()}`, name: "New Depot" }] })
+      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc: `IT-MAPPED-${unique()}`, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item: before } = await review(stored.id)
       expect(before.approvers[1].resolution).toEqual({ kind: "create", role: "GROUP_USER" })
@@ -792,7 +798,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       const admin = await branchAdminAt(fixtures.northBranchId)
       const crc = `IT-PLUS-${unique()}`.toUpperCase()
       const body = signup({
-        branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot" }],
+        branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot", ...KARACHI }],
         approvers: [signup().approvers[0], { level: 2, email: admin.email, designation: "Manager" }],
       })
       const stored = await submitAccepted(body)
@@ -882,7 +888,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     beforeAll(async () => {
       const email = `standard-${fixtures.suffix}@example.test`
       signIn(null)
-      const response = await submitRoute.POST(jsonRequest("/api/v1/join/requests", "POST", {
+      const response = await submitWithJoinEmailProof(submitRoute.POST)(jsonRequest("/api/v1/join/requests", "POST", {
         code: foreignCode,
         firstName: "Standard",
         lastName: "Applicant",
@@ -980,8 +986,55 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       expect(matches).toEqual({ [ownCrc]: { branchId: ownBranchId, name: `Own CRC ${ownCrc}` }, [sharedCrc]: null })
     })
 
+    // plans/OF-JOIN-applicant-new-branch-city.md
+    it("keeps the applicant's city through an edit that does not send one, and moves it when one is sent", async () => {
+      const crc = `IT-CITY-${unique()}`.toUpperCase()
+      const stored = await submitAccepted(signup({ branches: [{ crc, name: "City Depot", ...KARACHI }] }))
+      const { item } = await review(stored.id)
+      const location = async () => {
+        const [row] = await db.select().from(organizationJoinRequestBranches)
+          .where(and(eq(organizationJoinRequestBranches.requestId, stored.id), eq(organizationJoinRequestBranches.costCenterId, crc)))
+        return [row.id, row.requestedBranchCity, row.requestedBranchProvince]
+      }
+      const [rowId] = await location()
+
+      expect((await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc }] } })).status).toBe(200)
+      expect(await location()).toEqual([rowId, "Karachi", "Sindh"])
+
+      const moved = await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc, city: "lahore", province: "Punjab" }] } })
+      expect(moved.status, JSON.stringify(await moved.clone().json())).toBe(200)
+      // The same row, so the review's choices still name it.
+      expect(await location()).toEqual([rowId, "Lahore", "Punjab"])
+      expect((await review(stored.id)).item.branches[0]).toMatchObject({ requestedCity: "Lahore", requestedProvince: "Punjab" })
+
+      const refused = await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc, city: "Lahore", province: "Sindh" }] } })
+      expect(refused.status).toBe(400)
+      expect(await location()).toEqual([rowId, "Lahore", "Punjab"])
+    })
+
+    it("lets the database refuse a location on an existing branch's row, or half a location", async () => {
+      const stored = await submitAccepted(signup())
+      const insert = (values: Partial<typeof organizationJoinRequestBranches.$inferInsert>) => db
+        .insert(organizationJoinRequestBranches)
+        .values({ requestId: stored.id, organizationId: fixtures.organizationId, ...values })
+      const code = async (attempt: Promise<unknown>) => {
+        try {
+          await attempt
+          return null
+        } catch (caughtError: any) {
+          return String(caughtError?.code ?? caughtError?.cause?.code)
+        }
+      }
+      const otherBranchId = await newBranch({ name: `Located ${unique()}` })
+      expect(await code(insert({ existingBranchId: otherBranchId, requestedBranchCity: "Karachi", requestedBranchProvince: "Sindh" })))
+        .toBe("23514")
+      expect(await code(insert({ costCenterId: `IT-HALF-${unique()}`.toUpperCase(), requestedBranchCity: "Karachi" }))).toBe("23514")
+      expect(await code(insert({ costCenterId: `IT-BLANK-${unique()}`.toUpperCase(), requestedBranchCity: " ", requestedBranchProvince: "Sindh" })))
+        .toBe("23514")
+    })
+
     it("turns a several-branch request into a one-branch request and back", async () => {
-      const stored = await submitAccepted(signup({ branches: [{ branchId: fixtures.northBranchId }, { crc: `IT-TWO-${unique()}`, name: "New Depot" }] }))
+      const stored = await submitAccepted(signup({ branches: [{ branchId: fixtures.northBranchId }, { crc: `IT-TWO-${unique()}`, name: "New Depot", ...KARACHI }] }))
       expect(stored.requestedRole).toBe("GROUP_ORDER_PORTAL")
       const { item } = await review(stored.id)
 
@@ -1075,6 +1128,24 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       const { item: after } = await review(stored.id)
       expect(after.approvers[1].resolution.kind).toBe("blocked")
       expect((await patch(stored.id, { decision: "approve", expectedResolutions: expectedFrom(after) })).status).toBe(409)
+    })
+
+    // plans/OF-JOIN-email-otp-verification.md: the applicant proved the address
+    // they typed, not one Head Office typed for them.
+    it("keeps the email verification through other edits and clears it when the email changes", async () => {
+      const stored = await submitAccepted(signup())
+      expect((await requestRow(stored.id)).emailVerifiedAt).toBeInstanceOf(Date)
+
+      const { item } = await review(stored.id)
+      expect((await patch(stored.id, { update: { ...editFrom(item), department: "IT" } })).status).toBe(200)
+      expect((await requestRow(stored.id)).emailVerifiedAt).toBeInstanceOf(Date)
+
+      const { item: edited } = await review(stored.id)
+      const corrected = `edge-corrected-${unique()}@example.test`
+      expect((await patch(stored.id, { update: { ...editFrom(edited), email: corrected } })).status).toBe(200)
+      const after = await requestRow(stored.id)
+      expect(after.email).toBe(corrected)
+      expect(after.emailVerifiedAt).toBeNull()
     })
 
     it("refuses edited approvers that skip or repeat a level", async () => {

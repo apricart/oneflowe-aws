@@ -6,6 +6,7 @@ import { AlertCircle, Eye, EyeOff, Plus, X } from "lucide-react"
 
 import { Field } from "@/components/join/join-request-form"
 import type { JoinOption } from "@/components/join/join-scope-picker"
+import { PakistanCityCombobox } from "@/components/join/pakistan-city-combobox"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/skeleton"
@@ -34,6 +35,7 @@ import {
 } from "@/lib/join-department-signup-form"
 import { type ApprovalLevelBand, approvalLevelBandText } from "@/lib/order-approval-levels"
 import { EMAIL_LOCAL_PART_MAX_LENGTH } from "@/lib/organization-email-domain"
+import type { PakistanCity } from "@/lib/pakistan-cities"
 import { organizationUsername } from "@/lib/username-prefix"
 import { cn } from "@/lib/utils"
 
@@ -47,8 +49,9 @@ import { cn } from "@/lib/utils"
  *   * the email domain is the organization's own, fixed as the suffix;
  *   * one approver card per level the organization has, not a fixed three;
  *   * the branch is picked by name from the organization's branches; a new
- *     one is named by the applicant and only then given its CRC. No CRC
- *     number of an existing branch is ever sent to this page.
+ *     one is named by the applicant and only then given its CRC and its city
+ *     (from Pakistan's list; the province follows from it). No CRC number of
+ *     an existing branch is ever sent to this page.
  *
  * Nothing here decides anything: the server re-validates all of it, and Head
  * Office approves before any account, branch or approver exists.
@@ -71,6 +74,7 @@ function DomainEmailInput({
   domain,
   error,
   placeholder,
+  readOnly,
 }: Readonly<{
   id: string
   value: string
@@ -78,6 +82,7 @@ function DomainEmailInput({
   domain: string
   error?: string
   placeholder: string
+  readOnly?: boolean
 }>) {
   return (
     <div className="flex">
@@ -85,6 +90,7 @@ function DomainEmailInput({
         id={id}
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        readOnly={readOnly}
         placeholder={placeholder}
         autoComplete="off"
         autoCapitalize="none"
@@ -133,9 +139,9 @@ function ChipRemove({ label, onClick }: Readonly<{ label: string; onClick: () =>
 
 /**
  * The Branch field: the applicant searches the organization's branches by name
- * and picks one. A branch that is not listed is added as new, and only then is
- * its CRC (cost centre) number asked for, so a new branch always has a name of
- * its own and is never named after its CRC.
+ * and picks one. A branch that is not listed is added as new, and only then are
+ * its CRC (cost centre) number and its city asked for, so a new branch always
+ * has a name of its own and is never named after its CRC.
  */
 function BranchChipsField({
   chips,
@@ -149,10 +155,11 @@ function BranchChipsField({
   error?: string
 }>) {
   const [text, setText] = useState("")
-  // The name of the new branch whose CRC is being asked for, or null.
+  // The name of the new branch whose CRC and city are being asked for, or null.
   const [newBranchName, setNewBranchName] = useState<string | null>(null)
   const [crc, setCrc] = useState("")
-  const [problem, setProblem] = useState<{ field: "name" | "crc"; message: string } | null>(null)
+  const [city, setCity] = useState<PakistanCity | null>(null)
+  const [problem, setProblem] = useState<{ field: "name" | "crc" | "city"; message: string } | null>(null)
 
   const chosenIds = useMemo(
     () => new Set(chips.flatMap((chip) => (chip.kind === "existing" ? [chip.branchId] : []))),
@@ -193,20 +200,31 @@ function BranchChipsField({
     setNewBranchName(typed)
     setText("")
     setCrc("")
+    setCity(null)
     setProblem(null)
   }
 
   const addNewBranch = () => {
     if (newBranchName === null) return
-    const refusal = newBranchChipError(chips, knownNames, { name: newBranchName, crc })
-    if (refusal) {
+    const refusal = newBranchChipError(chips, knownNames, { name: newBranchName, crc, city: city?.name ?? "" })
+    if (refusal || !city) {
       setProblem(refusal)
       return
     }
     const normalized = normalizeCrc(crc)
-    onChange([...chips, { key: `c${normalized}`, kind: "crc", crc: normalized, name: newBranchName, label: newBranchName, checked: true }])
+    onChange([...chips, {
+      key: `c${normalized}`,
+      kind: "crc",
+      crc: normalized,
+      name: newBranchName,
+      city: city.name,
+      province: city.province,
+      label: newBranchName,
+      checked: true,
+    }])
     setNewBranchName(null)
     setCrc("")
+    setCity(null)
     setProblem(null)
   }
 
@@ -214,11 +232,13 @@ function BranchChipsField({
     setText(newBranchName ?? "")
     setNewBranchName(null)
     setCrc("")
+    setCity(null)
     setProblem(null)
   }
 
   const nameError = problem?.field === "name" ? problem.message : undefined
   const crcProblem = problem?.field === "crc" ? problem.message : undefined
+  const cityProblem = problem?.field === "city" ? problem.message : undefined
   return (
     <div className="space-y-2">
       {newBranchName === null
@@ -290,37 +310,61 @@ function BranchChipsField({
               <label htmlFor="signup-new-branch-crc" className="text-sm font-medium text-slate-700">
                 CRC / Cost Centre No<span className="text-red-500"> *</span>
               </label>
-              <div className="flex flex-wrap gap-2 sm:flex-nowrap">
-                <Input
-                  id="signup-new-branch-crc"
-                  value={crc}
-                  onChange={(event) => {
-                    setCrc(event.target.value.toUpperCase())
-                    setProblem(null)
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault()
-                      addNewBranch()
-                    }
-                  }}
-                  placeholder="e.g. AB-ABC-123"
-                  autoComplete="off"
-                  autoFocus
-                  maxLength={CRC_MAX_LENGTH}
-                  className="bg-white"
-                  aria-invalid={Boolean(crcProblem)}
-                  aria-describedby={crcProblem ? "signup-new-branch-crc-error" : undefined}
-                />
-                <Button type="button" onClick={addNewBranch} className="shrink-0">Add branch</Button>
-                <Button type="button" variant="outline" onClick={cancelNewBranch} className="shrink-0">Cancel</Button>
-              </div>
+              <Input
+                id="signup-new-branch-crc"
+                value={crc}
+                onChange={(event) => {
+                  setCrc(event.target.value.toUpperCase())
+                  setProblem(null)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    addNewBranch()
+                  }
+                }}
+                placeholder="e.g. AB-ABC-123"
+                autoComplete="off"
+                autoFocus
+                maxLength={CRC_MAX_LENGTH}
+                className="bg-white"
+                aria-invalid={Boolean(crcProblem)}
+                aria-describedby={crcProblem ? "signup-new-branch-crc-error" : undefined}
+              />
               {crcProblem && <p id="signup-new-branch-crc-error" className="text-xs font-medium text-red-600">{crcProblem}</p>}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <span className="text-sm font-medium text-slate-700">
+                  City<span className="text-red-500"> *</span>
+                </span>
+                <div className="bg-white">
+                  <PakistanCityCombobox
+                    value={city?.name ?? ""}
+                    onSelect={(chosen) => {
+                      setCity(chosen)
+                      setProblem(null)
+                    }}
+                    label="City of the new branch"
+                    invalid={Boolean(cityProblem)}
+                    describedBy={cityProblem ? "signup-new-branch-city-error" : undefined}
+                  />
+                </div>
+                {cityProblem && <p id="signup-new-branch-city-error" className="text-xs font-medium text-red-600">{cityProblem}</p>}
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="signup-new-branch-province" className="text-sm font-medium text-slate-700">Province</label>
+                <ReadOnlyValue id="signup-new-branch-province" value={city?.province ?? ""} placeholder="Filled in from the city" />
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={addNewBranch} className="shrink-0">Add branch</Button>
+              <Button type="button" variant="outline" onClick={cancelNewBranch} className="shrink-0">Cancel</Button>
             </div>
           </div>
         )}
       <p id="signup-branch-hint" className="text-xs text-slate-500">
-        Pick your branch if it is listed. If it is not, add it as a new branch and give its CRC number.
+        Pick your branch if it is listed. If it is not, add it as a new branch and give its CRC number and city.
         One branch places your orders through the shop; more than one through the group storefront.
       </p>
       {chips.length === 0
@@ -344,7 +388,9 @@ function BranchChipsField({
                 />
                 <label htmlFor={`signup-branch-${chip.key}`} className="cursor-pointer">
                   {chip.label}
-                  {chip.kind === "crc" && <span className="ml-1 text-xs text-slate-500">(new · CRC {chip.crc})</span>}
+                  {chip.kind === "crc" && (
+                    <span className="ml-1 text-xs text-slate-500">(new · CRC {chip.crc} · {chip.city}, {chip.province})</span>
+                  )}
                 </label>
                 <ChipRemove label={chip.label} onClick={() => onChange(chips.filter((item) => item.key !== chip.key))} />
               </li>
@@ -521,14 +567,24 @@ function ApproverLevels({
 
 export function DepartmentSignupForm({
   options,
+  lockedEmailLocalPart,
   onSubmit,
   onBack,
 }: Readonly<{
   options: DepartmentSignupOptions
+  /**
+   * The address the applicant proved by an emailed code, before the `@`
+   * (plans/OF-JOIN-email-otp-verification.md); the field is read-only when set.
+   */
+  lockedEmailLocalPart?: string
   onSubmit: (payload: Record<string, unknown>) => Promise<void>
   onBack: () => void
 }>) {
-  const [draft, setDraftState] = useState<DepartmentSignupDraft>(() => emptyDepartmentSignupDraft(options.approvalLevels.length))
+  const [draft, setDraftState] = useState<DepartmentSignupDraft>(() => ({
+    ...emptyDepartmentSignupDraft(options.approvalLevels.length),
+    emailLocalPart: lockedEmailLocalPart ?? "",
+  }))
+  const emailLocked = lockedEmailLocalPart !== undefined
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -585,11 +641,12 @@ export function DepartmentSignupForm({
       </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field id="signup-email" label="Email Address" required error={errors.email}>
+        <Field id="signup-email" label={emailLocked ? "Email Address (verified)" : "Email Address"} required error={errors.email}>
           <DomainEmailInput
             id="signup-email"
             value={draft.emailLocalPart}
             onChange={(value) => set("emailLocalPart", value)}
+            readOnly={emailLocked}
             domain={options.emailDomain}
             error={errors.email}
             placeholder="firstname.lastname"

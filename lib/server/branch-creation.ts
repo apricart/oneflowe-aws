@@ -5,6 +5,8 @@ import { and, eq, sql } from "drizzle-orm"
 import { auditLogs, branches as branchesTable, organizations } from "@/db/schema"
 import { db } from "@/lib/db"
 import type { BranchRegion } from "@/lib/branch-region"
+import { DEFAULT_BRANCH_HIERARCHY_ROLE, type BranchHierarchy } from "@/lib/branch-hierarchy"
+import { parentBranchRefusal, type HierarchyRefusal } from "@/lib/server/branch-hierarchy"
 
 /**
  * Creating a branch inside a caller's transaction.
@@ -32,11 +34,16 @@ export type BranchCreationValues = {
   region: BranchRegion | null
   // Absent for callers that do not ask for one (the department sign-up).
   headCount?: number | null
+  // Absent = standalone, which is every caller but the branch form
+  // (plans/OF-BRANCH-parent-child-label.md). Already paired by
+  // branchHierarchyInputError; the parent is checked here, in this tenant.
+  hierarchy?: BranchHierarchy
 }
 
 export type BranchCreationOutcome =
   | { kind: "organization-not-found" }
   | { kind: "duplicate-name" }
+  | { kind: "hierarchy-refused"; refusal: HierarchyRefusal }
   | { kind: "created"; item: typeof branchesTable.$inferSelect }
 
 export async function createBranchInTx(
@@ -74,6 +81,12 @@ export async function createBranchInTx(
 
   if (existingBranchWithName) return { kind: "duplicate-name" }
 
+  const hierarchy = values.hierarchy ?? { hierarchyRole: DEFAULT_BRANCH_HIERARCHY_ROLE, parentBranchId: null }
+  if (hierarchy.parentBranchId !== null) {
+    const refusal = await parentBranchRefusal(tx, organizationId, hierarchy.parentBranchId)
+    if (refusal) return { kind: "hierarchy-refused", refusal }
+  }
+
   // Preserve the existing {ORG_CODE}-{COUNT+1} branch-code format.
   const [{ count: branchCount }] = await tx
     .select({ count: sql<number>`count(*)` })
@@ -108,6 +121,8 @@ export async function createBranchInTx(
       status,
       region: values.region,
       headCount: values.headCount ?? null,
+      hierarchyRole: hierarchy.hierarchyRole,
+      parentBranchId: hierarchy.parentBranchId,
     })
     .returning()
 
@@ -124,6 +139,8 @@ export async function createBranchInTx(
       code: item.code,
       status: item.status,
       headCount: item.headCount,
+      hierarchyRole: item.hierarchyRole,
+      parentBranchId: item.parentBranchId,
     },
   })
 

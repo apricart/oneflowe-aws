@@ -14,6 +14,7 @@ import {
 import { db } from "@/lib/db"
 import {
   JOINABLE_ROLES,
+  JOIN_EMAIL_NOT_VERIFIED_MESSAGE,
   type JoinDecision,
   type JoinRequestStatus,
   type JoinableRole,
@@ -27,6 +28,11 @@ import {
   normalizeOptionalText,
 } from "@/lib/user-uniqueness"
 import { usernameExists } from "@/lib/user-username-uniqueness"
+import {
+  type JoinEmailProof,
+  JoinEmailProofRejected,
+  spendJoinEmailProof,
+} from "@/lib/server/join-email-verification"
 import {
   replaceMultiBranchScope,
   usesMultiBranchScope,
@@ -270,6 +276,8 @@ export type JoinRequestSubmission = {
   address: string | null
   submittedIp: string | null
   submittedUserAgent: string | null
+  /** The verify step's proof that the applicant receives mail at `email`. */
+  emailProof: JoinEmailProof
 }
 
 export type JoinRequestFailure = {
@@ -279,8 +287,10 @@ export type JoinRequestFailure = {
    * turns the public form into a way of testing whether a colleague has an
    * account. `scope` and `limit` are safe to describe: they are
    * about the tenant's own structure, which the code already disclosed.
+   * `unverified` is a proof that could not be spent: lapsed, spent, or
+   * issued for another address or organization.
    */
-  kind: "identity" | "scope" | "limit"
+  kind: "identity" | "scope" | "limit" | "unverified"
   message: string
   status: number
 }
@@ -387,6 +397,13 @@ export async function identityConflictReason(input: {
   return null
 }
 
+/** What a creator answers when the email proof could not be spent. */
+export const JOIN_EMAIL_UNVERIFIED_FAILURE: JoinRequestFailure = {
+  kind: "unverified",
+  message: JOIN_EMAIL_NOT_VERIFIED_MESSAGE,
+  status: 400,
+}
+
 export async function createJoinRequest(
   submission: JoinRequestSubmission,
 ): Promise<{ id: number } | JoinRequestFailure> {
@@ -417,31 +434,42 @@ export async function createJoinRequest(
   }
 
   try {
-    const [created] = await db
-      .insert(organizationJoinRequests)
-      .values({
+    return await db.transaction(async (tx) => {
+      // Spent in the transaction that stores the request: a refused insert
+      // rolls the spend back, and a replayed proof matches no row.
+      await spendJoinEmailProof(tx, {
+        ...submission.emailProof,
         organizationId: submission.organizationId,
-        requestedRole: submission.role,
-        requestedBranchId: submission.branchId,
-        requestedGroupIds: submission.groupIds,
-        requestedBranchIds: submission.branchIds,
-        firstName: submission.firstName,
-        lastName: submission.lastName,
         email: submission.email,
-        username: submission.username,
-        phone: submission.phone,
-        employeeId: submission.employeeId,
-        imprestHolder: submission.imprestHolder,
-        contactPerson: submission.contactPerson,
-        location: submission.location,
-        address: submission.address,
-        passwordHash: submission.passwordHash,
-        submittedIp: submission.submittedIp,
-        submittedUserAgent: submission.submittedUserAgent,
       })
-      .returning({ id: organizationJoinRequests.id })
-    return { id: created.id }
+      const [created] = await tx
+        .insert(organizationJoinRequests)
+        .values({
+          organizationId: submission.organizationId,
+          requestedRole: submission.role,
+          requestedBranchId: submission.branchId,
+          requestedGroupIds: submission.groupIds,
+          requestedBranchIds: submission.branchIds,
+          firstName: submission.firstName,
+          lastName: submission.lastName,
+          email: submission.email,
+          username: submission.username,
+          phone: submission.phone,
+          employeeId: submission.employeeId,
+          imprestHolder: submission.imprestHolder,
+          contactPerson: submission.contactPerson,
+          location: submission.location,
+          address: submission.address,
+          passwordHash: submission.passwordHash,
+          submittedIp: submission.submittedIp,
+          submittedUserAgent: submission.submittedUserAgent,
+          emailVerifiedAt: new Date(),
+        })
+        .returning({ id: organizationJoinRequests.id })
+      return { id: created.id }
+    })
   } catch (caughtError: any) {
+    if (caughtError instanceof JoinEmailProofRejected) return JOIN_EMAIL_UNVERIFIED_FAILURE
     // The partial unique indexes on a pending email/username are what decide a
     // race between two simultaneous submissions. Losing that race is the same
     // answer as losing the read above.
@@ -475,6 +503,8 @@ export type JoinRequestListRow = {
   contactPerson: string | null
   location: string | null
   address: string | null
+  /** When the applicant proved the address by an emailed code; null before that step existed. */
+  emailVerifiedAt: Date | null
   decisionReason: string | null
   decidedAt: Date | null
   createdUserId: string | null
@@ -518,6 +548,7 @@ export async function listJoinRequests(input: {
       contactPerson: organizationJoinRequests.contactPerson,
       location: organizationJoinRequests.location,
       address: organizationJoinRequests.address,
+      emailVerifiedAt: organizationJoinRequests.emailVerifiedAt,
       decisionReason: organizationJoinRequests.decisionReason,
       decidedAt: organizationJoinRequests.decidedAt,
       createdUserId: organizationJoinRequests.createdUserId,

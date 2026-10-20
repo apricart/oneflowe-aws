@@ -2,6 +2,7 @@
 
 import { Clock, MapPin, Users } from "lucide-react"
 
+import { EmailVerifiedNote } from "@/components/join/email-verified-note"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -37,6 +38,8 @@ export type JoinRequestRow = {
   contactPerson: string | null
   location: string | null
   address: string | null
+  /** Set when the applicant proved the address by an emailed code. */
+  emailVerifiedAt?: string | null
   decisionReason: string | null
   decidedAt: string | null
   createdUserId: string | null
@@ -87,6 +90,7 @@ export function JoinRequestListRow({
           <span className="font-mono">{request.username}</span>
           <span aria-hidden="true"> · </span>
           {request.email}
+          <EmailVerifiedNote verified={Boolean(request.emailVerifiedAt)} />
         </p>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
           <span className="inline-flex items-center gap-1">

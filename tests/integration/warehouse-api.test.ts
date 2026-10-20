@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
-import { and, eq, inArray, or } from "drizzle-orm"
+import { and, eq, inArray, or, sql } from "drizzle-orm"
 import sharp from "sharp"
 
 import * as uploadRoute from "@/app/api/v1/upload/image/route"
@@ -21,6 +23,7 @@ import * as tenantInvoiceRoute from "@/app/api/v1/receipts/[orderId]/download/ro
 import * as teamRoute from "@/app/api/v1/warehouse-team/route"
 import * as teamBranchesRoute from "@/app/api/v1/warehouse-team/[userId]/branches/route"
 import * as teamCitiesRoute from "@/app/api/v1/warehouse-team/[userId]/cities/route"
+import * as teamCityOrganizationsRoute from "@/app/api/v1/warehouse-team/[userId]/city-organizations/route"
 import {
   auditLogs,
   branches,
@@ -34,6 +37,7 @@ import {
   users,
   warehouseAssignments,
   warehouseCityAssignments,
+  warehouseCityOrganizations,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 import { purgeInvoiceLedger } from "./helpers/invoice-ledger-cleanup"
@@ -165,6 +169,13 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       { params: Promise.resolve({ userId }) },
     ))
   }
+  const chooseOrganization = async (actor: Actor | null, userId: string, body: unknown) => {
+    signIn(actor)
+    return read(await teamCityOrganizationsRoute.PUT(
+      request(`http://localhost/api/v1/warehouse-team/${userId}/city-organizations`, "PUT", body),
+      { params: Promise.resolve({ userId }) },
+    ))
+  }
   const assignCity = async (actor: Actor | null, userId: string, body: unknown) => {
     signIn(actor)
     return read(await teamCitiesRoute.PUT(
@@ -289,6 +300,7 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
     await db.delete(systemLogs).where(or(inArray(systemLogs.organizationId, organizationIds), inArray(systemLogs.userId, actorIds)))
     await db.delete(warehouseAssignments).where(inArray(warehouseAssignments.userId, actorIds))
     await db.delete(warehouseCityAssignments).where(inArray(warehouseCityAssignments.userId, actorIds))
+    await db.delete(warehouseCityOrganizations).where(inArray(warehouseCityOrganizations.userId, actorIds))
     await db.delete(globalProducts).where(eq(globalProducts.id, productId))
     await db.delete(branches).where(inArray(branches.organizationId, organizationIds))
     await db.delete(users).where(inArray(users.id, actorIds))
@@ -359,6 +371,16 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       const { status, body } = await list(actors.wh, `?view=all&organizationId=${orgA}&branchId=${branchA2}`)
       expect(status).toBe(200)
       expect(body.items).toEqual([])
+    })
+
+    it("searches by numeric order ID without crossing the warehouse reach", async () => {
+      const own = await list(actors.wh, `?view=all&q=${orderX}`)
+      expect(own.status).toBe(200)
+      expect(own.body.items.map((item: { id: number }) => item.id)).toEqual([orderX])
+
+      const outside = await list(actors.wh, `?view=all&q=${orderY}`)
+      expect(outside.status).toBe(200)
+      expect(outside.body.items).toEqual([])
     })
 
     it("is empty with no branches, and for a deactivated account", async () => {
@@ -569,6 +591,18 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
   })
 
   describe("workload, timeline and the catalogue", () => {
+    it("filters the warehouse dashboard by numeric order ID within its reach", async () => {
+      signIn(actors.wh)
+      const own = await read(await workloadRoute.GET(request(`http://localhost/api/v1/warehouse/workload?orderId=${orderX}`, "GET")))
+      expect(own.status).toBe(200)
+      expect(own.body.orders.items.map((item: { id: number }) => item.id)).toEqual([orderX])
+
+      signIn(actors.wh)
+      const outside = await read(await workloadRoute.GET(request(`http://localhost/api/v1/warehouse/workload?orderId=${orderY}`, "GET")))
+      expect(outside.status).toBe(200)
+      expect(outside.body.orders.items).toEqual([])
+    })
+
     it("fences the workload dashboard to the user's branches", async () => {
       signIn(actors.wh)
       const { status, body } = await read(await workloadRoute.GET(request("http://localhost/api/v1/warehouse/workload", "GET")))
@@ -716,9 +750,15 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
     })
   })
 
-  describe("Super Admin assigning whole cities", () => {
+  /**
+   * plans/OF-WAREHOUSE-city-assignments.md, narrowed by
+   * plans/OF-WAREHOUSE-city-assignments-by-organization.md: a user's cities
+   * reach the branches of the organizations chosen for it, and no others.
+   */
+  describe("Super Admin assigning whole cities of chosen organizations", () => {
     // A city no other suite or leftover row can share, spelt several ways.
     const cityLabel = () => `Itwh City ${suffix}`
+    const cityKey = () => `itwh city ${suffix}`
     let cityA1: number
     let cityB1: number
     let orderQ: number
@@ -753,43 +793,72 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       orderR = await approvedAt(orgB, cityB1, "R")
     })
 
-    it("is Super Admin's alone", async () => {
-      const body = { city: cityLabel(), assigned: true }
-      expect((await assignCity(null, actors.whCity.id, body)).status).toBe(401)
-      expect((await assignCity(actors.headOffice, actors.whCity.id, body)).status).toBe(403)
-      expect((await assignCity(actors.wh, actors.whCity.id, body)).status).toBe(403)
-      expect((await assignCity(actors.orderDesk, actors.whCity.id, body)).status).toBe(403)
+    it("is Super Admin's alone, for the organizations and the cities", async () => {
+      const cityBody = { city: cityLabel(), assigned: true }
+      const organizationBody = { organizationId: orgA, assigned: true }
+      for (const actor of [actors.headOffice, actors.wh, actors.orderDesk]) {
+        expect((await assignCity(actor, actors.whCity.id, cityBody)).status).toBe(403)
+        expect((await chooseOrganization(actor, actors.whCity.id, organizationBody)).status).toBe(403)
+      }
+      expect((await assignCity(null, actors.whCity.id, cityBody)).status).toBe(401)
+      expect((await chooseOrganization(null, actors.whCity.id, organizationBody)).status).toBe(401)
       expect((await detail(actors.whCity, orderQ)).status).toBe(404)
-    })
-
-    it("refuses a city with no branch, a malformed body, and a user who is not a warehouse account", async () => {
-      const unknown = await assignCity(actors.superAdmin, actors.whCity.id, { city: `Nowhere ${suffix}`, assigned: true })
-      expect(unknown.status).toBe(400)
-      expect(unknown.body.error).toBe("No branch is in that city")
-      expect((await assignCity(actors.superAdmin, actors.whCity.id, { city: cityLabel() })).status).toBe(400)
-      expect((await assignCity(actors.superAdmin, actors.whCity.id, { city: cityLabel(), assigned: true, branchIds: [cityA1] })).status).toBe(400)
-      expect((await assignCity(actors.superAdmin, actors.headOffice.id, { city: cityLabel(), assigned: true })).status).toBe(404)
-      expect((await assignCity(actors.superAdmin, randomUUID(), { city: cityLabel(), assigned: true })).status).toBe(404)
-      const rows = await db.select().from(warehouseCityAssignments).where(eq(warehouseCityAssignments.userId, actors.whCity.id))
+      const rows = await db.select().from(warehouseCityOrganizations).where(eq(warehouseCityOrganizations.userId, actors.whCity.id))
       expect(rows).toHaveLength(0)
     })
 
-    it("serves every branch in the city, across organizations and spellings, including one opened later", async () => {
-      const key = `itwh city ${suffix}`
+    it("refuses a city before an organization is chosen, an unknown organization, a malformed body, and a non-warehouse target", async () => {
+      const early = await assignCity(actors.superAdmin, actors.whCity.id, { city: cityLabel(), assigned: true })
+      expect(early.status).toBe(400)
+      expect(early.body.error).toBe("No branch of the chosen organizations is in that city")
+
+      const unknown = await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: 2_000_000_000, assigned: true })
+      expect(unknown.status).toBe(400)
+      expect(unknown.body.error).toBe("The organization does not exist")
+      expect((await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: String(orgA), assigned: true })).status).toBe(400)
+      expect((await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgA })).status).toBe(400)
+      expect((await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgA, assigned: true, city: cityLabel() })).status).toBe(400)
+      expect((await chooseOrganization(actors.superAdmin, actors.headOffice.id, { organizationId: orgA, assigned: true })).status).toBe(404)
+      expect((await chooseOrganization(actors.superAdmin, randomUUID(), { organizationId: orgA, assigned: true })).status).toBe(404)
+
+      expect((await assignCity(actors.superAdmin, actors.whCity.id, { city: cityLabel() })).status).toBe(400)
+      expect((await assignCity(actors.superAdmin, actors.whCity.id, { city: cityLabel(), assigned: true, branchIds: [cityA1] })).status).toBe(400)
+      expect((await assignCity(actors.superAdmin, actors.headOffice.id, { city: cityLabel(), assigned: true })).status).toBe(404)
+
+      expect(await db.select().from(warehouseCityAssignments).where(eq(warehouseCityAssignments.userId, actors.whCity.id))).toHaveLength(0)
+      expect(await db.select().from(warehouseCityOrganizations).where(eq(warehouseCityOrganizations.userId, actors.whCity.id))).toHaveLength(0)
+    })
+
+    it("refuses a city that only an organization not chosen has", async () => {
+      await db.insert(branches).values({ organizationId: orgB, name: `IT WH Only B ${suffix}`, city: `Itwh OnlyB ${suffix}`, status: "active" })
+      expect((await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgA, assigned: true })).status).toBe(200)
+      const refused = await assignCity(actors.superAdmin, actors.whCity.id, { city: `Itwh OnlyB ${suffix}`, assigned: true })
+      expect(refused.status).toBe(400)
+      expect(refused.body.error).toBe("No branch of the chosen organizations is in that city")
+    })
+
+    it("serves the city's branches in the chosen organizations only, across spellings, including one opened later", async () => {
+      // orgA was chosen above.
       const assigned = await assignCity(actors.superAdmin, actors.whCity.id, { city: `ITWH CITY ${suffix}`, assigned: true })
       expect(assigned.status).toBe(200)
-      expect(assigned.body.item).toMatchObject({ city: { key, label: cityLabel() }, assigned: true, branchCount: 2 })
+      // Counted within the chosen organizations: orgB's branch is not reached yet.
+      expect(assigned.body.item).toMatchObject({ city: { key: cityKey(), label: cityLabel() }, assigned: true, branchCount: 1 })
 
       expect((await detail(actors.whCity, orderQ)).status).toBe(200)
-      expect((await detail(actors.whCity, orderR)).status).toBe(200)
-      // Branches outside the city stay out of reach.
+      expect((await detail(actors.whCity, orderR)).status).toBe(404)
       expect((await detail(actors.whCity, orderX)).status).toBe(404)
-      const listed = await list(actors.whCity)
-      expect(listed.body.items.map((item: { id: number }) => item.id).sort()).toEqual([orderQ, orderR].sort())
+      expect((await list(actors.whCity)).body.items.map((item: { id: number }) => item.id)).toEqual([orderQ])
 
-      // A branch opened in the city afterwards is reached with no further write.
+      // Choosing the second organization extends the same city to it at once.
+      const second = await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgB, assigned: true })
+      expect(second.status).toBe(200)
+      expect(second.body.item.organizationIds).toEqual([orgA, orgB].sort((a, b) => a - b))
+      expect((await detail(actors.whCity, orderR)).status).toBe(200)
+      expect((await list(actors.whCity)).body.items.map((item: { id: number }) => item.id).sort()).toEqual([orderQ, orderR].sort())
+
+      // A branch opened in the city of a chosen organization is reached with no further write.
       const [later] = await db.insert(branches).values({
-        organizationId: orgA, name: `IT WH City A2 ${suffix}`, city: `itwh city ${suffix}`, status: "active",
+        organizationId: orgA, name: `IT WH City A2 ${suffix}`, city: cityKey(), status: "active",
       }).returning({ id: branches.id })
       const orderS = await approvedAt(orgA, later.id, "S")
       expect((await detail(actors.whCity, orderS)).status).toBe(200)
@@ -805,24 +874,63 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       expect((await stored(orderQ)).fulfillmentStatus).toBe("IN_PROCESS")
     })
 
-    it("lists the cities with their counts and each member's cities", async () => {
+    it("lists each city's branches per organization and each member's cities and organizations", async () => {
       signIn(actors.superAdmin)
       const { status, body } = await read(await teamRoute.GET())
       expect(status).toBe(200)
-      const key = `itwh city ${suffix}`
-      expect(body.cities.find((city: { key: string }) => city.key === key))
-        .toEqual({ key, label: cityLabel(), branchCount: 2, organizationCount: 2 })
-      expect(body.members.find((member: { id: string }) => member.id === actors.whCity.id).cityKeys).toEqual([key])
-      expect(body.branches.find((branch: { id: number }) => branch.id === cityB1).cityKey).toBe(key)
+      expect(body.cities.find((city: { key: string }) => city.key === cityKey())).toEqual({
+        key: cityKey(),
+        label: cityLabel(),
+        branchCount: 2,
+        organizationCount: 2,
+        organizations: [{ organizationId: orgA, branchCount: 1 }, { organizationId: orgB, branchCount: 1 }]
+          .sort((a, b) => a.organizationId - b.organizationId),
+      })
+      const member = body.members.find((candidate: { id: string }) => candidate.id === actors.whCity.id)
+      expect(member.cityKeys).toEqual([cityKey()])
+      expect(member.cityOrganizationIds).toEqual([orgA, orgB].sort((a, b) => a - b))
+      expect(body.branches.find((branch: { id: number }) => branch.id === cityB1).cityKey).toBe(cityKey())
     })
 
-    it("is idempotent, audited once per change with no organization, and withdrawn at once", async () => {
+    it("withdraws an organization at once, keeping the city for the others, audited on that organization", async () => {
+      const again = await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgB, assigned: true })
+      expect(again.status).toBe(200)
+
+      const withdrawn = await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgB, assigned: false })
+      expect(withdrawn.status).toBe(200)
+      expect(withdrawn.body.item.organizationIds).toEqual([orgA])
+      expect((await detail(actors.whCity, orderR)).status).toBe(404)
+      expect((await detail(actors.whCity, orderQ)).status).toBe(200)
+      expect((await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgB, assigned: false })).status).toBe(200)
+
+      const audits = await db
+        .select({ metadata: auditLogs.metadata, organizationId: auditLogs.organizationId, userId: auditLogs.userId })
+        .from(auditLogs)
+        .where(and(eq(auditLogs.action, "UPDATE_WAREHOUSE_CITY_ORGANIZATIONS"), eq(auditLogs.entityId, actors.whCity.id)))
+      // orgA chosen, orgB chosen, orgB withdrawn — the repeats wrote nothing.
+      expect(audits).toHaveLength(3)
+      expect(audits.every((audit) => audit.userId === actors.superAdmin.id)).toBe(true)
+      expect(audits.map((audit) => audit.organizationId).sort()).toEqual([orgA, orgB, orgB].sort())
+      expect(audits.map((audit) => (audit.metadata as { after: { organizationIds: number[] } }).after.organizationIds))
+        .toEqual(expect.arrayContaining([[orgA], [orgA, orgB].sort((a, b) => a - b)]))
+    })
+
+    it("reaches nothing through a city once every organization is withdrawn", async () => {
+      expect((await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgA, assigned: false })).status).toBe(200)
+      expect((await detail(actors.whCity, orderQ)).status).toBe(404)
+      expect((await list(actors.whCity)).body.items).toEqual([])
+      // The city itself is kept, and comes back with the organization.
+      expect(await db.select().from(warehouseCityAssignments).where(eq(warehouseCityAssignments.userId, actors.whCity.id))).toHaveLength(1)
+      expect((await chooseOrganization(actors.superAdmin, actors.whCity.id, { organizationId: orgA, assigned: true })).status).toBe(200)
+      expect((await detail(actors.whCity, orderQ)).status).toBe(200)
+    })
+
+    it("is idempotent for a city, audited once per change with no organization, and withdrawn at once", async () => {
       const again = await assignCity(actors.superAdmin, actors.whCity.id, { city: cityLabel(), assigned: true })
       expect(again.status).toBe(200)
       const withdrawn = await assignCity(actors.superAdmin, actors.whCity.id, { city: `itwh  city ${suffix}`, assigned: false })
       expect(withdrawn.status).toBe(200)
       expect((await detail(actors.whCity, orderQ)).status).toBe(404)
-      expect((await detail(actors.whCity, orderR)).status).toBe(404)
       expect((await assignCity(actors.superAdmin, actors.whCity.id, { city: cityLabel(), assigned: false })).status).toBe(200)
 
       const audits = await db
@@ -832,11 +940,35 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       expect(audits).toHaveLength(2)
       expect(audits.every((audit) => audit.organizationId === null && audit.userId === actors.superAdmin.id)).toBe(true)
       expect(audits.map((audit) => (audit.metadata as { after: { cityKeys: string[] } }).after.cityKeys))
-        .toEqual(expect.arrayContaining([[`itwh city ${suffix}`], []]))
+        .toEqual(expect.arrayContaining([[cityKey()], []]))
+    })
+
+    it("is backfilled by the migration with every organization that has a branch in the user's cities now", async () => {
+      const migration = readFileSync(resolve(process.cwd(), "drizzle/20261027120000_warehouse_city_organizations.sql"), "utf8")
+      const backfill = migration.slice(migration.indexOf('INSERT INTO "warehouse_city_organizations"'))
+      // A city held from before the change, with no organization chosen.
+      await db.insert(warehouseCityAssignments).values({ userId: actors.whOther.id, cityKey: cityKey() })
+      try {
+        // Run inside a transaction that is rolled back, so no other row in the database changes.
+        const rollback = new Error("rollback")
+        let chosen: number[] = []
+        await expect(db.transaction(async (tx) => {
+          await tx.execute(sql.raw(backfill))
+          chosen = (await tx.select({ organizationId: warehouseCityOrganizations.organizationId })
+            .from(warehouseCityOrganizations)
+            .where(eq(warehouseCityOrganizations.userId, actors.whOther.id)))
+            .map((row) => row.organizationId)
+          throw rollback
+        })).rejects.toBe(rollback)
+        expect(chosen.sort((a, b) => a - b)).toEqual([orgA, orgB].sort((a, b) => a - b))
+      } finally {
+        await db.delete(warehouseCityAssignments).where(eq(warehouseCityAssignments.userId, actors.whOther.id))
+      }
     })
 
     it("reaches nothing through a city for a deactivated account", async () => {
-      await db.insert(warehouseCityAssignments).values({ userId: actors.whInactive.id, cityKey: `itwh city ${suffix}` })
+      await db.insert(warehouseCityAssignments).values({ userId: actors.whInactive.id, cityKey: cityKey() })
+      await db.insert(warehouseCityOrganizations).values({ userId: actors.whInactive.id, organizationId: orgB })
       expect((await detail(actors.whInactive, orderR)).status).toBe(404)
     })
   })

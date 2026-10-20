@@ -24,6 +24,15 @@ import { useRouter } from "next/navigation"
 import { HeadOfficeCreateBranchDialog } from "@/components/organizations/head-office-create-branch-dialog"
 import { HeadOfficeEditBranchDialog } from "@/components/organizations/head-office-edit-branch-dialog"
 import { formatBranchHeadCount } from "@/lib/branch-head-count"
+import { BranchHierarchyBadge } from "@/components/branches/branch-hierarchy-badge"
+import {
+  BRANCH_HIERARCHY_LABELS,
+  BRANCH_HIERARCHY_ROLES,
+  describeBranchHierarchy,
+  matchesBranchHierarchyFilter,
+  parentBranchOptions,
+  type BranchHierarchyFilter,
+} from "@/lib/branch-hierarchy"
 
 type Branch = {
   id: number
@@ -41,6 +50,9 @@ type Branch = {
   groupId?: number | null
   groupName?: string | null
   headCount?: number | null
+  hierarchyRole?: string | null
+  parentBranchId?: number | null
+  parentBranchName?: string | null
 }
 
 type User = {
@@ -66,6 +78,7 @@ export default function BranchesPage() {
   const PAGE_SIZE = 20
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all")
+  const [typeFilter, setTypeFilter] = useState<BranchHierarchyFilter>("all")
   const [page, setPage] = useState(1)
   const [updatingBranchId, setUpdatingBranchId] = useState<number | null>(null)
   const [manualRefreshing, setManualRefreshing] = useState(false)
@@ -88,22 +101,30 @@ export default function BranchesPage() {
         !normalized ||
         branch.name.toLowerCase().includes(normalized) ||
         (branch.code || "").toLowerCase().includes(normalized) ||
-        (branch.costCenterId || "").toLowerCase().includes(normalized)
+        (branch.costCenterId || "").toLowerCase().includes(normalized) ||
+        (branch.parentBranchName || "").toLowerCase().includes(normalized)
 
       const status = (branch.status || "active").toLowerCase()
       const matchesStatus =
         statusFilter === "all" ||
         (statusFilter === "active" ? status === "active" : status !== "active")
 
-      return matchesSearch && matchesStatus
+      return matchesSearch && matchesStatus && matchesBranchHierarchyFilter(branch, typeFilter)
     })
-  }, [branches, search, statusFilter])
+  }, [branches, search, statusFilter, typeFilter])
+
+  // The organization's parent branches, for the create and edit forms, and
+  // which branches still have children (a parent with children keeps its type).
+  const parentIdsWithChildren = useMemo(
+    () => new Set(branches.map((branch) => branch.parentBranchId).filter((id): id is number => typeof id === "number")),
+    [branches],
+  )
 
   const totalPages = Math.max(1, Math.ceil(filteredBranches.length / PAGE_SIZE))
 
   useEffect(() => {
     setPage(1)
-  }, [search, statusFilter])
+  }, [search, statusFilter, typeFilter])
 
   useEffect(() => {
     setPage((prev) => Math.min(prev, totalPages) || 1)
@@ -231,6 +252,7 @@ export default function BranchesPage() {
           {!readOnly && (
             <HeadOfficeCreateBranchDialog
               organizationId={userOrgId}
+              parentOptions={parentBranchOptions(branches, userOrgId)}
               onCreated={() => { void refetchBranches() }}
             />
           )}
@@ -276,6 +298,17 @@ export default function BranchesPage() {
                   <SelectItem value="all">All Statuses</SelectItem>
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="inactive">Inactive</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={typeFilter} onValueChange={(value) => setTypeFilter(value as BranchHierarchyFilter)}>
+                <SelectTrigger aria-label="Filter by branch type" className="h-10 w-full sm:w-40 rounded-xl border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-900/50">
+                  <SelectValue placeholder="Branch type" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl border-slate-200 dark:border-slate-800">
+                  <SelectItem value="all">All Types</SelectItem>
+                  {BRANCH_HIERARCHY_ROLES.map((role) => (
+                    <SelectItem key={role} value={role}>{BRANCH_HIERARCHY_LABELS[role]}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
 
@@ -382,6 +415,7 @@ export default function BranchesPage() {
                                 <div className="space-y-1">
                                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Branch Name</p>
                                   <h3 className="text-xl font-black text-slate-800 dark:text-slate-100 tracking-tight">{branch.name}</h3>
+                                  <BranchHierarchyBadge branch={branch} />
                                 </div>
                                 <Badge className={cn(
                                   "rounded-lg px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border shadow-sm",
@@ -549,9 +583,12 @@ export default function BranchesPage() {
                                     <div className="h-9 w-9 rounded-xl bg-gradient-to-tr from-blue-100 to-indigo-100 dark:from-blue-900/50 dark:to-indigo-900/50 flex items-center justify-center shrink-0">
                                       <Building2 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                                     </div>
-                                    <span className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                                      {branch.name}
-                                    </span>
+                                    <div className="flex min-w-0 flex-col items-start gap-1">
+                                      <span className="font-semibold text-slate-900 dark:text-slate-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                                        {branch.name}
+                                      </span>
+                                      <BranchHierarchyBadge branch={branch} />
+                                    </div>
                                   </div>
                                 </TableCell>
                                 <TableCell>
@@ -772,6 +809,10 @@ export default function BranchesPage() {
                         <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Users className="h-3.5 w-3.5" /> Head count</span>
                         <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{formatBranchHeadCount(viewingBranch.headCount)}</span>
                       </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5 shrink-0"><Building2 className="h-3.5 w-3.5" /> Branch type</span>
+                        <span className="text-sm font-bold text-slate-800 dark:text-slate-200 text-right">{describeBranchHierarchy(viewingBranch)}</span>
+                      </div>
                       {viewingBranch.groupName && (
                         <div className="flex items-center justify-between group">
                           <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Layers className="h-3.5 w-3.5" /> Group</span>
@@ -820,6 +861,8 @@ export default function BranchesPage() {
                   {!readOnly && (
                     <HeadOfficeEditBranchDialog
                       branch={viewingBranch}
+                      parentOptions={parentBranchOptions(branches, viewingBranch.organizationId ?? userOrgId, viewingBranch.id)}
+                      hasChildren={parentIdsWithChildren.has(viewingBranch.id)}
                       onSaved={() => { void refetchBranches() }}
                       triggerClassName="w-full h-12 rounded-2xl font-bold gap-2"
                     />

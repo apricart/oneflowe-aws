@@ -172,6 +172,82 @@ describe("the public join endpoints hold an applicant to the organization's emai
   })
 })
 
+describe("the public join endpoints require a proven address", () => {
+  // plans/OF-JOIN-email-otp-verification.md
+  const REQUEST_ROUTE = "app/api/v1/join/email-verification/request/route.ts"
+  const VERIFY_ROUTE = "app/api/v1/join/email-verification/verify/route.ts"
+
+  it("sends a code only for the organization the join code names, at its domain", () => {
+    const route = codeOf(REQUEST_ROUTE)
+    expect(route).toContain("resolveOrganizationByJoinCode(code)")
+    expect(route).not.toMatch(/organizationId:\s*(input|body|parsed|rawBody)/)
+    expect(route).toContain("UNKNOWN_JOIN_CODE_MESSAGE")
+    const refusal = route.indexOf("joinEmailDomainRefusal(email, organization.emailDomain)")
+    expect(refusal).toBeGreaterThan(route.indexOf("resolveOrganizationByJoinCode(code)"))
+    expect(refusal).toBeLessThan(route.indexOf("issueJoinEmailCode("))
+    expect(route).toContain("organizationId: organization.organizationId")
+  })
+
+  it("limits the mail-out on the caller, the code and the address, and the verify on the caller and the challenge", () => {
+    const request = codeOf(REQUEST_ROUTE)
+    expect(request).toContain('checkRateLimit(clientIdentifier, "login")')
+    expect(request).toContain('checkRateLimit(codeIdentifier, "login")')
+    expect(request).toContain('checkRateLimit(addressIdentifier, "otpSend")')
+    const verify = codeOf(VERIFY_ROUTE)
+    expect(verify).toContain('checkRateLimit(clientIdentifier, "login")')
+    expect(verify).toContain('checkRateLimit(challengeIdentifier, "otpVerify")')
+    for (const route of [request, verify]) expect(route).toContain("rateLimitResponse")
+  })
+
+  it("checks the proof on both forms after the domain and before the password is hashed", () => {
+    const submit = codeOf("app/api/v1/join/requests/route.ts")
+    const standard = submit.slice(0, submit.indexOf("async function submitDepartmentSignup"))
+    const department = submit.slice(submit.indexOf("async function submitDepartmentSignup"))
+    for (const path of [standard, department]) {
+      const check = path.indexOf("joinEmailProofIsLive(")
+      expect(check).toBeGreaterThan(path.indexOf("joinEmailDomainRefusal("))
+      expect(check).toBeLessThan(path.indexOf("hashPassword("))
+      // Bound to the address about to be stored and the tenant from the code.
+      expect(path).toContain("organizationId: organization.organizationId, email: identity.email")
+      expect(path).toContain("emailProof,")
+    }
+  })
+
+  it("spends the proof inside the transaction that inserts the request, before the insert", () => {
+    for (const path of ["lib/server/organization-join.ts", "lib/server/organization-join-department.ts"]) {
+      const server = codeOf(path)
+      const creator = server.slice(
+        server.indexOf(path.endsWith("department.ts") ? "export async function createDepartmentJoinRequest" : "export async function createJoinRequest"),
+      )
+      const transaction = creator.indexOf("db.transaction(async (tx)")
+      const spend = creator.indexOf("spendJoinEmailProof(tx,")
+      const insert = creator.indexOf(".insert(organizationJoinRequests)")
+      expect(transaction).toBeGreaterThan(-1)
+      expect(spend).toBeGreaterThan(transaction)
+      expect(spend).toBeLessThan(insert)
+      expect(creator).toContain("emailVerifiedAt: new Date()")
+      expect(creator).toContain("instanceof JoinEmailProofRejected")
+    }
+  })
+
+  it("makes the proof a required field of both submissions", () => {
+    const validation = repositoryFile("lib/server/mutation-validation.ts")
+    for (const [start, end] of [
+      ["export const joinRequestSubmitSchema", "export const joinCodeSetSchema"],
+      ["export const departmentJoinSubmitSchema", "/** One field of a new branch"],
+    ]) {
+      const schema = validation.slice(validation.indexOf(start), validation.indexOf(end))
+      expect(schema).toContain("emailVerification: joinEmailVerificationSchema,")
+      expect(schema).not.toContain("emailVerification: joinEmailVerificationSchema.optional()")
+    }
+  })
+
+  it("clears the verification when Head Office edits the address", () => {
+    const edit = codeOf("lib/server/organization-join-department-edit.ts")
+    expect(edit).toContain('changedFields.includes("email") ? { emailVerifiedAt: null } : {}')
+  })
+})
+
 describe("the managed join endpoints admit Head Office alone", () => {
   it("gates every one of them on the shared allowlist", () => {
     for (const path of MANAGED_JOIN_ROUTES) {

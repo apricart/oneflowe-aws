@@ -1,5 +1,7 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
+
+import { installDomPolyfills } from "@/tests/support/ui-mocks"
 
 import { DepartmentSignupForm, type DepartmentSignupOptions } from "./department-signup-form"
 
@@ -7,7 +9,8 @@ import { DepartmentSignupForm, type DepartmentSignupOptions } from "./department
  * The department sign-up form (plans/OF-JOIN-department-signup-multi-user.md).
  * The server is the control; this pins that the form asks for one approver per
  * configured level, offers existing branches by name, asks a new branch for its
- * own name before its CRC, and sends only what the endpoint accepts.
+ * own name before its CRC and its city (plans/OF-JOIN-applicant-new-branch-city.md),
+ * and sends only what the endpoint accepts.
  */
 
 const OPTIONS: DepartmentSignupOptions = {
@@ -31,7 +34,7 @@ function change(id: string, value: string) {
   fireEvent.change(byId(id), { target: { value } })
 }
 
-function fillValidForm() {
+async function fillValidForm() {
   change("signup-full-name", "Huzaifa Abid")
   change("signup-email", "Huzaifa.Abid")
   change("signup-phone", "03001234567")
@@ -45,7 +48,7 @@ function fillValidForm() {
 
   change("signup-branch", "clif")
   fireEvent.click(screen.getByRole("option", { name: "Clifton Branch" }))
-  addNewBranch("Korangi Depot", "ab-abc-123")
+  await addNewBranch("Korangi Depot", "ab-abc-123")
 
   change("signup-address", "Plot 1, Clifton, Karachi")
   fireEvent.click(screen.getAllByRole("button", { name: /Add/ })[1])
@@ -55,11 +58,22 @@ function fillValidForm() {
   fireEvent.click(byId("signup-terms"))
 }
 
-/** Type a branch that is not listed, take it as new, and give its CRC. */
-function addNewBranch(name: string, crc: string) {
+const CITY = "City of the new branch"
+
+/** Pick a city from the list by searching for it. */
+async function chooseCity(search: string, name = search) {
+  fireEvent.click(screen.getByRole("combobox", { name: CITY }))
+  fireEvent.change(await screen.findByLabelText(`Search ${CITY.toLowerCase()}`), { target: { value: search } })
+  fireEvent.click(await screen.findByRole("option", { name: new RegExp(`^${name}`) }))
+  await waitFor(() => expect(screen.getByRole("combobox", { name: CITY }).textContent).toBe(name))
+}
+
+/** Type a branch that is not listed, take it as new, and give its CRC and city. */
+async function addNewBranch(name: string, crc: string, city = "Karachi") {
   change("signup-branch", name)
   fireEvent.click(screen.getByRole("option", { name: `Add “${name}” as a new branch` }))
   change("signup-new-branch-crc", crc)
+  await chooseCity(city)
   fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
 }
 
@@ -68,6 +82,8 @@ async function send() {
     fireEvent.click(screen.getByRole("button", { name: "Sign Up" }))
   })
 }
+
+beforeAll(() => installDomPolyfills())
 
 afterEach(() => {
   cleanup()
@@ -110,7 +126,7 @@ describe("DepartmentSignupForm", () => {
     expect(screen.getByRole("checkbox", { name: "Saddar Branch" })).toBeTruthy()
   })
 
-  it("asks a branch that is not listed for its CRC, and lists it by the name given", () => {
+  it("asks a branch that is not listed for its CRC and city, and lists it by the name given", async () => {
     renderForm()
     change("signup-branch", "Korangi Depot")
     expect(byId("signup-new-branch-crc")).toBeNull()
@@ -118,9 +134,24 @@ describe("DepartmentSignupForm", () => {
     expect(screen.getByText("Korangi Depot", { selector: "span" })).toBeTruthy()
     change("signup-new-branch-crc", "ab-abc-123")
     expect(byId("signup-new-branch-crc").value).toBe("AB-ABC-123")
+    expect(byId("signup-new-branch-province").value).toBe("")
+    await chooseCity("karachi", "Karachi")
+    expect(byId("signup-new-branch-province").value).toBe("Sindh")
+    expect(byId("signup-new-branch-province").readOnly).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
-    expect(screen.getByRole("checkbox", { name: /Korangi Depot.*CRC AB-ABC-123/ })).toBeTruthy()
+    expect(screen.getByRole("checkbox", { name: /Korangi Depot.*CRC AB-ABC-123.*Karachi, Sindh/ })).toBeTruthy()
     expect(byId("signup-new-branch-crc")).toBeNull()
+  })
+
+  it("refuses a new branch until its city is chosen", () => {
+    renderForm()
+    change("signup-branch", "Korangi Depot")
+    fireEvent.click(screen.getByRole("option", { name: "Add “Korangi Depot” as a new branch" }))
+    change("signup-new-branch-crc", "AB-1")
+    fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
+    expect(screen.getByText("Choose the city of the new branch")).toBeTruthy()
+    expect(screen.getByRole("combobox", { name: CITY }).getAttribute("aria-invalid")).toBe("true")
+    expect(screen.getByText("No branches added yet.")).toBeTruthy()
   })
 
   it("refuses a malformed CRC for a new branch instead of adding it", () => {
@@ -141,10 +172,10 @@ describe("DepartmentSignupForm", () => {
     expect(byId("signup-new-branch-crc")).toBeNull()
   })
 
-  it("refuses the same CRC for a second new branch", () => {
+  it("refuses the same CRC for a second new branch", async () => {
     renderForm()
-    addNewBranch("Korangi Depot", "AB-1")
-    addNewBranch("Landhi Depot", "ab-1")
+    await addNewBranch("Korangi Depot", "AB-1")
+    await addNewBranch("Landhi Depot", "ab-1")
     expect(screen.getByText("This CRC is already added")).toBeTruthy()
   })
 
@@ -159,7 +190,7 @@ describe("DepartmentSignupForm", () => {
 
   it("sends a version 2 body with the domain on every address and no username or role", async () => {
     const onSubmit = renderForm()
-    fillValidForm()
+    await fillValidForm()
     await send()
 
     expect(onSubmit).toHaveBeenCalledTimes(1)
@@ -169,7 +200,7 @@ describe("DepartmentSignupForm", () => {
       fullName: "Huzaifa Abid",
       email: "huzaifa.abid@ubl.com.pk",
       department: "Finance",
-      branches: [{ branchId: 4 }, { name: "Korangi Depot", crc: "AB-ABC-123" }],
+      branches: [{ branchId: 4 }, { name: "Korangi Depot", crc: "AB-ABC-123", city: "Karachi", province: "Sindh" }],
       addresses: ["Plot 1, Clifton, Karachi"],
       approvers: [
         { level: 1, email: "first.approver@ubl.com.pk", designation: "Head of Finance" },
@@ -183,7 +214,7 @@ describe("DepartmentSignupForm", () => {
 
   it("does not send a branch or an address that was unchecked", async () => {
     const onSubmit = renderForm()
-    fillValidForm()
+    await fillValidForm()
     fireEvent.click(screen.getByRole("checkbox", { name: /Korangi Depot/ }))
     await send()
     expect(onSubmit.mock.calls[0][0].branches).toEqual([{ branchId: 4 }])
@@ -195,5 +226,15 @@ describe("DepartmentSignupForm", () => {
     expect(onSubmit).not.toHaveBeenCalled()
     expect(screen.getByText("Add at least one branch and keep it checked")).toBeTruthy()
     expect(screen.getByText("Accept the terms to continue")).toBeTruthy()
+  })
+})
+
+describe("DepartmentSignupForm — an address already verified by an emailed code", () => {
+  it("shows it read-only and derives the username from it", () => {
+    render(<DepartmentSignupForm options={OPTIONS} lockedEmailLocalPart="huzaifa.abid" onSubmit={vi.fn()} onBack={vi.fn()} />)
+    expect(byId("signup-email").value).toBe("huzaifa.abid")
+    expect(byId("signup-email").readOnly).toBe(true)
+    expect(screen.getByLabelText(/^Email Address \(verified\)/)).toBe(byId("signup-email"))
+    expect(byId("signup-username").value).toBe("ubl-huzaifa.abid")
   })
 })

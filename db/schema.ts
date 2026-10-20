@@ -160,6 +160,13 @@ export const branches = pgTable(
     // by Super Admin / Head Office, or by Head Office approving a
     // branch_head_count_requests row. See plans/OF-BRANCH-head-count.md.
     headCount: integer("head_count"),
+    // Parent / child / standalone: a label only, read by no access, budget,
+    // price or catalogue rule. One of BRANCH_HIERARCHY_ROLES
+    // (lib/branch-hierarchy.ts); a child names its parent, a parent of its own
+    // organization (branches_parent_org_fk) that is itself a PARENT (the
+    // branches_hierarchy_guard trigger). See plans/OF-BRANCH-parent-child-label.md.
+    hierarchyRole: varchar("hierarchy_role", { length: 16 }).notNull().default("STANDALONE"),
+    parentBranchId: integer("parent_branch_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -181,6 +188,13 @@ export const branches = pgTable(
     check("branches_region_ck", sql`${t.region} IS NULL OR ${t.region} IN ('NORTH', 'CENTRAL', 'SOUTH')`),
     // MAX_BRANCH_HEAD_COUNT in lib/branch-head-count.ts.
     check("branches_head_count_ck", sql`${t.headCount} IS NULL OR ${t.headCount} BETWEEN 0 AND 1000000`),
+    index("branches_parent_idx").on(t.parentBranchId).where(sql`${t.parentBranchId} IS NOT NULL`),
+    check("branches_hierarchy_role_ck", sql`${t.hierarchyRole} IN ('STANDALONE', 'PARENT', 'CHILD')`),
+    check(
+      "branches_hierarchy_parent_ck",
+      sql`((${t.hierarchyRole} = 'CHILD') = (${t.parentBranchId} IS NOT NULL))
+        AND (${t.parentBranchId} IS NULL OR ${t.parentBranchId} <> ${t.id})`,
+    ),
     check(
       "branches_external_identity_pair_ck",
       sql`(${t.externalSource} IS NULL) = (${t.externalId} IS NULL)
@@ -199,6 +213,13 @@ export const branches = pgTable(
       columns: [t.groupId, t.organizationId],
       foreignColumns: [groups.id, groups.organizationId],
     }).onDelete("set null"),
+    // A child's parent is in the child's own organization. NO ACTION: deleting
+    // a parent that still has children is refused.
+    foreignKey({
+      name: "branches_parent_org_fk",
+      columns: [t.parentBranchId, t.organizationId],
+      foreignColumns: [t.id, t.organizationId],
+    }),
   ],
 )
 
@@ -2725,6 +2746,33 @@ export const warehouseCityAssignments = pgTable(
   ],
 )
 
+/**
+ * The organizations a Warehouse user's cities apply to. A city rule above
+ * reaches a branch only when the branch's organization is listed here for the
+ * same user — the two sets are intersected, and an empty set reaches nothing.
+ * Every reader matches through `warehouseCityRuleJoin`
+ * (`lib/server/warehouse-city-rule.ts`). Grants nothing on its own.
+ * See plans/OF-WAREHOUSE-city-assignments-by-organization.md.
+ */
+export const warehouseCityOrganizations = pgTable(
+  "warehouse_city_organizations",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("warehouse_city_organizations_user_org_uq").on(t.userId, t.organizationId),
+    index("warehouse_city_organizations_org_idx").on(t.organizationId),
+  ],
+)
+
 // ========================================
 // GROUP ORDERS (multi-branch submissions)
 // ========================================
@@ -3064,6 +3112,56 @@ export const organizationJoinCodes = pgTable(
  * back. The requested role is confined to `JOINABLE_ROLES` here as well as in
  * Zod, because a check constraint is the one layer a new endpoint cannot forget.
  */
+/**
+ * One emailed code proving that a join applicant receives mail at the address
+ * they typed (plans/OF-JOIN-email-otp-verification.md). Modelled on
+ * `password_reset_challenges`: only HMAC digests are stored — never the code,
+ * the proof, or the address itself — and a resend consumes the live row, so
+ * the partial unique index allows one per (organization, address).
+ */
+export const joinEmailVerifications = pgTable(
+  "join_email_verifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    emailDigest: varchar("email_digest", { length: 64 }).notNull(),
+    codeDigest: varchar("code_digest", { length: 64 }).notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    proofDigest: varchar("proof_digest", { length: 64 }),
+    proofExpiresAt: timestamp("proof_expires_at", { withTimezone: true }),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("join_email_verifications_subject_idx").on(t.organizationId, t.emailDigest, t.createdAt),
+    index("join_email_verifications_expiry_idx").on(t.expiresAt),
+    uniqueIndex("join_email_verifications_live_uq")
+      .on(t.organizationId, t.emailDigest)
+      .where(sql`${t.consumedAt} IS NULL`),
+    check(
+      "join_email_verifications_attempts_ck",
+      sql`${t.attempts} >= 0 AND ${t.attempts} <= 5`,
+    ),
+    check(
+      "join_email_verifications_digest_shape_ck",
+      sql`${t.emailDigest} ~ '^[0-9a-f]{64}$' AND ${t.codeDigest} ~ '^[0-9a-f]{64}$' AND (${t.proofDigest} IS NULL OR ${t.proofDigest} ~ '^[0-9a-f]{64}$')`,
+    ),
+    check(
+      "join_email_verifications_time_order_ck",
+      sql`${t.createdAt} < ${t.expiresAt} AND (${t.proofExpiresAt} IS NULL OR ${t.verifiedAt} <= ${t.proofExpiresAt})`,
+    ),
+    check(
+      "join_email_verifications_verification_ck",
+      sql`(${t.verifiedAt} IS NULL AND ${t.proofDigest} IS NULL AND ${t.proofExpiresAt} IS NULL)
+        OR (${t.verifiedAt} IS NOT NULL AND ${t.proofDigest} IS NOT NULL AND ${t.proofExpiresAt} IS NOT NULL)`,
+    ),
+  ],
+)
+
 export const organizationJoinRequests = pgTable(
   "organization_join_requests",
   {
@@ -3110,6 +3208,10 @@ export const organizationJoinRequests = pgTable(
     // Kept for abuse investigation on a public endpoint. Never rendered.
     submittedIp: varchar("submitted_ip", { length: 64 }),
     submittedUserAgent: varchar("submitted_user_agent", { length: 512 }),
+    // When the applicant proved the address by a code sent to it
+    // (plans/OF-JOIN-email-otp-verification.md). Null on requests made before
+    // that step existed, and cleared when Head Office edits the address.
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3202,6 +3304,12 @@ export const organizationJoinRequestBranches = pgTable(
     // The name the applicant gave a branch to be created; null for an existing
     // branch and for a request submitted before names were asked for.
     requestedBranchName: varchar("requested_branch_name", { length: 100 }),
+    // The city the applicant says a branch to be created is in, in the
+    // spelling of lib/pakistan-cities.ts, and that city's province; both null
+    // for an existing branch and for a request submitted before they were
+    // asked for (plans/OF-JOIN-applicant-new-branch-city.md).
+    requestedBranchCity: varchar("requested_branch_city", { length: 100 }),
+    requestedBranchProvince: varchar("requested_branch_province", { length: 100 }),
     resolvedBranchId: integer("resolved_branch_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3218,6 +3326,16 @@ export const organizationJoinRequestBranches = pgTable(
       "organization_join_request_branches_name_ck",
       sql`${t.requestedBranchName} IS NULL
         OR (${t.costCenterId} IS NOT NULL AND length(btrim(${t.requestedBranchName})) > 0)`,
+    ),
+    check(
+      "organization_join_request_branches_location_ck",
+      // Both halves named NOT NULL: length(btrim(NULL)) is NULL, which a CHECK accepts.
+      sql`(${t.requestedBranchCity} IS NULL AND ${t.requestedBranchProvince} IS NULL)
+        OR (${t.costCenterId} IS NOT NULL
+          AND ${t.requestedBranchCity} IS NOT NULL
+          AND ${t.requestedBranchProvince} IS NOT NULL
+          AND length(btrim(${t.requestedBranchCity})) > 0
+          AND length(btrim(${t.requestedBranchProvince})) > 0)`,
     ),
     foreignKey({
       name: "organization_join_request_branches_branch_org_fk",

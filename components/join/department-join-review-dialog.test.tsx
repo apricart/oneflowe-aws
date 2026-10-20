@@ -112,6 +112,26 @@ describe("DepartmentJoinReviewDialog — a new branch's details", () => {
     ])
   })
 
+  it("starts the city and province from the applicant's, and sends them unless Head Office changes them", async () => {
+    const located = { ...REVIEW, branches: [{ ...REVIEW.branches[0], requestedCity: "karachi", requestedProvince: "Sindh" }] }
+    const onDecided = renderDialog([], located as typeof REVIEW)
+    await screen.findByLabelText("Province")
+    expect(screen.getByRole("combobox", { name: "City" }).textContent).toBe("Karachi")
+    expect((screen.getByLabelText("Province") as HTMLInputElement).value).toBe("Sindh")
+
+    approve()
+    await waitFor(() => expect(onDecided).toHaveBeenCalled())
+    expect(JSON.parse(jsonFetcher.mock.calls[0][1].body).newBranches[0]).toMatchObject({ city: "Karachi", province: "Sindh" })
+  })
+
+  it("lets Head Office change the applicant's city", async () => {
+    const located = { ...REVIEW, branches: [{ ...REVIEW.branches[0], requestedCity: "Karachi", requestedProvince: "Sindh" }] }
+    renderDialog([], located as typeof REVIEW)
+    await screen.findByLabelText("Province")
+    await chooseCity("Lahore")
+    expect((screen.getByLabelText("Province") as HTMLInputElement).value).toBe("Punjab")
+  })
+
   it("starts the branch name from the applicant's, and lists the branch by it", async () => {
     renderDialog()
     expect(((await screen.findByLabelText("Branch name")) as HTMLInputElement).value).toBe("Demo Tower")

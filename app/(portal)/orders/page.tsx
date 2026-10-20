@@ -1,5 +1,6 @@
 "use client"
 import { viewerAccessFor } from "@/lib/viewer-access"
+import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import React,{ Suspense,useState,useMemo,useEffect,useCallback } from "react"
 import { useSearchParams } from "next/navigation"
 import useSWR from "swr"
@@ -172,8 +173,10 @@ function OrdersManagementContent() {
   // decides and hands over nothing: the decision capabilities and the token
   // that drive those controls come from the server, which never grants them
   // to the role.
-  const { viewRole } = viewerAccessFor(session?.user)
+  const { role: sessionRole, viewRole, readOnly: viewerReadOnly } = viewerAccessFor(session?.user)
   const userRole = viewRole ?? undefined
+  const isApricartSupport = isApricartSupportRole(sessionRole)
+  const isReadOnly = viewerReadOnly || isApricartSupport
   const isBranchAdmin = userRole === "BRANCH_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
   const isSuperAdmin = userRole === "SUPER_ADMIN"
@@ -470,6 +473,7 @@ function OrdersManagementContent() {
   })()
 
   const scopeDescription = (() => {
+    if (isApricartSupport) return "View orders across every organization. This workspace is read only."
     if (isBranchAdmin) return "Review orders placed from your branch's Order Initiator Portal."
     if (isGroupUser) return "Review orders placed from the branches assigned to you."
     return `Monitor approvals and fulfillment pipelines across ${scopeText.toLowerCase()}.`
@@ -499,6 +503,11 @@ function OrdersManagementContent() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {isReadOnly && (
+            <Badge variant="outline" className="h-8 rounded-full border-slate-300 bg-white px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+              View only
+            </Badge>
+          )}
           <Badge variant="outline" className="h-8 px-3 rounded-full border-indigo-200 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:border-indigo-800/60 dark:text-indigo-400 font-semibold uppercase tracking-wider text-[10px]">
             {scopeText}
           </Badge>
@@ -784,6 +793,9 @@ function OrdersManagementContent() {
               isSuperAdmin={isSuperAdmin}
               isBranchAdmin={isBranchAdmin}
               isHeadOffice={isHeadOffice}
+              readOnly={isReadOnly}
+              showOrganization={isSuperAdmin || isApricartSupport}
+              showInvoiceLink={!isApricartSupport}
               canDecideOrders={canDecideOrders}
               showCostCenterId={showCostCenterId}
               pricesHidden={Boolean(ordersData?.pricesHidden)}

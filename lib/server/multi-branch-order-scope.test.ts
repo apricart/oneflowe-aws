@@ -43,7 +43,7 @@ describe("order list tenant scoping", () => {
       orders.indexOf("function addOrderRoleConditions"),
       orders.indexOf("function addOrderDimensionConditions"),
     )
-    expect(roleConditions).toContain('if (role === "SUPER_ADMIN")')
+    expect(roleConditions).toContain('if (role === "SUPER_ADMIN" || isApricartSupportRole(role))')
     expect(orders).toContain("addSuperAdminOrderScope(conditions, context.organizationIdParam)")
     expect(roleConditions).toContain('if (role === "HEAD_OFFICE") return')
     expect(roleConditions).toContain('role === "ORDER_PORTAL" && currentUserId')
@@ -70,7 +70,7 @@ describe("group user decision surface", () => {
     // Reading a single order is how the approver opens the detail drawer, so
     // the role is on the GET allowlist only. The requester role joined this
     // list for its own read-only tab; neither is on any write allowlist below.
-    expect(detail).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"], { viewerReadsAsHeadOffice: true })')
+    expect(detail).toContain("requireApiRole([...ORDER_DETAIL_READ_ROLES], { viewerReadsAsHeadOffice: true })")
     // Editing stays with the two requester roles and deletion with the Super
     // Admin; neither list may quietly pick up a deciding role.
     expect(detail).toContain('requireApiRole(["ORDER_PORTAL", "GROUP_ORDER_PORTAL"])')
@@ -81,7 +81,7 @@ describe("group user decision surface", () => {
     // The rule moved out of the detail route into a module of its own so the
     // delivery challan reads apply the very same one; the route imports it.
     expect(source("app/api/v1/orders/[id]/route.ts"))
-      .toContain('import { hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"')
+      .toContain('import { ORDER_DETAIL_READ_ROLES, hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"')
     const detail = source("lib/server/order-read-access.ts")
 
     // Every single-branch role keeps the original check untouched. The

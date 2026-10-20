@@ -2,9 +2,17 @@ import "server-only"
 
 import { and, eq } from "drizzle-orm"
 
-import { branches, orders, roles, users, warehouseAssignments, warehouseCityAssignments } from "@/db/schema"
+import {
+  branches,
+  orders,
+  roles,
+  users,
+  warehouseAssignments,
+  warehouseCityAssignments,
+  warehouseCityOrganizations,
+} from "@/db/schema"
 import { db } from "@/lib/db"
-import { branchCityKeySql } from "@/lib/server/branch-city-key"
+import { warehouseCityBranchOn, warehouseCityOrganizationOn } from "@/lib/server/warehouse-city-rule"
 import { resolveWarehouseReach } from "@/lib/warehouse-access"
 import { isWarehouseWorkStatus } from "@/lib/warehouse-orders"
 
@@ -23,16 +31,17 @@ type LoadOptions = {
   /** Narrow to one branch (the order being worked). */
   branchId?: number
   /**
-   * Take a FOR SHARE lock on the assignment rows, branch and city alike. Used
-   * inside a writing transaction so a Super Admin withdrawing the branch or the
-   * city waits for an in-flight write instead of racing past it.
+   * Take a FOR SHARE lock on the assignment rows — branch, city and the city
+   * rule's organization alike. Used inside a writing transaction so a Super
+   * Admin withdrawing the branch, the city or the organization waits for an in-flight write instead of racing past it.
    */
   lock?: boolean
 }
 
 /**
  * The branches this warehouse user serves: those assigned one by one, and every
- * branch now in a city assigned to it. Empty means none, never "all".
+ * branch now in a city assigned to it **and** in an organization chosen for its
+ * cities. Empty means none, never "all".
  */
 export async function loadWarehouseReach(
   client: DbClient,
@@ -54,18 +63,20 @@ export async function loadWarehouseReach(
       eq(warehouseAssignments.userId, userId),
       options.branchId === undefined ? undefined : eq(warehouseAssignments.branchId, options.branchId),
     ))
-  // Every branch currently in a city assigned to this user — a branch opened in
-  // the city later is reached with no write. See plans/OF-WAREHOUSE-city-assignments.md.
+  // Every branch currently in a city assigned to this user, in an organization
+  // chosen for it — a branch opened there later is reached with no write. See
+  // plans/OF-WAREHOUSE-city-assignments-by-organization.md.
   const cityQuery = client
     .select({ branchId: branches.id })
     .from(warehouseCityAssignments)
-    .innerJoin(branches, eq(branchCityKeySql(branches.city), warehouseCityAssignments.cityKey))
+    .innerJoin(branches, warehouseCityBranchOn())
+    .innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())
     .where(and(
       eq(warehouseCityAssignments.userId, userId),
       options.branchId === undefined ? undefined : eq(branches.id, options.branchId),
     ))
   const assignments = options.lock ? await assignmentQuery.for("share") : await assignmentQuery
-  const cityBranches = options.lock ? await cityQuery.for("share", { of: warehouseCityAssignments }) : await cityQuery
+  const cityBranches = options.lock ? await cityQuery.for("share", { of: [warehouseCityAssignments, warehouseCityOrganizations] }) : await cityQuery
 
   return resolveWarehouseReach({
     account: { role: account.role, isActive: account.isActive, deleted: account.deletedAt !== null },

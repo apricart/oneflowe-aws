@@ -185,7 +185,13 @@ async function writeBranchEdit(
   tx: TransactionExecutor,
   requestId: number,
   organizationId: number,
-  current: Array<{ id: number; existingBranchId: number | null; costCenterId: string | null; requestedBranchName: string | null }>,
+  current: Array<{
+    id: number
+    existingBranchId: number | null
+    costCenterId: string | null
+    requestedBranchName: string | null
+    requestedBranchCity: string | null
+  }>,
   next: { existingIds: number[]; newBranches: RequestedNewBranch[] },
 ): Promise<boolean> {
   const plan = planRequestBranchEdit(current, next)
@@ -202,19 +208,28 @@ async function writeBranchEdit(
       organizationId,
       costCenterId: entry.crc,
       requestedBranchName: entry.name,
+      requestedBranchCity: entry.city,
+      requestedBranchProvince: entry.province,
     })),
   ]
   if (inserts.length > 0) await tx.insert(organizationJoinRequestBranches).values(inserts)
-  for (const rename of plan.renames) {
+  const updates = [
+    ...plan.renames.map((rename) => ({ id: rename.id, set: { requestedBranchName: rename.name } })),
+    ...plan.relocations.map((move) => ({
+      id: move.id,
+      set: { requestedBranchCity: move.city, requestedBranchProvince: move.province },
+    })),
+  ]
+  for (const update of updates) {
     await tx
       .update(organizationJoinRequestBranches)
-      .set({ requestedBranchName: rename.name })
+      .set(update.set)
       .where(and(
         eq(organizationJoinRequestBranches.requestId, requestId),
-        eq(organizationJoinRequestBranches.id, rename.id),
+        eq(organizationJoinRequestBranches.id, update.id),
       ))
   }
-  return plan.deleteIds.length > 0 || inserts.length > 0 || plan.renames.length > 0
+  return plan.deleteIds.length > 0 || inserts.length > 0 || updates.length > 0
 }
 
 async function writeAddressEdit(
@@ -330,6 +345,9 @@ export async function updateDepartmentJoinRequest(input: {
         .update(organizationJoinRequests)
         .set({
           ...nextPerson,
+          // The applicant proved the address they typed, not one Head Office
+          // typed for them (plans/OF-JOIN-email-otp-verification.md).
+          ...(changedFields.includes("email") ? { emailVerifiedAt: null } : {}),
           requestedRole: role,
           requestedBranchId: role === "ORDER_PORTAL" && nextBranches.existingIds.length === 1 ? nextBranches.existingIds[0] : null,
           requestedBranchIds: nextBranches.existingIds,

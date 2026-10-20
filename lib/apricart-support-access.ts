@@ -12,7 +12,8 @@
  *     so neither is ever written onto the user row.
  *   * **Only Super Admin creates or manages one.** `ROLE_LEVEL` puts it above
  *     Head Office for that reason alone (`lib/server/user-access-policy.ts`).
- *   * **Confined to `/support` and a short API allowlist.** `proxy.ts` refuses
+ *   * **Confined to `/support`, read-only `/orders`, and a short API
+ *     allowlist.** `proxy.ts` refuses
  *     every API call not in `APRICART_SUPPORT_API_RULES` before a handler runs.
  *     Each listed handler also checks the support rules itself
  *     (`lib/support-access.ts`); this layer exists because most handlers check
@@ -28,9 +29,9 @@
 export const APRICART_SUPPORT_ROLE = "APRICART_SUPPORT" as const
 export const APRICART_SUPPORT_LABEL = "Apricart Support"
 
-/** The agent's only page area: the shared support pages. */
+/** The agent's workspace: its support queue and the read-only order directory. */
 export const APRICART_SUPPORT_HOME = "/support"
-export const APRICART_SUPPORT_AREAS: readonly string[] = [APRICART_SUPPORT_HOME]
+export const APRICART_SUPPORT_AREAS: readonly string[] = [APRICART_SUPPORT_HOME, "/orders"]
 
 export function isApricartSupportRole(role: unknown): role is typeof APRICART_SUPPORT_ROLE {
   return role === APRICART_SUPPORT_ROLE
@@ -48,6 +49,7 @@ type ApricartSupportApiRule = {
 }
 
 const SUPPORT_ROUTE = "app/api/v1/support"
+const ORDERS_ROUTE = "app/api/v1/orders"
 
 /**
  * Every API request a support session may make: the calls the support pages
@@ -88,6 +90,31 @@ export const APRICART_SUPPORT_API_RULES: readonly ApricartSupportApiRule[] = [
     methods: ["POST"],
     pattern: /^\/api\/v1\/users\/me\/email-verification\/verify$/,
   },
+  // The order workspace is deliberately GET-only. Every listed handler also
+  // admits and scopes APRICART_SUPPORT itself; the proxy is an extra boundary,
+  // never the only one standing between the role and a mutation.
+  { route: `${ORDERS_ROUTE}/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/orders$/ },
+  { route: `${ORDERS_ROUTE}/[id]/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/orders\/\d+$/ },
+  {
+    route: `${ORDERS_ROUTE}/[id]/refunds/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/orders\/\d+\/refunds$/,
+  },
+  {
+    route: `${ORDERS_ROUTE}/[id]/delivery-challan/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/orders\/\d+\/delivery-challan$/,
+  },
+  {
+    route: `${ORDERS_ROUTE}/[id]/delivery-challan/[challanId]/file/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/orders\/\d+\/delivery-challan\/\d+\/file$/,
+  },
+  {
+    route: "app/api/v1/analytics/earliest-record/route.ts",
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/analytics\/earliest-record$/,
+  },
 ]
 
 /** Exact match after trailing-slash normalisation — never a prefix. */
@@ -95,6 +122,31 @@ export function isApricartSupportApiRequestAllowed(method: string, pathname: str
   const normalized = pathname.length > 1 && pathname.endsWith("/") ? pathname.slice(0, -1) : pathname
   const verb = method.toUpperCase()
   return APRICART_SUPPORT_API_RULES.some((rule) => rule.methods.includes(verb) && rule.pattern.test(normalized))
+}
+
+/**
+ * A support account's platform-wide order reach is valid only for the exact
+ * authenticated account shape: the live scope still names the same user and
+ * role, and the account remains unattached to a tenant or branch. This is
+ * checked by each order read before a missing tenant filter can mean "all".
+ */
+export function hasApricartSupportOrderReadScope(
+  role: unknown,
+  userId: unknown,
+  scope: {
+    role?: unknown
+    userId?: unknown
+    organizationId?: unknown
+    branchId?: unknown
+  } | null | undefined,
+): boolean {
+  return isApricartSupportRole(role)
+    && typeof userId === "string"
+    && userId.length > 0
+    && scope?.role === APRICART_SUPPORT_ROLE
+    && scope.userId === userId
+    && scope.organizationId == null
+    && scope.branchId == null
 }
 
 // ---------------------------------------------------------------------------

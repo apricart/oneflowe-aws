@@ -119,6 +119,8 @@ const ANSWERS_ANY_CALLER = new Set<string>([
   "app/api/v1/auth/password-reset/verify/route.ts",
   "app/api/v1/auth/password-reset/complete/route.ts",
   "app/api/v1/join/requests/route.ts",
+  "app/api/v1/join/email-verification/request/route.ts",
+  "app/api/v1/join/email-verification/verify/route.ts",
   // "Mark all read" on the caller's own notices; for a role outside its list —
   // the Viewer among them — it answers { updated: 0 } and runs no update.
   "app/api/v1/notifications/route.ts",

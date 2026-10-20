@@ -33,6 +33,7 @@ import {
   users,
   warehouseAssignments,
   warehouseCityAssignments,
+  warehouseCityOrganizations,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 
@@ -273,6 +274,7 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role, under attack", () => {
       { userId: actors.whDeleted.id, branchId: ids.branchA1 },
     ])
     await db.insert(warehouseCityAssignments).values({ userId: actors.wh.id, cityKey: servedCity.toLowerCase() })
+    await db.insert(warehouseCityOrganizations).values({ userId: actors.wh.id, organizationId: ids.orgB })
 
     const [address] = await db.insert(branchDeliveryAddresses).values({
       organizationId: ids.orgA,
@@ -369,6 +371,7 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role, under attack", () => {
     await db.delete(systemLogs).where(or(inArray(systemLogs.organizationId, organizationIds), inArray(systemLogs.userId, actorIds)))
     await db.delete(warehouseAssignments).where(inArray(warehouseAssignments.userId, actorIds))
     await db.delete(warehouseCityAssignments).where(inArray(warehouseCityAssignments.userId, actorIds))
+    await db.delete(warehouseCityOrganizations).where(inArray(warehouseCityOrganizations.userId, actorIds))
     await db.delete(branchDeliveryAddresses).where(inArray(branchDeliveryAddresses.organizationId, organizationIds))
     await db.delete(globalProducts).where(eq(globalProducts.id, ids.product))
     await db.delete(branches).where(inArray(branches.organizationId, organizationIds))

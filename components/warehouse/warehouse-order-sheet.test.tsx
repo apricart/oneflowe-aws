@@ -83,6 +83,7 @@ describe("the warehouse picking sheet", () => {
     expect(screen.getByText(/Plot 4, Main Road, Lahore, Punjab/)).toBeTruthy()
     expect(screen.getByText(/Call before arriving/)).toBeTruthy()
     expect(screen.getByText("INV-0042")).toBeTruthy()
+    expect(screen.getByText(/Order ID 7/)).toBeTruthy()
     // On the badge and on the invoice's payment line.
     expect(screen.getAllByText("UNPAID")).toHaveLength(2)
     expect(screen.getByText("Approved")).toBeTruthy()

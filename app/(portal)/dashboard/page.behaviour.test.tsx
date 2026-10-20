@@ -39,6 +39,7 @@ const PERFORMANCE = {
   pricesHidden: false,
   statusCounts: {
     pendingCount: 3, approvedCount: 4, fulfilledCount: 20, partialCount: 1, refundedCount: 1, rejectedCount: 1,
+    fulfilledPaidCount: 13, fulfilledUnpaidCount: 7,
     deliveredCount: 18, notDeliveredCount: 6, deliveredTotalCount: 22,
     pendingAmountCents: 30_000, approvedAmountCents: 40_000, valueFulfilledCents: 200_000,
     valueRefundedCents: 5_000, valueRejectedCents: 2_000,
@@ -110,6 +111,16 @@ describe("Dashboard", () => {
     await new Promise((resolve) => setTimeout(resolve, 200))
     expect(document.body.textContent?.length).toBeGreaterThan(0)
   })
+
+  it.each(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN"] as const)("%s: splits the Fulfilled card into Paid and Unpaid", async (role) => {
+    resetUi(SESSIONS[role])
+    richRoutes()
+    const { container } = renderWithApp(<DashboardPage />)
+
+    const figureFor = (label: string) => container.querySelector(`p[title="${label}"]`)?.nextElementSibling?.textContent
+    await waitFor(() => expect(figureFor("Paid")).toBe("13"), { timeout: 50_000 })
+    expect(figureFor("Unpaid")).toBe("7")
+  }, 60_000)
 
   it("keeps a Branch Admin's sales request to its own branch", async () => {
     resetUi(SESSIONS.BRANCH_ADMIN)

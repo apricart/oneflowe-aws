@@ -41,8 +41,8 @@ function validDraft(): DepartmentSignupDraft {
     ],
     branches: [
       { key: "b1", kind: "existing", branchId: 4, label: "Head Office", checked: true },
-      { key: "cX", kind: "crc", crc: "AB-ABC-123", name: "Korangi Depot", label: "Korangi Depot", checked: true },
-      { key: "cY", kind: "crc", crc: "AB-ABC-999", name: "Unchecked Depot", label: "Unchecked Depot", checked: false },
+      { key: "cX", kind: "crc", crc: "AB-ABC-123", name: "Korangi Depot", city: "Karachi", province: "Sindh", label: "Korangi Depot", checked: true },
+      { key: "cY", kind: "crc", crc: "AB-ABC-999", name: "Unchecked Depot", city: "Lahore", province: "Punjab", label: "Unchecked Depot", checked: false },
     ],
     addresses: [
       { key: "a1", address: "Plot 1, Clifton, Karachi", checked: true },
@@ -112,13 +112,22 @@ describe("departmentSignupErrors", () => {
     expect(newBranchNameChipError(chips, known, "korangi depot")).toBe("This branch is already added")
     expect(newBranchNameChipError(chips, known, "Saddar Depot")).toBeNull()
 
-    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "" })).toEqual({ field: "crc", message: "Enter a CRC number" })
-    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "AB 12" }))
+    const city = "Karachi"
+    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "", city })).toEqual({ field: "crc", message: "Enter a CRC number" })
+    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "AB 12", city }))
       .toEqual({ field: "crc", message: "Use letters, numbers and dashes only" })
-    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: " ab-abc-123 " }))
+    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: " ab-abc-123 ", city }))
       .toEqual({ field: "crc", message: "This CRC is already added" })
-    expect(newBranchChipError(chips, known, { name: "K", crc: "AB-1" })?.field).toBe("name")
-    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "ab-1" })).toBeNull()
+    expect(newBranchChipError(chips, known, { name: "K", crc: "AB-1", city })?.field).toBe("name")
+    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "ab-1", city })).toBeNull()
+  })
+
+  it("refuses a new branch with no city, or a city not on Pakistan's list", () => {
+    const chips = validDraft().branches
+    const entry = { name: "Saddar Depot", crc: "AB-1" }
+    expect(newBranchChipError(chips, [], { ...entry, city: " " })).toEqual({ field: "city", message: "Choose the city of the new branch" })
+    expect(newBranchChipError(chips, [], { ...entry, city: "Karachee" })).toEqual({ field: "city", message: "Choose the city from the list" })
+    expect(newBranchChipError(chips, [], { ...entry, city: "karachi" })).toBeNull()
   })
 
   it("reads two branch names as one, case and spacing aside", () => {
@@ -145,7 +154,7 @@ describe("toDepartmentSignupPayload", () => {
       ipExtension: "1234",
       employeeId: "E-1",
       department: "Finance",
-      branches: [{ branchId: 4 }, { name: "Korangi Depot", crc: "AB-ABC-123" }],
+      branches: [{ branchId: 4 }, { name: "Korangi Depot", crc: "AB-ABC-123", city: "Karachi", province: "Sindh" }],
       addresses: ["Plot 1, Clifton, Karachi"],
       approvers: [
         { level: 1, email: "first.approver@ubl.com.pk", designation: "Head of Finance" },
@@ -179,6 +188,9 @@ describe("the 8 KB WAF limit", () => {
           kind: "crc" as const,
           crc: `${index}`.padEnd(CRC_MAX_LENGTH, "C"),
           name: `${index}`.padEnd(NEW_BRANCH_FIELD_RULES.name.max, "N"),
+          // The longest city and province on the list, together.
+          city: "Islamabad",
+          province: "Islamabad Capital Territory",
           label: "",
           checked: true,
         })),

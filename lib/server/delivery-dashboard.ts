@@ -98,6 +98,7 @@ function filterConditions(filters: DeliveryDashboardFilters, reach: DeliveryReac
   const conditions: SQL[] = [populationCondition(), openOrDeliveredInRange(filters)]
   const fence = reachCondition(reach)
   if (fence) conditions.push(fence)
+  if (filters.orderId !== null) conditions.push(eq(orders.id, filters.orderId))
   if (filters.organizationId !== null) conditions.push(eq(orders.organizationId, filters.organizationId))
   // `parseDeliveryDashboardQuery` only admits a branch together with an
   // organization; both predicates apply, so a branch of another tenant reads empty.

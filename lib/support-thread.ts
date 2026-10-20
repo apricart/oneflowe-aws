@@ -151,11 +151,16 @@ export function isSupportSide(value: unknown): value is SupportSide {
  *
  * `SUPER_ADMIN` operates the platform; `APRICART_SUPPORT` is the agent who
  * works the support queue and nothing else
- * (`lib/apricart-support-access.ts`). Both read every organization's threads
- * and triage them. This list is the one place that is decided — no support
- * module compares a role against `"SUPER_ADMIN"` itself.
+ * (`lib/apricart-support-access.ts`); `WAREHOUSE` answers the threads of the
+ * branches it serves (plans/OF-WAREHOUSE-support-queue.md). All three reply as
+ * Apricart and triage what they can read. This list is the one place the side
+ * is decided — no support module compares a role against `"SUPER_ADMIN"`
+ * itself.
+ *
+ * Speaking for Apricart is not reading every thread: that is
+ * `SUPPORT_WHOLE_QUEUE_ROLES`, and the warehouse is not on it.
  */
-export const SUPPORT_APRICART_ROLES = ["SUPER_ADMIN", "APRICART_SUPPORT"] as const
+export const SUPPORT_APRICART_ROLES = ["SUPER_ADMIN", "APRICART_SUPPORT", "WAREHOUSE"] as const
 
 export function isSupportApricartRole(role: string | null | undefined): boolean {
   return typeof role === "string"
@@ -163,9 +168,23 @@ export function isSupportApricartRole(role: string | null | undefined): boolean 
 }
 
 /**
+ * The Apricart roles whose queue is the whole platform: they read every
+ * organization's threads, are mailed when any customer writes, and are the only
+ * accounts a thread may be assigned to (an assignee must be able to read it).
+ * Every other Apricart role's queue is fenced in `lib/support-access.ts`.
+ */
+export const SUPPORT_WHOLE_QUEUE_ROLES = ["SUPER_ADMIN", "APRICART_SUPPORT"] as const
+
+export function readsWholeSupportQueue(role: string | null | undefined): boolean {
+  return typeof role === "string"
+    && (SUPPORT_WHOLE_QUEUE_ROLES as readonly string[]).includes(role)
+}
+
+/**
  * Which side of the conversation a role speaks for.
  *
  * Apricart's roles are `SUPPORT_APRICART_ROLES`; every other role is a client.
+ * Which threads a role reads is a separate question (`lib/support-access.ts`).
  * There is no third side, so this is deliberately total rather than returning
  * null for an unknown role — an unrecognised role is a customer, which is the
  * side that grants nothing.

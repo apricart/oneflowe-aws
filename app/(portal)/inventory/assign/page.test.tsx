@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   assignments: { items: [] as Array<Record<string, unknown>>, total: undefined as number | undefined },
   swrKeys: [] as Array<string | null>,
   toast: vi.fn(),
+  mutateAssignments: vi.fn(),
 }))
 
 vi.mock("@/components/context/app-context", () => ({
@@ -43,7 +44,7 @@ vi.mock("swr", () => ({
       return { data: { items: mocks.products }, isLoading: false, mutate: vi.fn() }
     }
     if (key.startsWith("/api/v1/admin/organization-assignments")) {
-      return { data: mocks.assignments, isLoading: false, mutate: vi.fn() }
+      return { data: mocks.assignments, isLoading: false, mutate: mocks.mutateAssignments }
     }
     return { data: { items: [] }, isLoading: false, mutate: vi.fn() }
   },
@@ -85,6 +86,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.unstubAllGlobals()
   vi.clearAllMocks()
 })
 
@@ -136,5 +138,37 @@ describe("AssignProductPage assignment list", () => {
 
     const params = new URL(assignmentsRequestKey(), "http://localhost").searchParams
     expect([...params.keys()].sort()).toEqual(["limit", "organizationId"])
+  })
+
+  it("confirms and unassigns a product from the Assigned tab", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ message: "Assignments removed successfully" }),
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<AssignProductPage />)
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Assigned (1)" }), {
+      button: 0,
+      ctrlKey: false,
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Unassign" }))
+
+    expect(screen.getByRole("alertdialog").textContent).toContain(
+      "Product 1 will be removed from Tenant and its assigned branches.",
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Unassign product" }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/admin/organization-assignments?id=101",
+        { method: "DELETE" },
+      )
+    })
+    expect(mocks.mutateAssignments).toHaveBeenCalledOnce()
+    expect(mocks.toast).toHaveBeenCalledWith({
+      title: "Success",
+      description: "Product unassigned successfully",
+    })
   })
 })

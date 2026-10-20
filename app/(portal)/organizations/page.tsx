@@ -1,6 +1,19 @@
 "use client"
 import { BranchHeadCountField, headCountFieldValue } from "@/components/branches/branch-head-count-field"
 import { BranchRegionSelect } from "@/components/branches/branch-region-select"
+import { BranchHierarchyBadge } from "@/components/branches/branch-hierarchy-badge"
+import { BranchHierarchyField } from "@/components/branches/branch-hierarchy-field"
+import {
+  BRANCH_HIERARCHY_LABELS,
+  BRANCH_HIERARCHY_ROLES,
+  DEFAULT_BRANCH_HIERARCHY_ROLE,
+  branchHierarchyInputError,
+  matchesBranchHierarchyFilter,
+  normalizeBranchHierarchyRole,
+  parentBranchOptions,
+  type BranchHierarchy,
+  type BranchHierarchyFilter,
+} from "@/lib/branch-hierarchy"
 import { parseHeadCountInput } from "@/lib/branch-head-count"
 import type { BranchRegion } from "@/lib/branch-region"
 import { useAppContext } from "@/components/context/app-context"
@@ -298,6 +311,9 @@ type Branch = {
   costCenterId?: string | null
   headCount?: number | null
   status?: "active" | "inactive"
+  hierarchyRole?: string | null
+  parentBranchId?: number | null
+  parentBranchName?: string | null
 }
 
 const LEGACY_HIDE_PRICES_SETTING_KEY = "hide_prices_for_branch_and_order_portal"
@@ -340,6 +356,7 @@ export default function OrganizationsPage() {
   const previousContextOrgIdRef = useRef<string | null | undefined>(undefined)
   const [orgSearch, setOrgSearch] = useState("")
   const [branchStatusFilter, setBranchStatusFilter] = useState<"all" | "active" | "inactive">("all")
+  const [branchTypeFilter, setBranchTypeFilter] = useState<BranchHierarchyFilter>("all")
   const [branchSearch, setBranchSearch] = useState("")
   const [confirmDelete, setConfirmDelete] = useState<{ open: boolean; id: string | null; name: string | null }>({
     open: false,
@@ -632,16 +649,20 @@ export default function OrganizationsPage() {
         branchStatusFilter === "active" ? isActiveStatus(branch.status) : !isActiveStatus(branch.status)
       )
     }
+    if (branchTypeFilter !== "all") {
+      result = result.filter((branch) => matchesBranchHierarchyFilter(branch, branchTypeFilter))
+    }
     if (branchSearch.trim()) {
       const q = branchSearch.toLowerCase()
       result = result.filter((b) =>
         b.name.toLowerCase().includes(q) ||
         (b.code || "").toLowerCase().includes(q) ||
-        (b.costCenterId || "").toLowerCase().includes(q)
+        (b.costCenterId || "").toLowerCase().includes(q) ||
+        (b.parentBranchName || "").toLowerCase().includes(q)
       )
     }
     return result
-  }, [visibleBranches, branchStatusFilter, branchSearch])
+  }, [visibleBranches, branchStatusFilter, branchTypeFilter, branchSearch])
 
   const orgCount = orgs?.items?.length ?? 0
   const branchCount = branches?.items?.length ?? 0
@@ -680,6 +701,7 @@ export default function OrganizationsPage() {
             />
             <CreateBranchDialog
               organizations={orgs?.items || []}
+              branches={branches?.items || []}
               open={openBranch}
               onOpenChange={setOpenBranch}
               showFeedback={showFeedback}
@@ -861,6 +883,17 @@ export default function OrganizationsPage() {
                       <SelectItem value="inactive">Inactive only</SelectItem>
                     </SelectContent>
                   </Select>
+                  <Select value={branchTypeFilter} onValueChange={(value) => setBranchTypeFilter(value as BranchHierarchyFilter)}>
+                    <SelectTrigger aria-label="Filter by branch type" className="w-[160px] h-10 rounded-xl border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 shadow-sm focus:ring-4 focus:ring-indigo-500/10 transition-all">
+                      <SelectValue placeholder="Branch type" />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl border-slate-200 dark:border-slate-800">
+                      <SelectItem value="all">All types</SelectItem>
+                      {BRANCH_HIERARCHY_ROLES.map((role) => (
+                        <SelectItem key={role} value={role}>{BRANCH_HIERARCHY_LABELS[role]} only</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </CardHeader>
               <CardContent className="p-0">
@@ -868,6 +901,7 @@ export default function OrganizationsPage() {
                   <div className="w-full px-5 pb-6 pt-2">
                     <BranchesTable
                       items={filteredBranches}
+                      allBranches={branches?.items || []}
                       organizations={orgs?.items || []}
                       showCompanyColumn={!selectedOrg}
                       showFeedback={showFeedback}
@@ -922,6 +956,7 @@ function isActiveStatus(status: unknown): boolean {
 
 function BranchesTable({
   items,
+  allBranches,
   organizations,
   showCompanyColumn = true,
   showFeedback,
@@ -930,6 +965,8 @@ function BranchesTable({
   onEdit,
 }: Readonly<{
   items: Branch[]
+  /** Every branch loaded, for each row's parent choices and child count. */
+  allBranches: Branch[]
   organizations: Organization[]
   showCompanyColumn?: boolean
   showFeedback: (msg: string, type: AlertType) => void
@@ -938,6 +975,10 @@ function BranchesTable({
   onEdit: (id: string, payload: Partial<Branch>) => Promise<void>
 }>) {
   const orgById = useMemo(() => Object.fromEntries(organizations.map((o) => [o.id, o])), [organizations])
+  const parentIdsWithChildren = useMemo(
+    () => new Set(allBranches.map((branch) => branch.parentBranchId).filter((id): id is number => typeof id === "number")),
+    [allBranches],
+  )
 
   async function edit(id: string, payload: Partial<Branch>) {
     try {
@@ -946,7 +987,10 @@ function BranchesTable({
         body: JSON.stringify(payload),
         headers: { "Content-Type": "application/json" }
       })
-      if (!res.ok) throw new Error("Failed to update branch")
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        throw new Error(data?.error || data?.message || "Failed to update branch")
+      }
       showFeedback("Branch updated successfully.", "success")
       await onEdit(id, payload)
     } catch (e: any) {
@@ -962,7 +1006,7 @@ function BranchesTable({
             <th className="pb-4 pr-2 font-semibold w-[26%]">Strategic Branch</th>
             <th className="pb-4 pr-2 font-semibold w-[14%]">Code</th>
             <th className="pb-4 pr-2 font-semibold w-[16%]">Cost Center</th>
-            {showCompanyColumn && <th className="pb-4 pr-2 font-semibold w-[17%]">Parent</th>}
+            {showCompanyColumn && <th className="pb-4 pr-2 font-semibold w-[17%]">Company</th>}
             <th className="pb-4 pr-2 font-semibold w-[12%] text-center">Lifecycle</th>
             <th className="pb-4 w-[15%] text-right">Actions</th>
           </tr>
@@ -988,6 +1032,7 @@ function BranchesTable({
                         })()}
                       </p>
                     )}
+                    <BranchHierarchyBadge branch={b} className="mt-1.5" />
                   </div>
                 </div>
               </td>
@@ -1021,7 +1066,12 @@ function BranchesTable({
               </td>
               <td className="py-5 text-right">
                 <div className="inline-flex min-w-[124px] items-center justify-end gap-1">
-                  <EditBranchDialog branch={b} onSave={(payload) => edit(String(b.id), payload)} />
+                  <EditBranchDialog
+                    branch={b}
+                    parentOptions={parentBranchOptions(allBranches, b.organizationId, b.id)}
+                    hasChildren={parentIdsWithChildren.has(b.id)}
+                    onSave={(payload) => edit(String(b.id), payload)}
+                  />
                   <BranchExcelExportButton
                     branch={b}
                     onSuccess={(message) => showFeedback(message, "success")}
@@ -1647,6 +1697,7 @@ function CreateOrgDialog({
 
 function CreateBranchDialog({
   organizations,
+  branches,
   open,
   onOpenChange,
   onCreated,
@@ -1655,6 +1706,8 @@ function CreateBranchDialog({
   className,
 }: Readonly<{
   organizations: Organization[]
+  /** Every branch loaded, for the chosen company's parent branches. */
+  branches: Branch[]
   open: boolean
   onOpenChange: (v: boolean) => void
   onCreated: (item: Branch) => void
@@ -1670,11 +1723,14 @@ function CreateBranchDialog({
   const [address, setAddress] = useState("")
   const [costCenterId, setCostCenterId] = useState("")
   const [headCountText, setHeadCountText] = useState("")
+  const [hierarchy, setHierarchy] = useState<BranchHierarchy>({ hierarchyRole: DEFAULT_BRANCH_HIERARCHY_ROLE, parentBranchId: null })
   const [status, setStatus] = useState<boolean>(true)
   const [saving, setSaving] = useState(false)
   const headCount = parseHeadCountInput(headCountText)
+  const parentOptions = useMemo(() => parentBranchOptions(branches, orgId ? Number(orgId) : null), [branches, orgId])
   const canSubmit = Boolean(
     headCount !== undefined &&
+    branchHierarchyInputError(hierarchy) === null &&
     orgId &&
     name.trim() &&
     province.trim() &&
@@ -1692,6 +1748,8 @@ function CreateBranchDialog({
       address: address.trim(),
       costCenterId: costCenterId.trim() || null,
       headCount: headCount ?? null,
+      hierarchyRole: hierarchy.hierarchyRole,
+      parentBranchId: hierarchy.parentBranchId,
       status: status ? "active" : "inactive",
     }
     console.log("[CreateBranchDialog] Submitting new branch:", payload)
@@ -1716,6 +1774,7 @@ function CreateBranchDialog({
       setAddress("")
       setCostCenterId("")
       setHeadCountText("")
+      setHierarchy({ hierarchyRole: DEFAULT_BRANCH_HIERARCHY_ROLE, parentBranchId: null })
       setStatus(true)
       setOrgId(undefined)
 
@@ -1751,7 +1810,14 @@ function CreateBranchDialog({
             <div className="grid gap-3">
               <div className="space-y-2">
                 <Label>Company</Label>
-                <Select value={orgId} onValueChange={(v: string) => setOrgId(v)}>
+                <Select
+                  value={orgId}
+                  onValueChange={(v: string) => {
+                    setOrgId(v)
+                    // A parent belongs to one company; a new company starts over.
+                    setHierarchy((current) => ({ ...current, parentBranchId: null }))
+                  }}
+                >
                   <SelectTrigger disabled={saving}>
                     <SelectValue placeholder="Select company" />
                   </SelectTrigger>
@@ -1826,6 +1892,13 @@ function CreateBranchDialog({
                   value={headCountText}
                   onChange={setHeadCountText}
                   disabled={saving}
+                />
+                <BranchHierarchyField
+                  id="branch-hierarchy"
+                  value={hierarchy}
+                  onChange={setHierarchy}
+                  parentOptions={parentOptions}
+                  disabled={saving || !orgId}
                 />
                 <p className="text-xs text-muted-foreground">Branch code will be automatically generated.</p>
               </div>
@@ -2385,7 +2458,22 @@ function EditOrgDialog({
   )
 }
 
-function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave: (payload: Partial<Branch>) => void }>) {
+function hierarchyOf(branch: Branch): BranchHierarchy {
+  const hierarchyRole = normalizeBranchHierarchyRole(branch.hierarchyRole)
+  return { hierarchyRole, parentBranchId: hierarchyRole === "CHILD" ? branch.parentBranchId ?? null : null }
+}
+
+function EditBranchDialog({
+  branch,
+  parentOptions,
+  hasChildren,
+  onSave,
+}: Readonly<{
+  branch: Branch
+  parentOptions: ReadonlyArray<{ id: number; name: string; status: string | null }>
+  hasChildren: boolean
+  onSave: (payload: Partial<Branch>) => void
+}>) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(branch.name)
   const [code, setCode] = useState(branch.code ?? "")
@@ -2395,8 +2483,16 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
   const [address, setAddress] = useState(branch.address ?? "")
   const [costCenterId, setCostCenterId] = useState(branch.costCenterId ?? "")
   const [headCountText, setHeadCountText] = useState(headCountFieldValue(branch.headCount))
+  const [hierarchy, setHierarchy] = useState<BranchHierarchy>(hierarchyOf(branch))
   const [status, setStatus] = useState<boolean>(isActiveStatus(branch.status))
   const headCount = parseHeadCountInput(headCountText)
+
+  useEffect(() => {
+    setHierarchy({
+      hierarchyRole: normalizeBranchHierarchyRole(branch.hierarchyRole),
+      parentBranchId: normalizeBranchHierarchyRole(branch.hierarchyRole) === "CHILD" ? branch.parentBranchId ?? null : null,
+    })
+  }, [branch.hierarchyRole, branch.parentBranchId])
 
   useEffect(() => {
     setName(branch.name)
@@ -2480,6 +2576,13 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
               value={headCountText}
               onChange={setHeadCountText}
             />
+            <BranchHierarchyField
+              id="branch-hierarchy-edit"
+              value={hierarchy}
+              onChange={setHierarchy}
+              parentOptions={parentOptions}
+              hasChildren={hasChildren}
+            />
             <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
               <div>
                 <Label htmlFor="branch-status-edit">Status</Label>
@@ -2508,11 +2611,13 @@ function EditBranchDialog({ branch, onSave }: Readonly<{ branch: Branch; onSave:
                 address: address.trim() || null,
                 costCenterId: costCenterId.trim() || null,
                 headCount: headCount ?? null,
+                hierarchyRole: hierarchy.hierarchyRole,
+                parentBranchId: hierarchy.parentBranchId,
                 status: status ? "active" : "inactive",
               })
               setOpen(false)
             }}
-            disabled={!name.trim() || headCount === undefined}
+            disabled={!name.trim() || headCount === undefined || branchHierarchyInputError(hierarchy) !== null}
           >
             <Save className="h-4 w-4" />
             Save Changes

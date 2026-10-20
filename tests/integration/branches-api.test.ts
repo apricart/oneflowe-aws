@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { and, desc, eq, inArray } from "drizzle-orm"
 import * as mockedNextAuth from "next-auth"
 
+import * as branchPerformanceRoute from "@/app/api/v1/analytics/branches/performance/route"
 import * as branchRoute from "@/app/api/v1/branches/[id]/route"
 import * as branchesRoute from "@/app/api/v1/branches/route"
 import { auditLogs, branches, groups, organizations, roles, userBranchAssignments, users } from "@/db/schema"
@@ -154,6 +155,25 @@ async function patchOne(id: number, body: unknown) {
     body: JSON.stringify(body),
   }), { params: Promise.resolve({ id: String(id) }) })
   return { status: response.status, body: await response.json() }
+}
+
+async function performance(query: string) {
+  const response = await branchPerformanceRoute.GET(
+    new Request(`http://localhost/api/v1/analytics/branches/performance?${query}`) as any,
+  )
+  const body = await response.json()
+  return { status: response.status, body, ids: (body.items ?? []).map((item: { id: number }) => item.id) as number[] }
+}
+
+/** The Postgres error behind a failed statement, whether or not Drizzle wrapped it. */
+async function failureOf(write: Promise<unknown>): Promise<{ code: string; constraint: string } | null> {
+  return write.then(
+    () => null,
+    (caught: any) => ({
+      code: String(caught.code ?? caught.cause?.code),
+      constraint: String(caught.constraint ?? caught.cause?.constraint),
+    }),
+  )
 }
 
 async function deleteOne(id: number) {
@@ -346,6 +366,274 @@ describe.skipIf(!hasTestDatabase)("branches API", () => {
       const [audit] = await db.select().from(auditLogs)
         .where(and(eq(auditLogs.action, "DEACTIVATE_BRANCH"), eq(auditLogs.entityId, String(f.south))))
       expect(audit.userId).toBe(f.superAdminId)
+    })
+  })
+
+  /**
+   * The parent / child label (plans/OF-BRANCH-parent-child-label.md): set on
+   * create and edit by the roles that already write branches, held to the
+   * branch's own organization, one level deep, and read back on the lists and
+   * the Branch Report. A label only — no access rule reads it.
+   */
+  describe("parent / child label", () => {
+    const tag = () => randomUUID().slice(0, 6)
+
+    async function createAs(role: "HEAD_OFFICE" | "SUPER_ADMIN", body: Record<string, unknown>) {
+      signIn(role === "HEAD_OFFICE" ? { id: f.headOfficeId, role } : { id: f.superAdminId, role })
+      return create(body)
+    }
+
+    it("creates a parent and a child of it, audits both, and lists them with the parent's name", async () => {
+      const parent = await createAs("HEAD_OFFICE", { ...validBranch(f.home, `Parent ${tag()}`), hierarchyRole: "PARENT" })
+      expect(parent.status).toBe(201)
+      expect(parent.body.item).toMatchObject({ hierarchyRole: "PARENT", parentBranchId: null })
+
+      const child = await createAs("HEAD_OFFICE", {
+        ...validBranch(f.home, `Child ${tag()}`), hierarchyRole: "CHILD", parentBranchId: parent.body.item.id,
+      })
+      expect(child.status).toBe(201)
+      expect(child.body.item).toMatchObject({ hierarchyRole: "CHILD", parentBranchId: parent.body.item.id })
+
+      const [audit] = await db.select().from(auditLogs).where(and(
+        eq(auditLogs.action, "CREATE_BRANCH"),
+        eq(auditLogs.entityId, String(child.body.item.id)),
+      ))
+      expect(audit.metadata).toMatchObject({ hierarchyRole: "CHILD", parentBranchId: parent.body.item.id })
+
+      signIn({ id: f.headOfficeId, role: "HEAD_OFFICE" })
+      const listed = (await list()).body.items.find((item: { id: number }) => item.id === child.body.item.id)
+      expect(listed).toMatchObject({ hierarchyRole: "CHILD", parentBranchName: parent.body.item.name })
+      expect((await getOne(child.body.item.id)).body.item).toMatchObject({ parentBranchName: parent.body.item.name })
+    })
+
+    it("treats a branch created without a type as standalone", async () => {
+      const result = await createAs("HEAD_OFFICE", validBranch(f.home, `Plain ${tag()}`))
+      expect(result.status).toBe(201)
+      expect(result.body.item).toMatchObject({ hierarchyRole: "STANDALONE", parentBranchId: null })
+    })
+
+    it("refuses a child without a parent, a parent on a non-child, an unknown type, and a non-parent as parent", async () => {
+      expect((await createAs("HEAD_OFFICE", { ...validBranch(f.home, `A ${tag()}`), hierarchyRole: "CHILD" })).status).toBe(400)
+      expect((await createAs("HEAD_OFFICE", {
+        ...validBranch(f.home, `B ${tag()}`), hierarchyRole: "PARENT", parentBranchId: f.north,
+      })).status).toBe(400)
+      expect((await createAs("HEAD_OFFICE", { ...validBranch(f.home, `C ${tag()}`), hierarchyRole: "GRANDPARENT" })).status).toBe(400)
+      expect((await createAs("HEAD_OFFICE", { ...validBranch(f.home, `D ${tag()}`), parentBranchId: "7" })).status).toBe(400)
+
+      // North is standalone.
+      const notAParent = await createAs("HEAD_OFFICE", {
+        ...validBranch(f.home, `E ${tag()}`), hierarchyRole: "CHILD", parentBranchId: f.north,
+      })
+      expect(notAParent.status).toBe(400)
+      expect(notAParent.body.error).toBe("The chosen branch is not a parent branch")
+    })
+
+    it("never takes a parent from another organization, and says no more than 'not found'", async () => {
+      const [foreignParent] = await db.insert(branches)
+        .values({ organizationId: f.foreign, name: `Foreign Parent ${tag()}`, status: "active", hierarchyRole: "PARENT" })
+        .returning({ id: branches.id })
+
+      const byHeadOffice = await createAs("HEAD_OFFICE", {
+        ...validBranch(f.home, `F ${tag()}`), hierarchyRole: "CHILD", parentBranchId: foreignParent.id,
+      })
+      expect(byHeadOffice.status).toBe(400)
+      expect(byHeadOffice.body.error).toBe("Parent branch not found in this organization")
+
+      // Super Admin may create anywhere, but a child still belongs with its parent.
+      const bySuperAdmin = await createAs("SUPER_ADMIN", {
+        ...validBranch(f.home, `G ${tag()}`), hierarchyRole: "CHILD", parentBranchId: foreignParent.id,
+      })
+      expect(bySuperAdmin.status).toBe(400)
+
+      const [home] = await db.select({ id: branches.id }).from(branches)
+        .where(and(eq(branches.organizationId, f.home), eq(branches.parentBranchId, foreignParent.id)))
+      expect(home).toBeUndefined()
+    })
+
+    it("re-parents, re-types and clears a child, and keeps a parent with children from changing type", async () => {
+      const first = await createAs("HEAD_OFFICE", { ...validBranch(f.home, `P1 ${tag()}`), hierarchyRole: "PARENT" })
+      const second = await createAs("HEAD_OFFICE", { ...validBranch(f.home, `P2 ${tag()}`), hierarchyRole: "PARENT" })
+      const child = await createAs("HEAD_OFFICE", {
+        ...validBranch(f.home, `K ${tag()}`), hierarchyRole: "CHILD", parentBranchId: first.body.item.id,
+      })
+      const childId: number = child.body.item.id
+
+      signIn({ id: f.headOfficeId, role: "HEAD_OFFICE" })
+      const moved = await patchOne(childId, { parentBranchId: second.body.item.id })
+      expect(moved.status).toBe(200)
+      expect(moved.body.item).toMatchObject({ hierarchyRole: "CHILD", parentBranchId: second.body.item.id })
+
+      const [audit] = await db.select().from(auditLogs)
+        .where(and(eq(auditLogs.action, "UPDATE_BRANCH"), eq(auditLogs.entityId, String(childId))))
+        .orderBy(desc(auditLogs.id))
+        .limit(1)
+      expect(JSON.stringify(audit.metadata)).toContain(`"parentBranchId":${second.body.item.id}`)
+
+      const refused = await patchOne(second.body.item.id, { hierarchyRole: "STANDALONE" })
+      expect(refused.status).toBe(409)
+      const [stillParent] = await db.select({ hierarchyRole: branches.hierarchyRole }).from(branches)
+        .where(eq(branches.id, second.body.item.id))
+      expect(stillParent.hierarchyRole).toBe("PARENT")
+
+      expect((await patchOne(childId, { parentBranchId: childId })).status).toBe(400)
+      expect((await patchOne(childId, { hierarchyRole: "PARENT", parentBranchId: first.body.item.id })).status).toBe(400)
+      expect((await patchOne(childId, { parentBranchId: f.north })).status).toBe(400)
+
+      const cleared = await patchOne(childId, { hierarchyRole: "STANDALONE" })
+      expect(cleared.status).toBe(200)
+      expect(cleared.body.item).toMatchObject({ hierarchyRole: "STANDALONE", parentBranchId: null })
+
+      // With its only child gone, the parent may stop being one.
+      expect((await patchOne(second.body.item.id, { hierarchyRole: "STANDALONE" })).status).toBe(200)
+      // A standalone branch takes no parent.
+      expect((await patchOne(childId, { parentBranchId: first.body.item.id })).status).toBe(400)
+    })
+
+    it("keeps Head Office off another tenant's branch whatever the hierarchy fields say", async () => {
+      signIn({ id: f.headOfficeId, role: "HEAD_OFFICE" })
+      expect((await patchOne(f.abroad, { hierarchyRole: "PARENT" })).status).toBe(403)
+      const [abroad] = await db.select({ hierarchyRole: branches.hierarchyRole }).from(branches).where(eq(branches.id, f.abroad))
+      expect(abroad.hierarchyRole).toBe("STANDALONE")
+    })
+
+    it("holds the rules in the database whatever writes the row", async () => {
+      const [parent] = await db.insert(branches)
+        .values({ organizationId: f.home, name: `DB Parent ${tag()}`, status: "active", hierarchyRole: "PARENT" })
+        .returning({ id: branches.id })
+      await db.insert(branches).values({
+        organizationId: f.home, name: `DB Child ${tag()}`, status: "active", hierarchyRole: "CHILD", parentBranchId: parent.id,
+      })
+
+      // A child of a standalone branch.
+      expect(await failureOf(db.insert(branches).values({
+        organizationId: f.home, name: `DB Orphan ${tag()}`, status: "active", hierarchyRole: "CHILD", parentBranchId: f.north,
+      }))).toEqual({ code: "23514", constraint: "branches_hierarchy_guard" })
+      // A parent with children re-typed directly.
+      expect(await failureOf(
+        db.update(branches).set({ hierarchyRole: "STANDALONE" }).where(eq(branches.id, parent.id)),
+      )).toEqual({ code: "23514", constraint: "branches_hierarchy_guard" })
+      // A child with no parent, and a parent on a standalone branch.
+      expect(await failureOf(db.insert(branches).values({
+        organizationId: f.home, name: `DB Lost ${tag()}`, status: "active", hierarchyRole: "CHILD",
+      }))).toEqual({ code: "23514", constraint: "branches_hierarchy_parent_ck" })
+      expect(await failureOf(db.insert(branches).values({
+        organizationId: f.home, name: `DB Odd ${tag()}`, status: "active", parentBranchId: parent.id,
+      }))).toEqual({ code: "23514", constraint: "branches_hierarchy_parent_ck" })
+      // Deleting a parent that still has children.
+      expect(await failureOf(db.delete(branches).where(eq(branches.id, parent.id))))
+        .toEqual({ code: "23503", constraint: "branches_parent_org_fk" })
+    })
+
+    describe("when a child insert races its parent's re-type", () => {
+      // Either order ends with a consistent tree: the trigger takes the parent
+      // FOR SHARE, which conflicts with the re-type's row lock, and whichever
+      // statement waits re-reads after the other commits.
+      async function parentRow() {
+        const [parent] = await db.insert(branches)
+          .values({ organizationId: f.home, name: `Race Parent ${tag()}`, status: "active", hierarchyRole: "PARENT" })
+          .returning({ id: branches.id })
+        return parent.id
+      }
+
+      it("refuses the re-type once the child commits", async () => {
+        const parentId = await parentRow()
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => { release = resolve })
+        let signalInserted!: () => void
+        const inserted = new Promise<void>((resolve) => { signalInserted = resolve })
+
+        const childInsert = db.transaction(async (tx) => {
+          await tx.insert(branches).values({
+            organizationId: f.home, name: `Race Child ${tag()}`, status: "active", hierarchyRole: "CHILD", parentBranchId: parentId,
+          })
+          signalInserted()
+          await gate
+        })
+        await inserted
+        const retype = failureOf(db.update(branches).set({ hierarchyRole: "STANDALONE" }).where(eq(branches.id, parentId)))
+        release()
+        await childInsert
+
+        expect(await retype).toEqual({ code: "23514", constraint: "branches_hierarchy_guard" })
+      })
+
+      it("refuses the child once the re-type commits", async () => {
+        const parentId = await parentRow()
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => { release = resolve })
+        let signalRetyped!: () => void
+        const retyped = new Promise<void>((resolve) => { signalRetyped = resolve })
+
+        const retype = db.transaction(async (tx) => {
+          await tx.update(branches).set({ hierarchyRole: "STANDALONE" }).where(eq(branches.id, parentId))
+          signalRetyped()
+          await gate
+        })
+        await retyped
+        const childInsert = failureOf(db.insert(branches).values({
+          organizationId: f.home, name: `Race Late ${tag()}`, status: "active", hierarchyRole: "CHILD", parentBranchId: parentId,
+        }))
+        release()
+        await retype
+
+        expect(await childInsert).toEqual({ code: "23514", constraint: "branches_hierarchy_guard" })
+      })
+    })
+
+    describe("on the Branch Report", () => {
+      let family: { parent: number; child: number; foreignParent: number }
+
+      beforeAll(async () => {
+        const [parent] = await db.insert(branches)
+          .values({ organizationId: f.home, name: `Report Parent ${tag()}`, status: "active", hierarchyRole: "PARENT" })
+          .returning({ id: branches.id })
+        const [child] = await db.insert(branches)
+          .values({ organizationId: f.home, name: `Report Child ${tag()}`, status: "active", hierarchyRole: "CHILD", parentBranchId: parent.id })
+          .returning({ id: branches.id })
+        const [foreignParent] = await db.insert(branches)
+          .values({ organizationId: f.foreign, name: `Report Foreign ${tag()}`, status: "active", hierarchyRole: "PARENT" })
+          .returning({ id: branches.id })
+        family = { parent: parent.id, child: child.id, foreignParent: foreignParent.id }
+      })
+
+      function signInHeadOfficeForReports() {
+        vi.mocked(getServerSession).mockResolvedValue({
+          user: { id: f.headOfficeId, role: "HEAD_OFFICE", organizationId: f.home, email: "actor@example.test", mustChangePassword: false },
+        } as any)
+      }
+
+      it("returns each branch's type and parent", async () => {
+        signInHeadOfficeForReports()
+        const result = await performance("")
+        expect(result.status).toBe(200)
+        const child = result.body.items.find((item: { id: number }) => item.id === family.child)
+        expect(child).toMatchObject({ hierarchyRole: "CHILD", parentBranchId: family.parent, parentBranchStatus: "active" })
+        expect(child.parentBranchName).toMatch(/^Report Parent/)
+      })
+
+      it("filters by type, and by parent to the parent and its children", async () => {
+        signInHeadOfficeForReports()
+        const children = await performance("hierarchyRoles=CHILD")
+        expect(children.ids).toContain(family.child)
+        expect(children.ids).not.toContain(family.parent)
+        expect(children.ids).not.toContain(f.north)
+
+        const familyOnly = await performance(`parentBranchIds=${family.parent}`)
+        expect(familyOnly.ids.sort((a, b) => a - b)).toEqual([family.parent, family.child].sort((a, b) => a - b))
+      })
+
+      it("never widens Head Office past its tenant, whichever parent it names", async () => {
+        signInHeadOfficeForReports()
+        const foreign = await performance(`parentBranchIds=${family.foreignParent}&organizationId=${f.foreign}`)
+        expect(foreign.status).toBe(200)
+        expect(foreign.ids).toEqual([])
+      })
+
+      it("refuses a malformed filter", async () => {
+        signInHeadOfficeForReports()
+        expect((await performance("hierarchyRoles=COUSIN")).status).toBe(400)
+        expect((await performance("parentBranchIds=1;DROP")).status).toBe(400)
+      })
     })
   })
 })

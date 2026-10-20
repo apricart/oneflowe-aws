@@ -16,6 +16,9 @@ import {
   parseSupportOrderSearch,
   parseSupportThreadReference,
   supportOrderSearchId,
+  SUPPORT_APRICART_ROLES,
+  SUPPORT_WHOLE_QUEUE_ROLES,
+  readsWholeSupportQueue,
   supportSideForRole,
   supportThreadReference,
   type SupportSide,
@@ -31,10 +34,28 @@ describe("which side of the conversation a role speaks for", () => {
     expect(supportSideForRole("APRICART_SUPPORT")).toBe("APRICART")
   })
 
+  it("puts the warehouse on the operator side, for the threads of its branches", () => {
+    // plans/OF-WAREHOUSE-support-queue.md: it answers as Apricart, but reads
+    // only its branches' threads — the whole queue stays with two roles.
+    expect(supportSideForRole("WAREHOUSE")).toBe("APRICART")
+    expect(readsWholeSupportQueue("WAREHOUSE")).toBe(false)
+  })
+
+  it("gives the whole queue to Super Admin and the support agent alone", () => {
+    expect([...SUPPORT_WHOLE_QUEUE_ROLES]).toEqual(["SUPER_ADMIN", "APRICART_SUPPORT"])
+    expect([...SUPPORT_APRICART_ROLES]).toEqual(["SUPER_ADMIN", "APRICART_SUPPORT", "WAREHOUSE"])
+    for (const role of SUPPORT_WHOLE_QUEUE_ROLES) {
+      expect(supportSideForRole(role), role).toBe("APRICART")
+    }
+    for (const role of [null, undefined, "", "HEAD_OFFICE", "super_admin", "WAREHOUSE"]) {
+      expect(readsWholeSupportQueue(role), String(role)).toBe(false)
+    }
+  })
+
   it("keeps Apricart's other staff roles off the operator side", () => {
     // They are Apricart's people, but not on the support queue: none of them
     // may speak for Apricart in a client's conversation.
-    for (const role of ["ORDER_DESK", "APRICART_EXECUTIVE", "WAREHOUSE", "VIEWER"]) {
+    for (const role of ["ORDER_DESK", "APRICART_EXECUTIVE", "VIEWER"]) {
       expect(supportSideForRole(role), role).toBe("CUSTOMER")
     }
   })

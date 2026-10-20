@@ -14,6 +14,7 @@ import {
   seedJoinDomainE2E,
   setOrganizationEmailDomain,
 } from "./support/join-domain-seed"
+import { verifyJoinEmail } from "./support/join-email"
 import { closeRoleRenameNoticeWhenShown } from "./support/session"
 
 /**
@@ -164,16 +165,19 @@ test.describe("joining is locked to the organization's email domain", () => {
     await expect(page.getByText(`@${OPEN_ORGANIZATION.emailDomain}`, { exact: true })).toBeVisible()
     await expect(page.getByRole("alertdialog")).toHaveCount(0)
 
-    await fillApplicantDetails(page, username, OPEN_ORGANIZATION.branchName)
-
-    // A whole address from somewhere else is refused, not quietly rewritten.
-    const email = page.getByLabel(/^Work email/)
-    await email.fill("e2e.applicant@gmail.com")
-    await page.getByRole("button", { name: "Send request" }).click()
+    // A whole address from somewhere else is refused at the email step, not
+    // quietly rewritten, and no code is sent for it.
+    await page.locator("#join-verify-email").fill("e2e.applicant@gmail.com")
+    await page.getByRole("button", { name: /Send verification code/ }).click()
     await expect(page.getByText(/only the part before the @/i)).toBeVisible()
-    await expect(page.getByRole("heading", { name: "Request sent" })).toHaveCount(0)
+    await expect(page.getByRole("group", { name: "Verification code" })).toHaveCount(0)
 
-    await email.fill("E2E.Applicant")
+    await verifyJoinEmail(page, {
+      joinCode: OPEN_ORGANIZATION.joinCode,
+      localPart: "E2E.Applicant",
+      domain: OPEN_ORGANIZATION.emailDomain,
+    })
+    await fillApplicantDetails(page, username, OPEN_ORGANIZATION.branchName)
     await page.getByRole("button", { name: "Send request" }).click()
     await expect(page.getByRole("heading", { name: "Request sent" })).toBeVisible()
 

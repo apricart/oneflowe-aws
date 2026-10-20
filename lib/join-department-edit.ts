@@ -69,6 +69,7 @@ export type StoredRequestBranchRow = {
   existingBranchId: number | null
   costCenterId: string | null
   requestedBranchName: string | null
+  requestedBranchCity?: string | null
 }
 
 export type RequestBranchEditPlan = {
@@ -77,37 +78,53 @@ export type RequestBranchEditPlan = {
   insertNewBranches: RequestedNewBranch[]
   /** Kept CRC rows whose name the edit gives or changes. */
   renames: Array<{ id: number; name: string }>
+  /** Kept CRC rows whose city (and so province) the edit gives or changes. */
+  relocations: Array<{ id: number; city: string; province: string }>
+}
+
+/** What a kept CRC row takes from the edit: its name and city when given and different. */
+function keptRowChanges(
+  row: StoredRequestBranchRow,
+  wanted: RequestedNewBranch,
+): Pick<RequestBranchEditPlan, "renames" | "relocations"> {
+  const renames = wanted.name && wanted.name !== row.requestedBranchName ? [{ id: row.id, name: wanted.name }] : []
+  const moves = Boolean(wanted.city && wanted.province) && wanted.city !== (row.requestedBranchCity ?? null)
+  const relocations = moves ? [{ id: row.id, city: wanted.city as string, province: wanted.province as string }] : []
+  return { renames, relocations }
 }
 
 /**
  * The request branch rows an edit keeps, drops and adds. `next` is the edited
  * list: existing branch ids picked by name, and the branches still to be
- * created (a typed CRC is always one of these). A row is kept when it names the same branch or the same
- * CRC; a kept CRC row takes the edit's name when one is given, and keeps its
- * own when none is.
+ * created (a typed CRC is always one of these). A row is kept when it names the
+ * same branch or the same CRC; a kept CRC row takes the edit's name and city
+ * when they are given, and keeps its own when they are not.
  */
 export function planRequestBranchEdit(
   current: readonly StoredRequestBranchRow[],
   next: Readonly<{ existingIds: readonly number[]; newBranches: readonly RequestedNewBranch[] }>,
 ): RequestBranchEditPlan {
   const wantedExisting = new Set(next.existingIds)
-  const wantedNew = new Map(next.newBranches.map((entry) => [
-    normalizeCrc(entry.crc),
-    normalizeBranchName(entry.name) || null,
-  ]))
+  const wantedNew = new Map(next.newBranches.map((entry): [string, RequestedNewBranch] => {
+    const crc = normalizeCrc(entry.crc)
+    return [crc, { crc, name: normalizeBranchName(entry.name) || null, city: entry.city, province: entry.province }]
+  }))
   const keptExisting = new Set<number>()
   const keptCrcs = new Set<string>()
   const deleteIds: number[] = []
   const renames: Array<{ id: number; name: string }> = []
+  const relocations: Array<{ id: number; city: string; province: string }> = []
 
   for (const row of current) {
     const crc = row.costCenterId === null ? null : normalizeCrc(row.costCenterId)
+    const wanted = crc === null ? undefined : wantedNew.get(crc)
     if (row.existingBranchId !== null && wantedExisting.has(row.existingBranchId)) {
       keptExisting.add(row.existingBranchId)
-    } else if (row.existingBranchId === null && crc !== null && wantedNew.has(crc)) {
+    } else if (row.existingBranchId === null && crc !== null && wanted) {
       keptCrcs.add(crc)
-      const name = wantedNew.get(crc)
-      if (name && name !== row.requestedBranchName) renames.push({ id: row.id, name })
+      const changes = keptRowChanges(row, wanted)
+      renames.push(...changes.renames)
+      relocations.push(...changes.relocations)
     } else {
       deleteIds.push(row.id)
     }
@@ -116,10 +133,9 @@ export function planRequestBranchEdit(
   return {
     deleteIds,
     insertExistingIds: [...wantedExisting].filter((id) => !keptExisting.has(id)),
-    insertNewBranches: [...wantedNew.entries()]
-      .filter(([crc]) => !keptCrcs.has(crc))
-      .map(([crc, name]) => ({ crc, name: name ?? null })),
+    insertNewBranches: [...wantedNew.values()].filter((entry) => !keptCrcs.has(entry.crc)),
     renames,
+    relocations,
   }
 }
 
@@ -184,7 +200,16 @@ export function editedBranchListError(branches: readonly RequestedBranchEntry[])
 
 export type JoinEditBranch =
   | { key: string; kind: "existing"; branchId: number; label: string }
-  | { key: string; kind: "crc"; crc: string; name: string | null; label: string }
+  | {
+      key: string
+      kind: "crc"
+      crc: string
+      name: string | null
+      label: string
+      /** The applicant's listed city and its province, carried through an edit unchanged. */
+      city?: string | null
+      province?: string | null
+    }
 
 export type DepartmentJoinEditDraft = {
   firstName: string
@@ -219,6 +244,8 @@ export type JoinEditSource = {
     name: string | null
     costCenterId: string | null
     requestedName: string | null
+    requestedCity?: string | null
+    requestedProvince?: string | null
   }>
   addresses: ReadonlyArray<{ requestAddressId: number; address: string }>
   approvers: ReadonlyArray<{ level: number; email: string; designation: string }>
@@ -259,6 +286,8 @@ export function draftFromReview(review: JoinEditSource): DepartmentJoinEditDraft
           crc: normalizeCrc(row.costCenterId),
           name: row.requestedName,
           label: newBranchLabel(row.costCenterId, row.requestedName),
+          city: row.requestedCity ?? null,
+          province: row.requestedProvince ?? null,
         }]
       }
       return []
@@ -375,7 +404,11 @@ export function toDepartmentJoinUpdatePayload(draft: DepartmentJoinEditDraft) {
       department: draft.department,
       branches: draft.branches.map((entry) => {
         if (entry.kind === "existing") return { branchId: entry.branchId }
-        return entry.name ? { crc: entry.crc, name: entry.name } : { crc: entry.crc }
+        return {
+          crc: entry.crc,
+          ...(entry.name ? { name: entry.name } : {}),
+          ...(entry.city && entry.province ? { city: entry.city, province: entry.province } : {}),
+        }
       }),
       addresses: draft.addresses.map((row) => row.address.trim()),
       approvers: draft.approvers.map((approver) => ({

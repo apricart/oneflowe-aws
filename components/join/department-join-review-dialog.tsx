@@ -6,6 +6,7 @@ import useSWR from "swr"
 import { AlertTriangle, Loader2, Pencil } from "lucide-react"
 
 import { DepartmentJoinEditForm } from "@/components/join/department-join-edit-form"
+import { EmailVerifiedNote } from "@/components/join/email-verified-note"
 import { PakistanCityCombobox } from "@/components/join/pakistan-city-combobox"
 import type { JoinOption } from "@/components/join/join-scope-picker"
 import { Badge } from "@/components/ui/badge"
@@ -60,6 +61,7 @@ type Review = {
     firstName: string
     lastName: string
     email: string
+    emailVerified?: boolean
     username: string
     usernameTaken: boolean
     phone: string | null
@@ -75,6 +77,9 @@ type Review = {
     name: string | null
     costCenterId: string | null
     requestedName: string | null
+    /** The listed city and its province the applicant gave; absent from older responses. */
+    requestedCity?: string | null
+    requestedProvince?: string | null
     /** An existing branch already carrying this CRC; Head Office must choose it or a new branch. */
     crcMatch?: { branchId: number; name: string } | null
   }>
@@ -129,6 +134,16 @@ function draftErrors(draft: NewBranchDraft): Partial<Record<NewBranchField, stri
   const errors = newBranchDraftErrors(draft)
   if (errors.city && !draft.province.trim()) delete errors.province
   return errors
+}
+
+/**
+ * The city and province a new branch's draft starts from: the applicant's
+ * listed city and the list's own province, else blank for Head Office to
+ * choose (plans/OF-JOIN-applicant-new-branch-city.md).
+ */
+function requestedLocationDraft(city: string | null | undefined): Pick<NewBranchDraft, "city" | "province"> {
+  const listed = findPakistanCity(city)
+  return listed ? { city: listed.name, province: listed.province } : { city: "", province: "" }
 }
 
 /**
@@ -297,15 +312,14 @@ export function DepartmentJoinReviewDialog({
   const blocked = review?.approvers.some((approver) => approver.resolution.kind === "blocked") ?? false
   const branchLabel = (row: Review["branches"][number]) =>
     row.name ?? row.requestedName ?? `New branch for CRC ${row.costCenterId}`
-  // A new branch starts from the name the applicant gave it, never from its CRC.
-  // A CRC another branch already carries starts undecided: neither choice is
-  // made for Head Office.
+  // A new branch starts from the name and city the applicant gave it, never
+  // from its CRC; Head Office may change either. A CRC another branch already
+  // carries starts undecided: neither choice is made for Head Office.
   const draftFor = (row: Review["branches"][number]): NewBranchDraft =>
     newBranches[row.requestBranchId] ?? {
       mapToBranchId: row.crcMatch ? UNDECIDED : CREATE_NEW_BRANCH,
       name: row.requestedName ?? "",
-      province: "",
-      city: "",
+      ...requestedLocationDraft(row.requestedCity),
       address: review?.addresses[0]?.address ?? "",
     }
   const updateDraft = (row: Review["branches"][number], patch: Partial<NewBranchDraft>) =>
@@ -443,7 +457,10 @@ export function DepartmentJoinReviewDialog({
             )}
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
               <dt className="font-medium text-slate-500">Email</dt>
-              <dd className="break-all">{review.person.email}</dd>
+              <dd className="break-all">
+                {review.person.email}
+                <EmailVerifiedNote verified={review.person.emailVerified === true} />
+              </dd>
               <dt className="font-medium text-slate-500">Username</dt>
               <dd className="font-mono">{review.person.username}</dd>
               <dt className="font-medium text-slate-500">Phone / IP ext.</dt>

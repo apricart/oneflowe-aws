@@ -23,7 +23,7 @@ import {
   listSupportThreads,
 } from "@/lib/server/support-threads"
 import { attemptImmediateEmailDelivery } from "@/lib/server/order-notifications"
-import { resolveSupportAuthor, supportReaderFromSession } from "@/lib/server/support-session"
+import { resolveSupportAuthor, supportReaderFromSession, withSupportReach } from "@/lib/server/support-session"
 
 /**
  * The support thread directory.
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const viewer = supportReaderFromSession(session)
+    const viewer = await withSupportReach(supportReaderFromSession(session))
     if (!viewer || !isSupportParticipantRole(viewer.role)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
@@ -68,7 +68,8 @@ export async function GET(req: NextRequest) {
       category: isSupportCategory(category) ? category : undefined,
       // Only Apricart reads across tenants, so only Apricart can narrow to one.
       // For everybody else the parameter is ignored rather than honoured, and
-      // their own scope still applies underneath.
+      // their own scope still applies underneath — the warehouse's branches
+      // included, so narrowing it to a tenant it does not serve reads nothing.
       organizationId:
         isSupportApricartRole(viewer.role) && Number.isInteger(organizationId) && organizationId > 0
           ? organizationId

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   branchesInOrganization,
+  citiesForOrganizations,
   cityCoveringBranch,
   describeWarehouseBranches,
   describeWarehouseReach,
@@ -64,25 +65,68 @@ describe("whole cities", () => {
     { key: "lahore", label: "Lahore" },
   ]
 
-  it("finds the assigned city covering a branch, by the server's key only", () => {
-    expect(cityCoveringBranch({ cityKey: "karachi" }, ["karachi"])).toBe("karachi")
-    expect(cityCoveringBranch({ cityKey: "karachi" }, ["lahore"])).toBeNull()
-    expect(cityCoveringBranch({ cityKey: null }, ["karachi"])).toBeNull()
+  const everyOrganization = [1, 2, 3, 4]
+
+  it("finds the assigned city covering a branch, by the server's key only, in a chosen organization only", () => {
+    const branch = { organizationId: 1, cityKey: "karachi" }
+    expect(cityCoveringBranch(branch, { cityKeys: ["karachi"], cityOrganizationIds: [1] })).toBe("karachi")
+    expect(cityCoveringBranch(branch, { cityKeys: ["lahore"], cityOrganizationIds: [1] })).toBeNull()
+    expect(cityCoveringBranch({ organizationId: 1, cityKey: null }, { cityKeys: ["karachi"], cityOrganizationIds: [1] })).toBeNull()
+    // The city alone is not enough: the branch's organization must be chosen.
+    expect(cityCoveringBranch(branch, { cityKeys: ["karachi"], cityOrganizationIds: [2] })).toBeNull()
+    expect(cityCoveringBranch(branch, { cityKeys: ["karachi"], cityOrganizationIds: [] })).toBeNull()
     // Never normalised in the browser: the key is already the SQL key.
-    expect(cityCoveringBranch({ cityKey: "karachi" }, ["Karachi"])).toBeNull()
+    expect(cityCoveringBranch(branch, { cityKeys: ["Karachi"], cityOrganizationIds: [1] })).toBeNull()
   })
 
-  it("serves single branches and every branch of an assigned city, once each", () => {
-    expect(effectiveWarehouseBranchIds({ branchIds: [31, 12], cityKeys: ["karachi"] }, cityBranches)).toEqual([12, 21, 31, 41])
-    expect(effectiveWarehouseBranchIds({ branchIds: [], cityKeys: [] }, cityBranches)).toEqual([])
+  it("serves single branches and every branch of an assigned city in a chosen organization, once each", () => {
+    expect(effectiveWarehouseBranchIds({ branchIds: [31, 12], cityKeys: ["karachi"], cityOrganizationIds: everyOrganization }, cityBranches))
+      .toEqual([12, 21, 31, 41])
+    expect(effectiveWarehouseBranchIds({ branchIds: [31], cityKeys: ["karachi"], cityOrganizationIds: [2] }, cityBranches)).toEqual([21, 31])
+    expect(effectiveWarehouseBranchIds({ branchIds: [], cityKeys: ["karachi"], cityOrganizationIds: [] }, cityBranches)).toEqual([])
+    expect(effectiveWarehouseBranchIds({ branchIds: [], cityKeys: [], cityOrganizationIds: everyOrganization }, cityBranches)).toEqual([])
   })
 
   it("names a few cities, then counts what they and the single branches reach", () => {
-    expect(describeWarehouseReach({ branchIds: [31], cityKeys: [] }, cityBranches, organizations, cities)).toBe("1 branch — KE")
-    expect(describeWarehouseReach({ branchIds: [], cityKeys: ["lahore"] }, cityBranches, organizations, cities)).toBe("Lahore · 1 branch — Meezan")
-    expect(describeWarehouseReach({ branchIds: [], cityKeys: ["karachi", "lahore"] }, cityBranches, organizations, cities))
-      .toBe("Karachi, Lahore · 4 branches — Meezan, UBL, HBL")
-    expect(describeWarehouseReach({ branchIds: [], cityKeys: ["quetta"] }, cityBranches, organizations, cities)).toBe("quetta · no branches yet")
-    expect(describeWarehouseReach({ branchIds: [], cityKeys: ["a", "b", "c", "d"] }, cityBranches, organizations, cities)).toBe("4 cities · no branches yet")
+    const reach = (branchIds: number[], cityKeys: string[], cityOrganizationIds = everyOrganization) =>
+      describeWarehouseReach({ branchIds, cityKeys, cityOrganizationIds }, cityBranches, organizations, cities)
+    expect(reach([31], [])).toBe("1 branch — KE")
+    expect(reach([], ["lahore"])).toBe("Lahore · 1 branch — Meezan")
+    expect(reach([], ["karachi", "lahore"])).toBe("Karachi, Lahore · 4 branches — Meezan, UBL, HBL")
+    expect(reach([], ["karachi"], [2, 4])).toBe("Karachi · 2 branches — UBL, HBL")
+    expect(reach([], ["quetta"])).toBe("quetta · no branches yet")
+    expect(reach([], ["karachi"], [])).toBe("Karachi · no organization chosen")
+    expect(reach([], ["a", "b", "c", "d"])).toBe("4 cities · no branches yet")
+  })
+
+  describe("offering the cities of the chosen organizations", () => {
+    const counted = [
+      { key: "karachi", label: "Karachi", organizations: [{ organizationId: 1, branchCount: 2 }, { organizationId: 2, branchCount: 5 }] },
+      { key: "lahore", label: "Lahore", organizations: [{ organizationId: 1, branchCount: 1 }] },
+      { key: "quetta", label: "Quetta", organizations: [{ organizationId: 3, branchCount: 4 }] },
+      { key: "gone", label: "gone", organizations: [] },
+    ]
+
+    it("offers nothing until an organization is chosen", () => {
+      expect(citiesForOrganizations(counted, [], [])).toEqual([])
+    })
+
+    it("offers only the chosen organizations' cities, counted within them", () => {
+      expect(citiesForOrganizations(counted, [2], [])).toEqual([
+        { key: "karachi", label: "Karachi", branchCount: 5, organizationCount: 1, outside: false },
+      ])
+      expect(citiesForOrganizations(counted, [1, 2], [])).toEqual([
+        { key: "karachi", label: "Karachi", branchCount: 7, organizationCount: 2, outside: false },
+        { key: "lahore", label: "Lahore", branchCount: 1, organizationCount: 1, outside: false },
+      ])
+    })
+
+    it("still lists an assigned city none of them has, after the others, so it can be withdrawn", () => {
+      expect(citiesForOrganizations(counted, [2], ["quetta", "gone", "karachi"])).toEqual([
+        { key: "karachi", label: "Karachi", branchCount: 5, organizationCount: 1, outside: false },
+        { key: "quetta", label: "Quetta", branchCount: 0, organizationCount: 0, outside: true },
+        { key: "gone", label: "gone", branchCount: 0, organizationCount: 0, outside: true },
+      ])
+    })
   })
 })

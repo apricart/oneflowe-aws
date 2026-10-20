@@ -69,6 +69,11 @@ import { isOrderDeskRole, orderIntakeError } from "@/lib/order-desk-access"
 import { isDeskEnteredOrder } from "@/lib/order-desk-approval"
 import { isOrderDeskTarget } from "@/lib/server/order-desk-scope"
 import { deskAttachmentRefusal } from "@/lib/server/order-desk-attachments"
+import {
+  hasApricartSupportOrderReadScope,
+  isApricartSupportRole,
+} from "@/lib/apricart-support-access"
+import { getRequestScope } from "@/lib/auth"
 
 /**
  * Thrown inside the creation transaction when an Order Desk user's grant to the
@@ -76,6 +81,21 @@ import { deskAttachmentRefusal } from "@/lib/server/order-desk-attachments"
  * pre-check. Answered with the same 403 as the pre-check.
  */
 const ORDER_DESK_TARGET_UNAVAILABLE = "You are not assigned to order for this branch"
+
+async function resolveOrderListReadRole(user: unknown): Promise<{
+  role: string | null
+  refusal: string
+}> {
+  const claims = user as { id?: unknown; role?: unknown }
+  if (!isApricartSupportRole(claims.role)) {
+    return { role: viewerReadRole(user as any), refusal: VIEWER_READ_REFUSED }
+  }
+
+  const requestScope = await getRequestScope()
+  return hasApricartSupportOrderReadScope(claims.role, claims.id, requestScope)
+    ? { role: claims.role, refusal: "Forbidden" }
+    : { role: null, refusal: "Forbidden" }
+}
 
 /**
  * The column each allowlisted Orders-table sort key orders by. Text compares
@@ -250,7 +270,7 @@ function addMultiBranchOrderScope(conditions: any[], scopedBranchIds: unknown) {
 
 function addOrderRoleConditions(conditions: any[], context: any) {
   const { role, organizationId: orgIdNum, branchId: branchIdFromUser, userId: currentUserId } = context
-  if (role === "SUPER_ADMIN") {
+  if (role === "SUPER_ADMIN" || isApricartSupportRole(role)) {
     addSuperAdminOrderScope(conditions, context.organizationIdParam)
     return
   }
@@ -1227,8 +1247,9 @@ export async function GET(req: NextRequest) {
     // tenant's orders as Head Office does, a branch-pinned one is refused.
     // What the caller may *do* — decide, see the fulfilment token — and the
     // access audit below keep the real role.
-    const role = viewerReadRole(session.user as any)
-    if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+    const readAccess = await resolveOrderListReadRole(session.user)
+    const role = readAccess.role
+    if (!role) return NextResponse.json({ error: readAccess.refusal }, { status: 403 })
     const organizationIdRaw = (session.user as any).organizationId
     const branchIdFromUserRaw = (session.user as any).branchId
 

@@ -22,6 +22,7 @@ import {
   isDepartment,
   normalizeBranchName,
   normalizeCrc,
+  requestedBranchCityError,
   requestedBranchNameError,
 } from "@/lib/join-department-signup"
 import { composeDomainEmail, emailLocalPartError } from "@/lib/organization-email-domain"
@@ -37,10 +38,13 @@ export function joinPasswordError(password: string): string | undefined {
   return complete ? undefined : "Include an uppercase letter, a lowercase letter, a number and a symbol"
 }
 
-/** One branch chip: an existing branch picked by name, or a new branch named with its CRC number. */
+/**
+ * One branch chip: an existing branch picked by name, or a new branch named
+ * with its CRC number and the listed city it is in, with that city's province.
+ */
 export type BranchChip =
   | { key: string; kind: "existing"; branchId: number; label: string; checked: boolean }
-  | { key: string; kind: "crc"; crc: string; name: string; label: string; checked: boolean }
+  | { key: string; kind: "crc"; crc: string; name: string; city: string; province: string; label: string; checked: boolean }
 
 export type AddressChip = { key: string; address: string; checked: boolean }
 
@@ -153,12 +157,12 @@ export function newBranchNameChipError(
   return null
 }
 
-/** Why a new branch (its name and its CRC) cannot be added as typed, or null. */
+/** Why a new branch (its name, its CRC and its city) cannot be added as typed, or null. */
 export function newBranchChipError(
   chips: readonly BranchChip[],
   knownBranchNames: readonly string[],
-  entry: Readonly<{ name: string; crc: string }>,
-): { field: "name" | "crc"; message: string } | null {
+  entry: Readonly<{ name: string; crc: string; city: string }>,
+): { field: "name" | "crc" | "city"; message: string } | null {
   const nameProblem = newBranchNameChipError(chips, knownBranchNames, entry.name)
   if (nameProblem) return { field: "name", message: nameProblem }
   const crcProblem = crcError(entry.crc)
@@ -166,6 +170,8 @@ export function newBranchChipError(
   if (chips.some((chip) => chip.kind === "crc" && chip.crc === normalizeCrc(entry.crc))) {
     return { field: "crc", message: "This CRC is already added" }
   }
+  const cityProblem = requestedBranchCityError(entry.city)
+  if (cityProblem) return { field: "city", message: cityProblem }
   return null
 }
 
@@ -193,7 +199,9 @@ export function toDepartmentSignupPayload(draft: DepartmentSignupDraft, emailDom
     department: draft.department,
     branches: draft.branches
       .filter((chip) => chip.checked)
-      .map((chip) => (chip.kind === "existing" ? { branchId: chip.branchId } : { name: chip.name, crc: chip.crc })),
+      .map((chip) => (chip.kind === "existing"
+        ? { branchId: chip.branchId }
+        : { name: chip.name, crc: chip.crc, city: chip.city, province: chip.province })),
     addresses: draft.addresses.filter((chip) => chip.checked).map((chip) => chip.address.trim()),
     approvers: draft.approvers.map((approver) => ({
       level: approver.level,

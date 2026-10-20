@@ -231,7 +231,7 @@ export function WarehouseOrders() {
             <Input
               id="warehouse-search"
               className="w-64 pl-8"
-              placeholder="Order, invoice or branch"
+              placeholder="Order ID, reference, invoice or branch"
               maxLength={100}
               value={searchInput}
               onChange={(event) => { setSearchInput(event.target.value); setPage(1) }}
@@ -270,6 +270,7 @@ export function WarehouseOrders() {
               <table className="w-full min-w-[960px] text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
                   <tr>
+                    <th className="px-3 py-2">Order ID</th>
                     <th className="px-3 py-2">Order</th>
                     <th className="px-3 py-2">Branch</th>
                     <th className="px-3 py-2">Destination</th>
@@ -288,6 +289,7 @@ export function WarehouseOrders() {
                       className="cursor-pointer border-t hover:bg-muted/40"
                       onClick={() => setOpenOrderId(row.id)}
                     >
+                      <td className="px-3 py-2 font-mono text-xs tabular-nums">{row.id}</td>
                       <td className="px-3 py-2">
                         <button
                           type="button"

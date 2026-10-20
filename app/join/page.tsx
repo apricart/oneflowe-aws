@@ -7,6 +7,10 @@ import Link from "next/link"
 import { AlertCircle, ArrowLeft, CheckCircle2, KeyRound, MailWarning } from "lucide-react"
 
 import { DepartmentSignupForm } from "@/components/join/department-signup-form"
+import {
+  JoinEmailVerificationStep,
+  type VerifiedJoinEmail,
+} from "@/components/join/join-email-verification-step"
 import { JoinRequestForm, type JoinFormOptions } from "@/components/join/join-request-form"
 import {
   AlertDialog,
@@ -34,10 +38,15 @@ import type { ApprovalLevelBand } from "@/lib/order-approval-levels"
 /**
  * The public join page: `/login` -> "Join an organization" -> here.
  *
- * Three steps. The first asks for the organization's code, because that code is
+ * Four steps. The first asks for the organization's code, because that code is
  * the only thing that decides which organization is being joined — it is sent to
  * the server and the organization is resolved there. Nothing on this page ever
  * holds or sends an organization id, so there is none for a caller to change.
+ *
+ * The second proves the applicant's address: a code is mailed to it and must
+ * be entered back before the form is shown, and the form's address is then
+ * fixed (plans/OF-JOIN-email-otp-verification.md). The submit refuses a
+ * request without that proof, so this order is the explanation, not the control.
  *
  * An organization that has not set an email domain cannot be joined: its code
  * resolves, but the applicant gets a prompt to contact their organization and
@@ -63,7 +72,8 @@ type ResolvedOptions = JoinFormOptions & { form: JoinFormKind; approvalLevels: A
 
 type Step =
   | { kind: "code" }
-  | { kind: "details"; code: string; options: ResolvedOptions }
+  | { kind: "email"; code: string; options: ResolvedOptions; emailLocalPart: string }
+  | { kind: "details"; code: string; options: ResolvedOptions; verified: VerifiedJoinEmail }
   | { kind: "sent"; message: string }
 
 /** What `POST /api/v1/join/lookup` answers for a valid code. */
@@ -269,23 +279,46 @@ export default function JoinPage() {
     return <PageShell><SentStep message={step.message} /></PageShell>
   }
 
+  if (step.kind === "email") {
+    return (
+      <PageShell>
+        <JoinEmailVerificationStep
+          joinCode={step.code}
+          organizationName={step.options.organizationName}
+          emailDomain={step.options.emailDomain}
+          initialEmailLocalPart={step.emailLocalPart}
+          onBack={() => setStep({ kind: "code" })}
+          onVerified={(verified) => setStep({ kind: "details", code: step.code, options: step.options, verified })}
+        />
+      </PageShell>
+    )
+  }
+
   if (step.kind === "details") {
     // The code is resent rather than an organization id, so the server
-    // resolves the tenant itself on this request too.
+    // resolves the tenant itself on this request too. The proof travels with
+    // it; the server checks it was issued for this organization and address.
     const submit = async (payload: Record<string, unknown>) => {
       const response = await jsonFetcher<{ message: string }>("/api/v1/join/requests", {
         method: "POST",
-        body: JSON.stringify({ ...payload, code: step.code }),
+        body: JSON.stringify({ ...payload, code: step.code, emailVerification: step.verified.verification }),
       })
       setStep({ kind: "sent", message: response.message })
     }
-    const back = () => setStep({ kind: "code" })
+    // Back to the email step, which is where the address can be changed.
+    const back = () => setStep({
+      kind: "email",
+      code: step.code,
+      options: step.options,
+      emailLocalPart: step.verified.emailLocalPart,
+    })
+    const locked = step.verified.emailLocalPart
 
     return (
       <PageShell>
         {step.options.form === "department"
-          ? <DepartmentSignupForm options={step.options} onBack={back} onSubmit={submit} />
-          : <JoinRequestForm options={step.options} onBack={back} onSubmit={submit} />}
+          ? <DepartmentSignupForm options={step.options} lockedEmailLocalPart={locked} onBack={back} onSubmit={submit} />
+          : <JoinRequestForm options={step.options} lockedEmailLocalPart={locked} onBack={back} onSubmit={submit} />}
       </PageShell>
     )
   }
@@ -293,7 +326,7 @@ export default function JoinPage() {
   return (
     <PageShell>
       <CodeStep
-        onResolved={(code, options) => setStep({ kind: "details", code, options })}
+        onResolved={(code, options) => setStep({ kind: "email", code, options, emailLocalPart: "" })}
       />
     </PageShell>
   )

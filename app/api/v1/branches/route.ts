@@ -11,6 +11,8 @@ import { logError } from "@/lib/global-logger"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { branchCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { createBranchInTx } from "@/lib/server/branch-creation"
+import { branchHierarchyInputError, hierarchyForNewBranch } from "@/lib/branch-hierarchy"
+import { isBranchHierarchyConstraintError, parentBranchNameSql, HIERARCHY_CONFLICT_MESSAGE } from "@/lib/server/branch-hierarchy"
 import {
   BRANCH_CREATION_ROLES,
   resolveBranchCreationAccess,
@@ -101,6 +103,7 @@ function validateBranchFields(body: BranchCreateInput) {
 }
 
 function getBranchConstraintResponse(exception: any) {
+  if (isBranchHierarchyConstraintError(exception)) return error(HIERARCHY_CONFLICT_MESSAGE, 409)
   const databaseError = exception?.cause ?? exception
   const databaseCode = databaseError?.code ?? exception?.code
   const databaseConstraint = databaseError?.constraint ?? exception?.constraint
@@ -215,6 +218,9 @@ export async function GET(req: Request) {
           groupId: branchesTable.groupId,
           adminUserId: branchesTable.adminUserId,
           headCount: branchesTable.headCount,
+          hierarchyRole: branchesTable.hierarchyRole,
+          parentBranchId: branchesTable.parentBranchId,
+          parentBranchName: parentBranchNameSql,
           createdAt: branchesTable.createdAt,
           updatedAt: branchesTable.updatedAt,
           groupName: sql<string | null>`(
@@ -278,6 +284,8 @@ export async function POST(req: Request) {
 
     const validated = validateBranchFields(body)
     if (validated.response) return validated.response
+    const hierarchyError = branchHierarchyInputError(body)
+    if (hierarchyError) return error(hierarchyError, 400)
     const { name, province, city, address, costCenterId, status } = validated.values!
 
     const creation = await db.transaction((tx) => createBranchInTx(
@@ -292,6 +300,7 @@ export async function POST(req: Request) {
         status,
         region: body.region ?? null,
         headCount: body.headCount ?? null,
+        hierarchy: hierarchyForNewBranch(body),
       },
       { userId: scope.userId, role: scope.role },
     ))
@@ -301,6 +310,9 @@ export async function POST(req: Request) {
     }
     if (creation.kind === "duplicate-name") {
       return error("A branch with this name already exists in this organization.", 409)
+    }
+    if (creation.kind === "hierarchy-refused") {
+      return error(creation.refusal.message, creation.refusal.status)
     }
 
     // Invalidate branches cache

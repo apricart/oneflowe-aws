@@ -15,7 +15,7 @@ import { DELIVERY_HEALTH_LABELS, assessDelivery } from "@/lib/delivery-sla"
 import { FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { FULFILLED_ORDER_STATUSES } from "@/lib/order-delivery-status"
 import { escapeLikePattern } from "@/lib/utils"
-import { lineAmountCents, warehouseNextStage, type WarehouseOrderListQuery } from "@/lib/warehouse-orders"
+import { lineAmountCents, parseRouteId, warehouseNextStage, type WarehouseOrderListQuery } from "@/lib/warehouse-orders"
 import { listDeliveryChallans } from "@/lib/server/delivery-challan"
 import { loadWarehouseOrderInReach, loadWarehouseReach } from "@/lib/server/warehouse-scope"
 
@@ -62,7 +62,9 @@ function filterConditions(query: WarehouseOrderListQuery, now: Date): SQL[] {
   if (query.branchId !== null) conditions.push(eq(orders.branchId, query.branchId))
   if (query.search) {
     const pattern = `%${escapeLikePattern(query.search)}%`
+    const searchedOrderId = parseRouteId(query.search)
     conditions.push(or(
+      ...(searchedOrderId === null ? [] : [eq(orders.id, searchedOrderId)]),
       ilike(orders.tid, pattern),
       sql`${invoiceNumber} ILIKE ${pattern}`,
       ilike(branches.name, pattern),

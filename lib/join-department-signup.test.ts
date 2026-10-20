@@ -13,6 +13,8 @@ import {
   newBranchFieldError,
   normalizeBranchName,
   normalizeCrc,
+  requestedBranchCityError,
+  requestedBranchLocation,
   requestedBranchNameError,
   requestedNewBranches,
   splitFullName,
@@ -86,22 +88,41 @@ describe("new branches", () => {
     expect(requestedBranchNameError("x".repeat(101))).toBe("The branch name can be at most 100 characters")
   })
 
-  it("are one per CRC, normalised, keeping the first name given", () => {
+  it("are one per CRC, normalised, keeping the first name and the first city given", () => {
     expect(requestedNewBranches([
       { branchId: 4 },
-      { crc: " ab-1 ", name: " Korangi  Depot " },
-      { crc: "AB-1", name: "Another name" },
+      { crc: " ab-1 ", name: " Korangi  Depot ", city: "karachi", province: "Sindh" },
+      { crc: "AB-1", name: "Another name", city: "Lahore", province: "Punjab" },
       { crc: "cd-2" },
-      { crc: "CD-2", name: "Saddar" },
+      { crc: "CD-2", name: "Saddar", city: "Hyderabad", province: "Sindh" },
     ])).toEqual([
-      { crc: "AB-1", name: "Korangi Depot" },
-      { crc: "CD-2", name: "Saddar" },
+      { crc: "AB-1", name: "Korangi Depot", city: "Karachi", province: "Sindh" },
+      { crc: "CD-2", name: "Saddar", city: "Hyderabad", province: "Sindh" },
     ])
   })
 
-  it("leave a CRC with no name unnamed, for Head Office to name at review", () => {
+  it("leave a CRC with no name or city without them, for Head Office to give at review", () => {
     expect(requestedNewBranches([{ crc: "OLD-1" }, { crc: "OLD-2", name: "  " }]))
-      .toEqual([{ crc: "OLD-1", name: null }, { crc: "OLD-2", name: null }])
+      .toEqual([
+        { crc: "OLD-1", name: null, city: null, province: null },
+        { crc: "OLD-2", name: null, city: null, province: null },
+      ])
+  })
+
+  it("take the province from the list, never from what was sent with the city", () => {
+    expect(requestedBranchLocation(" KARACHI ")).toEqual({ city: "Karachi", province: "Sindh" })
+    expect(requestedBranchLocation("Karachee")).toEqual({ city: null, province: null })
+    expect(requestedBranchLocation(undefined)).toEqual({ city: null, province: null })
+    expect(requestedNewBranches([{ crc: "AB-1", name: "Depot", city: "Karachi", province: "Punjab" }]))
+      .toEqual([{ crc: "AB-1", name: "Depot", city: "Karachi", province: "Sindh" }])
+  })
+
+  it("refuse a blank, unlisted or mis-provinced city", () => {
+    expect(requestedBranchCityError("Karachi")).toBeNull()
+    expect(requestedBranchCityError("karachi", "Sindh")).toBeNull()
+    expect(requestedBranchCityError(" ")).toBe("Choose the city of the new branch")
+    expect(requestedBranchCityError("Karachee")).toBe(UNLISTED_CITY_MESSAGE)
+    expect(requestedBranchCityError("Karachi", "Punjab")).toBe("Karachi is in Sindh")
   })
 })
 

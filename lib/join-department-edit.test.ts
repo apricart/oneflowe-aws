@@ -28,7 +28,15 @@ const REVIEW = {
   },
   branches: [
     { kind: "existing" as const, branchId: 5, name: "Clifton", costCenterId: null, requestedName: null },
-    { kind: "new" as const, branchId: null, name: null, costCenterId: "crc-9", requestedName: "Saddar Office" },
+    {
+      kind: "new" as const,
+      branchId: null,
+      name: null,
+      costCenterId: "crc-9",
+      requestedName: "Saddar Office",
+      requestedCity: "Karachi",
+      requestedProvince: "Sindh",
+    },
   ],
   addresses: [{ requestAddressId: 41, address: "Plot 4, Clifton" }],
   approvers: [
@@ -40,19 +48,21 @@ const REVIEW = {
 describe("planRequestBranchEdit", () => {
   const current = [
     { id: 1, existingBranchId: 5, costCenterId: null, requestedBranchName: null },
-    { id: 2, existingBranchId: null, costCenterId: "CRC-9", requestedBranchName: "Saddar Office" },
+    { id: 2, existingBranchId: null, costCenterId: "CRC-9", requestedBranchName: "Saddar Office", requestedBranchCity: "Karachi" },
     { id: 3, existingBranchId: 6, costCenterId: null, requestedBranchName: null },
   ]
-  const nothing = { deleteIds: [], insertExistingIds: [], insertNewBranches: [], renames: [] }
+  const nothing = { deleteIds: [], insertExistingIds: [], insertNewBranches: [], renames: [], relocations: [] }
+  const noLocation = { city: null, province: null }
+  const karachi = { city: "Karachi", province: "Sindh" }
 
   it("keeps rows naming the same branch or CRC, so their ids survive", () => {
-    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "crc-9", name: "Saddar Office" }] }))
+    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "crc-9", name: "Saddar Office", ...karachi }] }))
       .toEqual(nothing)
   })
 
   it("drops what was removed and adds what is new, with its name", () => {
-    expect(planRequestBranchEdit(current, { existingIds: [5, 8], newBranches: [{ crc: "NEW-1", name: "  Gulshan   Depot " }] }))
-      .toEqual({ ...nothing, deleteIds: [2, 3], insertExistingIds: [8], insertNewBranches: [{ crc: "NEW-1", name: "Gulshan Depot" }] })
+    expect(planRequestBranchEdit(current, { existingIds: [5, 8], newBranches: [{ crc: "NEW-1", name: "  Gulshan   Depot ", ...karachi }] }))
+      .toEqual({ ...nothing, deleteIds: [2, 3], insertExistingIds: [8], insertNewBranches: [{ crc: "NEW-1", name: "Gulshan Depot", ...karachi }] })
   })
 
   it("replaces a CRC that now matches a branch with that branch", () => {
@@ -61,15 +71,30 @@ describe("planRequestBranchEdit", () => {
   })
 
   it("renames a kept CRC row when the edit gives it another name, and keeps its own when none is given", () => {
-    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: "Saddar Head Office" }] }))
+    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: "Saddar Head Office", ...noLocation }] }))
       .toEqual({ ...nothing, renames: [{ id: 2, name: "Saddar Head Office" }] })
-    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: null }] }))
+    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: null, ...noLocation }] }))
       .toEqual(nothing)
+  })
+
+  it("moves a kept CRC row when the edit gives it another city, and keeps its own when none is given", () => {
+    expect(planRequestBranchEdit(current, {
+      existingIds: [5, 6],
+      newBranches: [{ crc: "CRC-9", name: "Saddar Office", city: "Lahore", province: "Punjab" }],
+    })).toEqual({ ...nothing, relocations: [{ id: 2, city: "Lahore", province: "Punjab" }] })
+    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: "Saddar Office", ...noLocation }] }))
+      .toEqual(nothing)
+  })
+
+  it("gives a request's CRC row with no city the city the edit gives it", () => {
+    const unplaced = [{ id: 7, existingBranchId: null, costCenterId: "OLD-1", requestedBranchName: "Korangi", requestedBranchCity: null }]
+    expect(planRequestBranchEdit(unplaced, { existingIds: [], newBranches: [{ crc: "old-1", name: "Korangi", ...karachi }] }))
+      .toEqual({ ...nothing, relocations: [{ id: 7, ...karachi }] })
   })
 
   it("names a request's unnamed CRC row when the edit gives it a name", () => {
     const unnamed = [{ id: 7, existingBranchId: null, costCenterId: "OLD-1", requestedBranchName: null }]
-    expect(planRequestBranchEdit(unnamed, { existingIds: [], newBranches: [{ crc: "old-1", name: "Korangi" }] }))
+    expect(planRequestBranchEdit(unnamed, { existingIds: [], newBranches: [{ crc: "old-1", name: "Korangi", ...noLocation }] }))
       .toEqual({ ...nothing, renames: [{ id: 7, name: "Korangi" }] })
   })
 })
@@ -199,7 +224,7 @@ describe("the dialog's draft", () => {
         ipExtension: "1234",
         employeeId: "E-7",
         department: "Finance",
-        branches: [{ branchId: 5 }, { crc: "CRC-9", name: "Saddar Office" }],
+        branches: [{ branchId: 5 }, { crc: "CRC-9", name: "Saddar Office", city: "Karachi", province: "Sindh" }],
         addresses: ["Plot 4, Clifton"],
         approvers: [
           { level: 1, email: "one@demo.test", designation: "Director" },
@@ -212,15 +237,16 @@ describe("the dialog's draft", () => {
 
 describe("edge cases", () => {
   it("adds every row of a request that had none, and deletes every row when all are replaced", () => {
-    expect(planRequestBranchEdit([], { existingIds: [1, 2], newBranches: [{ crc: "A-1", name: "Alpha" }] }))
-      .toEqual({ deleteIds: [], insertExistingIds: [1, 2], insertNewBranches: [{ crc: "A-1", name: "Alpha" }], renames: [] })
+    const location = { city: "Karachi", province: "Sindh" }
+    expect(planRequestBranchEdit([], { existingIds: [1, 2], newBranches: [{ crc: "A-1", name: "Alpha", ...location }] }))
+      .toEqual({ deleteIds: [], insertExistingIds: [1, 2], insertNewBranches: [{ crc: "A-1", name: "Alpha", ...location }], renames: [], relocations: [] })
     expect(planRequestBranchEdit(
       [
         { id: 1, existingBranchId: 5, costCenterId: null, requestedBranchName: null },
         { id: 2, existingBranchId: null, costCenterId: "B-1", requestedBranchName: "Beta" },
       ],
       { existingIds: [9], newBranches: [] },
-    )).toEqual({ deleteIds: [1, 2], insertExistingIds: [9], insertNewBranches: [], renames: [] })
+    )).toEqual({ deleteIds: [1, 2], insertExistingIds: [9], insertNewBranches: [], renames: [], relocations: [] })
   })
 
   it("never keeps a CRC row for an existing branch of the same id, or the reverse", () => {
@@ -228,7 +254,7 @@ describe("edge cases", () => {
     expect(planRequestBranchEdit(
       [{ id: 1, existingBranchId: null, costCenterId: "5", requestedBranchName: null }],
       { existingIds: [5], newBranches: [] },
-    )).toEqual({ deleteIds: [1], insertExistingIds: [5], insertNewBranches: [], renames: [] })
+    )).toEqual({ deleteIds: [1], insertExistingIds: [5], insertNewBranches: [], renames: [], relocations: [] })
   })
 
   it("matches stored addresses one for one, so a repeated address is not kept twice", () => {
@@ -322,6 +348,9 @@ describe("edge cases", () => {
         crc: `${"C".repeat(29)}-${index}`,
         name: `${index}${"n".repeat(99)}`,
         label: "",
+        // The longest city and province on the list, together.
+        city: "Islamabad",
+        province: "Islamabad Capital Territory",
       })),
       addresses: Array.from({ length: 5 }, (_, index) => ({ key: `a${index}`, address: `${index}${"a".repeat(199)}` })),
       approvers: Array.from({ length: 5 }, (_, index) => ({ level: index + 1, email: `${"p".repeat(100)}${index}@demo.test`, designation: "d".repeat(60) })),

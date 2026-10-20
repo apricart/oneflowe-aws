@@ -4,6 +4,7 @@ import { useEffect, useState, type SubmitEvent } from "react"
 import { Pencil, Save } from "lucide-react"
 
 import { BranchHeadCountField, headCountFieldValue } from "@/components/branches/branch-head-count-field"
+import { BranchHierarchyField } from "@/components/branches/branch-hierarchy-field"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -19,13 +20,19 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
 import { parseHeadCountInput } from "@/lib/branch-head-count"
+import {
+  branchHierarchyInputError,
+  normalizeBranchHierarchyRole,
+  type BranchHierarchy,
+} from "@/lib/branch-hierarchy"
 
 /**
  * Head Office editing one of its own branches (plans/OF-BRANCH-head-count.md).
  *
  * Exactly the fields `PATCH /api/v1/branches/[id]` already lets Head Office
  * write, on its own organization's branches: name, province, city, address,
- * cost center and head count. The delivery region is Super Admin's and is not
+ * cost center, head count and the parent / child branch type
+ * (plans/OF-BRANCH-parent-child-label.md). The delivery region is Super Admin's and is not
  * offered; status keeps its own toggle on the page. The server re-checks the
  * tenant and the role whatever this form sends.
  *
@@ -40,6 +47,13 @@ export type EditableBranch = {
   address?: string | null
   costCenterId?: string | null
   headCount?: number | null
+  hierarchyRole?: string | null
+  parentBranchId?: number | null
+}
+
+function hierarchyFor(branch: EditableBranch): BranchHierarchy {
+  const hierarchyRole = normalizeBranchHierarchyRole(branch.hierarchyRole)
+  return { hierarchyRole, parentBranchId: hierarchyRole === "CHILD" ? branch.parentBranchId ?? null : null }
 }
 
 function formFor(branch: EditableBranch) {
@@ -61,10 +75,15 @@ function textOrNull(value: string): string | null {
 
 export function HeadOfficeEditBranchDialog({
   branch,
+  parentOptions,
+  hasChildren = false,
   onSaved,
   triggerClassName,
 }: Readonly<{
   branch: EditableBranch
+  /** The organization's parent branches other than this one (`parentBranchOptions`). */
+  parentOptions: ReadonlyArray<{ id: number; name: string; status: string | null }>
+  hasChildren?: boolean
   onSaved: () => void
   triggerClassName?: string
 }>) {
@@ -72,9 +91,12 @@ export function HeadOfficeEditBranchDialog({
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState(() => formFor(branch))
+  const [hierarchy, setHierarchy] = useState<BranchHierarchy>(() => hierarchyFor(branch))
 
   useEffect(() => {
-    if (open) setForm(formFor(branch))
+    if (!open) return
+    setForm(formFor(branch))
+    setHierarchy(hierarchyFor(branch))
   }, [open, branch])
 
   const name = form.name.trim()
@@ -92,6 +114,7 @@ export function HeadOfficeEditBranchDialog({
     && lengthOk(address, 5, 500)
     && costCenterId.length <= 128
     && headCount !== undefined
+    && branchHierarchyInputError(hierarchy) === null
 
   const update = (field: keyof ReturnType<typeof formFor>, value: string) =>
     setForm((current) => ({ ...current, [field]: value }))
@@ -116,11 +139,19 @@ export function HeadOfficeEditBranchDialog({
       costCenterId: branch.costCenterId ?? null,
       headCount: branch.headCount ?? null,
     }
-    const changed = Object.fromEntries(
+    const changed: Record<string, unknown> = Object.fromEntries(
       (Object.keys(next) as (keyof typeof next)[])
         .filter((key) => next[key] !== previous[key])
         .map((key) => [key, next[key]]),
     )
+    // The type and its parent travel together, so the server never pairs a
+    // new type with a stale parent.
+    const previousHierarchy = hierarchyFor(branch)
+    if (hierarchy.hierarchyRole !== previousHierarchy.hierarchyRole
+      || hierarchy.parentBranchId !== previousHierarchy.parentBranchId) {
+      changed.hierarchyRole = hierarchy.hierarchyRole
+      changed.parentBranchId = hierarchy.parentBranchId
+    }
     if (Object.keys(changed).length === 0) {
       setOpen(false)
       return
@@ -234,6 +265,15 @@ export function HeadOfficeEditBranchDialog({
               id="head-office-edit-branch-head-count"
               value={form.headCount}
               onChange={(value) => update("headCount", value)}
+              disabled={saving}
+            />
+
+            <BranchHierarchyField
+              id="head-office-edit-branch-hierarchy"
+              value={hierarchy}
+              onChange={setHierarchy}
+              parentOptions={parentOptions}
+              hasChildren={hasChildren}
               disabled={saving}
             />
           </div>

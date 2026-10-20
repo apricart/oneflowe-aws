@@ -22,8 +22,14 @@ vi.mock("next/dynamic", () => ({
   default: () => ({ endpoint, role }: { endpoint: string; role: string }) => <div>price history section {role} {endpoint}</div>,
 }))
 vi.mock("@/components/warehouse/warehouse-notification-bell", () => ({ WarehouseNotificationBell: () => <button type="button">bell</button> }))
+vi.mock("@/components/warehouse/warehouse-support-link", async () => {
+  const { default: Link } = await import("next/link")
+  return { WarehouseSupportLink: () => <Link href="/support">Support</Link> }
+})
 vi.mock("@/components/delivery-dashboard/delivery-dashboard", () => ({
-  DeliveryDashboard: ({ dashboardEndpoint }: { dashboardEndpoint: string }) => <div>dashboard section {dashboardEndpoint}</div>,
+  DeliveryDashboard: ({ dashboardEndpoint, warehouseOrderIdTools }: { dashboardEndpoint: string; warehouseOrderIdTools?: boolean }) => (
+    <div>dashboard section {dashboardEndpoint} {warehouseOrderIdTools ? "with order ID tools" : ""}</div>
+  ),
 }))
 
 import { WarehouseWorkspace } from "@/components/warehouse/warehouse-workspace"
@@ -40,7 +46,7 @@ describe("the warehouse side menu", () => {
     expect(menu().getAllByRole("button").map((button) => button.textContent)).toEqual(["Dashboard", "Orders", "Product Catalog"])
     expect(menu().getByRole("button", { name: "Product Catalog" }).getAttribute("aria-expanded")).toBe("false")
     expect(current().map((button) => button.textContent)).toEqual(["Dashboard"])
-    expect(screen.getByText("dashboard section /api/v1/warehouse/workload")).toBeTruthy()
+    expect(screen.getByText("dashboard section /api/v1/warehouse/workload with order ID tools")).toBeTruthy()
     expect(screen.queryByRole("tablist")).toBeNull()
   })
 
@@ -76,6 +82,11 @@ describe("the warehouse side menu", () => {
     act(() => { window.dispatchEvent(new HashChangeEvent("hashchange")) })
     expect(screen.getByText("orders section")).toBeTruthy()
     expect(current().map((button) => button.textContent)).toEqual(["Orders"])
+  })
+
+  it("links to the support queue of its branches, below the sections", () => {
+    render(<WarehouseWorkspace />)
+    expect(menu().getByRole("link", { name: "Support" }).getAttribute("href")).toBe("/support")
   })
 
   it("puts the notification bell in the header", () => {

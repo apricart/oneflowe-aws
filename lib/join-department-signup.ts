@@ -5,7 +5,7 @@
  * The department sign-up is the join form of an organization with order
  * approval levels on. It asks for one person (the order initiator), the
  * branches they order for (an existing branch picked by name, or a new
- * branch's name and its CRC number), their delivery addresses, and one
+ * branch's name, its CRC number and its city), their delivery addresses, and one
  * financial approver per approval level. Nothing is created until Head Office
  * approves.
  *
@@ -83,14 +83,31 @@ export function requestedBranchNameError(value: unknown): string | null {
   return newBranchFieldError("name", normalizeBranchName(value))
 }
 
-/** One branch of a sign-up: an existing one picked by name, or one to create from its CRC. */
-export type RequestedBranchEntry = { branchId: number } | { crc: string; name?: string | null }
+/**
+ * One branch of a sign-up: an existing one picked by name, or one to create
+ * from its CRC, with the city the applicant says it is in
+ * (plans/OF-JOIN-applicant-new-branch-city.md).
+ */
+export type RequestedBranchEntry =
+  | { branchId: number }
+  | { crc: string; name?: string | null; city?: string | null; province?: string | null }
 
-export type RequestedNewBranch = { crc: string; name: string | null }
+/** `city` and `province` are both null, or a listed city and its own province. */
+export type RequestedNewBranch = { crc: string; name: string | null; city: string | null; province: string | null }
+
+/**
+ * A requested city as Pakistan's list spells it, with the list's province; or
+ * nulls when none was given or it is not listed. The province always comes from
+ * the list, never from the caller, so the two cannot disagree once stored.
+ */
+export function requestedBranchLocation(city: unknown): { city: string | null; province: string | null } {
+  const listed = typeof city === "string" ? findPakistanCity(city) : null
+  return listed ? { city: listed.name, province: listed.province } : { city: null, province: null }
+}
 
 /**
  * The branches to create, one per CRC, normalised. A CRC listed twice is one
- * branch, and the first name given for it is kept.
+ * branch, and the first name and the first city given for it are kept.
  */
 export function requestedNewBranches(entries: readonly RequestedBranchEntry[]): RequestedNewBranch[] {
   const byCrc = new Map<string, RequestedNewBranch>()
@@ -98,11 +115,29 @@ export function requestedNewBranches(entries: readonly RequestedBranchEntry[]): 
     if (!("crc" in entry)) continue
     const crc = normalizeCrc(entry.crc)
     const name = normalizeBranchName(entry.name) || null
+    const location = requestedBranchLocation(entry.city)
     const known = byCrc.get(crc)
-    if (!known) byCrc.set(crc, { crc, name })
-    else if (known.name === null && name !== null) known.name = name
+    if (!known) {
+      byCrc.set(crc, { crc, name, ...location })
+      continue
+    }
+    if (known.name === null && name !== null) known.name = name
+    if (known.city === null && location.city !== null) Object.assign(known, location)
   }
   return [...byCrc.values()]
+}
+
+/**
+ * Why a new branch's city, as the applicant chose it, cannot be accepted, or
+ * null. It must be one of Pakistan's listed cities, and a province sent with it
+ * must be that city's own.
+ */
+export function requestedBranchCityError(city: string, province?: string): string | null {
+  if (!city.trim()) return "Choose the city of the new branch"
+  const listed = findPakistanCity(city)
+  if (!listed) return UNLISTED_CITY_MESSAGE
+  if (province !== undefined && province.trim() !== listed.province) return `${listed.name} is in ${listed.province}`
+  return null
 }
 
 /** The username an address gets: the part before the `@`, lower-cased. */

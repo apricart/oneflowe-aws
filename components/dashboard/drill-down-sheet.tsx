@@ -62,6 +62,7 @@ import {
 Activity,
 AlertCircle,
 Box,
+Building2,
 CalendarDays,
 CheckCircle2,
 ChevronRight,
@@ -552,6 +553,9 @@ export function DrillDownSheet({
                                                                         <CalendarDays className="w-3.5 h-3.5" />
                                                                         {formatOrderTimestamp(item.approvedAt, "Approved", "Approval date unavailable")}
                                                                     </span>
+                                                                )}
+                                                                {item.organizationName && (
+                                                                    <span className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" /> {item.organizationName}</span>
                                                                 )}
                                                                 <span className="flex items-center gap-1"><Box className="w-3.5 h-3.5" /> {item.branchName}</span>
                                                                 {type === "APPROVED" && (

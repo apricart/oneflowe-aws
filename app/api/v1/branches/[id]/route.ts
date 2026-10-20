@@ -6,6 +6,13 @@ import { and, eq, ne, sql } from "drizzle-orm"
 import { getRequestScope } from "@/lib/auth"
 import { branchUpdateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
+import {
+  HIERARCHY_CONFLICT_MESSAGE,
+  isBranchHierarchyConstraintError,
+  parentBranchNameSql,
+  planBranchHierarchyUpdateInTx,
+  type HierarchyRefusal,
+} from "@/lib/server/branch-hierarchy"
 
 async function hasDuplicateBranchName(currentBranch: any, branchId: number, requestedName: unknown) {
   if (requestedName === undefined) return false
@@ -145,6 +152,9 @@ export async function GET(
       groupId: branches.groupId,
       baselineBudgetCents: branches.baselineBudgetCents,
       headCount: branches.headCount,
+      hierarchyRole: branches.hierarchyRole,
+      parentBranchId: branches.parentBranchId,
+      parentBranchName: parentBranchNameSql,
       createdAt: branches.createdAt,
       updatedAt: branches.updatedAt,
     })
@@ -198,7 +208,19 @@ export async function PATCH(
     const patchResult = buildBranchPatch(body)
     if (patchResult.error) return error(patchResult.error, 400)
     const patch = patchResult.patch
-    const item = await db.transaction(async (tx) => {
+    const outcome = await db.transaction(async (tx): Promise<{ refusal: HierarchyRefusal } | { saved: typeof branches.$inferSelect }> => {
+      // Decided against the branch's own row, locked here, and its own
+      // organization; the parent is never looked up in another tenant.
+      const hierarchy = await planBranchHierarchyUpdateInTx(tx, Number(id), {
+        hierarchyRole: body.hierarchyRole,
+        parentBranchId: body.parentBranchId,
+      })
+      if (hierarchy.kind === "refused") return { refusal: hierarchy.refusal }
+      if (hierarchy.kind === "change") {
+        patch.hierarchyRole = hierarchy.next.hierarchyRole
+        patch.parentBranchId = hierarchy.next.parentBranchId
+      }
+
       const [saved] = await tx.update(branches).set(patch).where(eq(branches.id, Number(id))).returning()
 
       // Only the fields this request actually set, on both sides: a whole-row
@@ -219,8 +241,10 @@ export async function PATCH(
         context: { fields: touched },
       })
 
-      return saved
+      return { saved }
     })
+    if ("refusal" in outcome) return error(outcome.refusal.message, outcome.refusal.status)
+    const item = outcome.saved
 
     // Invalidate branches and groups cache so GET returns fresh data immediately
     await invalidateByPrefix('branches')
@@ -228,6 +252,7 @@ export async function PATCH(
 
     return ok({ item })
   } catch (e: any) {
+    if (isBranchHierarchyConstraintError(e)) return error(HIERARCHY_CONFLICT_MESSAGE, 409)
     const databaseError = e?.cause ?? e
     const databaseCode = databaseError?.code ?? e?.code
     const databaseConstraint = databaseError?.constraint ?? e?.constraint

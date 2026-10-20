@@ -3,6 +3,7 @@ import { join, relative, resolve } from "node:path"
 
 import { describe, expect, it } from "vitest"
 
+import { APRICART_SUPPORT_API_RULES } from "@/lib/apricart-support-access"
 import { mayCreateOrder } from "@/lib/order-creation-access"
 import { canMutatePrices } from "@/lib/pricing-access"
 import { isValidRole as isValidRbacRole } from "@/lib/rbac"
@@ -11,11 +12,13 @@ import {
   warehouseBranchAssignmentsUpdateSchema,
   warehouseChallanAttachSchema,
   warehouseCityAssignmentUpdateSchema,
+  warehouseCityOrganizationUpdateSchema,
   warehouseProgressSchema,
 } from "@/lib/server/mutation-validation"
 import { canAssignRole, canManageUser } from "@/lib/server/user-access-policy"
 import {
   WAREHOUSE_API_RULES,
+  WAREHOUSE_AREAS,
   WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION,
   WAREHOUSE_CITY_MAX_LENGTH,
   WAREHOUSE_HOME,
@@ -222,6 +225,17 @@ describe("request bodies", () => {
     expect(warehouseCityAssignmentUpdateSchema.safeParse({ city: "Karachi", assigned: true, branchIds: [4] }).success).toBe(false)
     expect(warehouseCityAssignmentUpdateSchema.safeParse({ city: "x".repeat(WAREHOUSE_CITY_MAX_LENGTH + 1), assigned: true }).success).toBe(false)
   })
+
+  it("choose one organization for the cities at a time, as a JSON integer, and nothing else", () => {
+    expect(warehouseCityOrganizationUpdateSchema.parse({ organizationId: 7, assigned: true })).toEqual({ organizationId: 7, assigned: true })
+    expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationId: 7, assigned: false }).success).toBe(true)
+    expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationId: "7", assigned: true }).success).toBe(false)
+    expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationId: 0, assigned: true }).success).toBe(false)
+    expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationId: 1.5, assigned: true }).success).toBe(false)
+    expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationId: 7 }).success).toBe(false)
+    expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationIds: [7], assigned: true }).success).toBe(false)
+    expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationId: 7, assigned: true, city: "Karachi" }).success).toBe(false)
+  })
 })
 
 describe("whole-city assignments", () => {
@@ -249,13 +263,88 @@ describe("whole-city assignments", () => {
     expect(migration).toContain('"warehouse_city_assignments_user_city_uq" ON "warehouse_city_assignments" USING btree ("user_id","city_key")')
   })
 
+  it("scopes cities to organizations in a table of their own, backfilled by the same city key", () => {
+    const migration = read("drizzle/20261027120000_warehouse_city_organizations.sql")
+    const table = migration.slice(migration.indexOf('CREATE TABLE IF NOT EXISTS "warehouse_city_organizations"'))
+    expect(table.slice(0, table.indexOf(");"))).toContain('"organization_id" integer NOT NULL')
+    expect(table.slice(0, table.indexOf(");"))).not.toMatch(/"branch_id"|"city_key"/)
+    expect(migration).toContain('"warehouse_city_organizations_user_org_uq" ON "warehouse_city_organizations" USING btree ("user_id","organization_id")')
+    // The backfill keeps every branch reached today: each city's current organizations.
+    expect(migration).toContain(`ON lower(btrim(regexp_replace(b."city", '\\s+', ' ', 'g'))) = wca."city_key"`)
+    expect(read("drizzle/meta/_journal.json")).toContain('"20261027120000_warehouse_city_organizations"')
+  })
+
   it("is read with the branch assignments by the one reach loader, locked inside a write", () => {
     const scope = read("lib/server/warehouse-scope.ts")
-    expect(scope).toContain("innerJoin(branches, eq(branchCityKeySql(branches.city), warehouseCityAssignments.cityKey))")
-    expect(scope).toContain('cityQuery.for("share", { of: warehouseCityAssignments })')
+    expect(scope).toContain("innerJoin(branches, warehouseCityBranchOn())")
+    expect(scope).toContain("innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())")
+    expect(scope).toContain('cityQuery.for("share", { of: [warehouseCityAssignments, warehouseCityOrganizations] })')
     expect(scope).toContain("assignedBranchIds: [...assignments, ...cityBranches].map((row) => row.branchId)")
   })
+
+  // A city rule reaches only the branches of the organizations chosen for the
+  // same user (plans/OF-WAREHOUSE-city-assignments-by-organization.md). Every
+  // module that reads warehouse_city_assignments applies that intersection; a
+  // new reader goes on this list, or it would reach every organization again.
+  it("is intersected with the chosen organizations by every reader", () => {
+    const rule = code("lib/server/warehouse-city-rule.ts")
+    expect(rule).toContain("eq(branchCityKeySql(branches.city), warehouseCityAssignments.cityKey)")
+    expect(rule).toContain("eq(warehouseCityOrganizations.userId, warehouseCityAssignments.userId)")
+    expect(rule).toContain("eq(warehouseCityOrganizations.organizationId, branches.organizationId)")
+
+    const readers: string[] = []
+    const walk = (current: string) => {
+      for (const entry of readdirSync(current)) {
+        if (entry === "node_modules" || entry === ".next") continue
+        const path = join(current, entry)
+        if (statSync(path).isDirectory()) walk(path)
+        else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)
+          && /\.from\(\s*warehouseCityAssignments\s*\)|FROM \$\{warehouseCityAssignments\}/.test(code(path))) {
+          readers.push(relative(process.cwd(), path).split("\\").join("/"))
+        }
+      }
+    }
+    for (const root of ["app", "lib", "scripts"]) walk(resolve(process.cwd(), root))
+    expect(readers.sort((a, b) => a.localeCompare(b))).toEqual([
+      "lib/server/support-notifications.ts",
+      "lib/server/warehouse-city-coverage.ts",
+      "lib/server/warehouse-order-notifications.ts",
+      "lib/server/warehouse-scope.ts",
+      "lib/server/warehouse-team.ts",
+    ])
+
+    // The reach and both recipient lists match a branch through the shared rule.
+    for (const path of [
+      "lib/server/warehouse-scope.ts",
+      "lib/server/warehouse-order-notifications.ts",
+      "lib/server/support-notifications.ts",
+    ]) {
+      const source = code(path)
+      expect(source, path).toContain("innerJoin(branches, warehouseCityBranchOn())")
+      expect(source, path).toContain("innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())")
+      expect(source, path).not.toContain("branchCityKeySql(branches.city), warehouseCityAssignments.cityKey")
+    }
+    // The join coverage matches by key for one organization; both its queries are fenced to it.
+    const coverage = code("lib/server/warehouse-city-coverage.ts")
+    expect(coverage).toContain("AND ${warehouseCityOrganizations.organizationId} = ${organizationId}")
+    expect(coverage).toContain("eq(warehouseCityOrganizations.organizationId, input.organizationId)")
+    // The team page checks a new city against the chosen organizations.
+    expect(code("lib/server/warehouse-team.ts")).toContain("eq(warehouseCityOrganizations.organizationId, branches.organizationId)")
+  })
 })
+
+/**
+ * A support handler on the warehouse's list: the support rule is
+ * lib/support-access.ts's, and the warehouse's branches are loaded into the
+ * viewer, or its queue reads nothing (plans/OF-WAREHOUSE-support-queue.md).
+ */
+function expectSupportHandler(rule: { route: string; methods: readonly string[] }, source: string) {
+  expect(source, rule.route).toContain("isSupportParticipantRole(")
+  expect(source, rule.route).toContain("await withSupportReach(")
+  for (const method of rule.methods) {
+    expect(source, `${rule.route} ${method}`).toMatch(new RegExp(`export async function ${method}\\b`))
+  }
+}
 
 describe("the API allowlist", () => {
   it.each([
@@ -283,6 +372,14 @@ describe("the API allowlist", () => {
     ["GET", "/api/v1/images/products/0f8fad5b-d9cb-469f-a165-70867728950e.webp"],
     ["POST", "/api/v1/upload/image"],
     ["POST", "/api/v1/users/me/change-password"],
+    // The support queue of its branches (plans/OF-WAREHOUSE-support-queue.md).
+    ["GET", "/api/v1/support/threads"],
+    ["GET", "/api/v1/support/threads/42"],
+    ["PATCH", "/api/v1/support/threads/42"],
+    ["POST", "/api/v1/support/threads/42/messages"],
+    ["GET", "/api/v1/support/stats"],
+    ["POST", "/api/v1/support/attachments"],
+    ["GET", "/api/v1/support/attachments/7"],
   ])("admits %s %s", (method, path) => {
     expect(isWarehouseApiRequestAllowed(method, path)).toBe(true)
   })
@@ -302,6 +399,7 @@ describe("the API allowlist", () => {
     ["GET", "/api/v1/warehouse-team"],
     ["PUT", "/api/v1/warehouse-team/abc/branches"],
     ["PUT", "/api/v1/warehouse-team/abc/cities"],
+    ["PUT", "/api/v1/warehouse-team/abc/city-organizations"],
     ["POST", "/api/v1/warehouse/orders/42"],
     ["PUT", "/api/v1/warehouse/orders/42/progress"],
     ["POST", "/api/v1/warehouse/orders/abc/progress"],
@@ -354,6 +452,15 @@ describe("the API allowlist", () => {
     ["DELETE", "/api/v1/warehouse/notifications"],
     ["PATCH", "/api/v1/warehouse/notifications/3"],
     ["GET", "/api/v1/upload/image"],
+    // It answers its branches' threads; it raises none, and the product picker
+    // belongs to raising one. Only the verbs the support pages use.
+    ["POST", "/api/v1/support/threads"],
+    ["GET", "/api/v1/support/products"],
+    ["DELETE", "/api/v1/support/threads/42"],
+    ["GET", "/api/v1/support/threads/42/messages"],
+    ["GET", "/api/v1/support/threads/abc"],
+    ["GET", "/api/v1/support/attachments/7/raw"],
+    ["GET", "/api/v1/images/support/0f8fad5b-d9cb-469f-a165-70867728950e.png"],
   ])("refuses %s %s", (method, path) => {
     expect(isWarehouseApiRequestAllowed(method, path)).toBe(false)
   })
@@ -372,6 +479,8 @@ describe("the API allowlist", () => {
           const exported = new RegExp(`export async function ${method}\\b`).test(source)
           expect(exported, `${rule.route} ${method}`).toBe(rule.methods.includes(method))
         }
+      } else if (rule.route.startsWith("app/api/v1/support/")) {
+        expectSupportHandler(rule, source)
       } else if (rule.route === "app/api/v1/upload/image/route.ts") {
         // The challan, and only for an order at a branch it serves.
         expect(source).toContain("warehouseChallanUploadRefusal(actor.id, orderId)")
@@ -482,6 +591,19 @@ describe("wiring", () => {
     expect(read("app/(portal)/warehouse-team/page.tsx")).toContain("<WarehouseTeamCard />")
     expect(read("components/shell/sidebar.tsx")).toContain('{ href: "/warehouse-team", label: "Warehouse Team", icon: Warehouse }')
     expect(read("components/order-desk/desk-team-manager.tsx")).not.toContain("Warehouse")
+  })
+
+  it("reaches the shared support pages, with the same support calls Apricart Support makes", () => {
+    // plans/OF-WAREHOUSE-support-queue.md
+    expect(WAREHOUSE_AREAS).toEqual(["/warehouse", "/support"])
+    const supportRules = (rules: readonly { route: string; methods: readonly string[] }[]) =>
+      rules.filter((rule) => rule.route.startsWith("app/api/v1/support/")).map((rule) => `${rule.route} ${rule.methods.join(",")}`)
+    expect(supportRules(WAREHOUSE_API_RULES)).toEqual(supportRules(APRICART_SUPPORT_API_RULES))
+    expect(read("app/support/layout.tsx")).toContain("if (isWarehouseRole(role)) {")
+    expect(read("components/warehouse/warehouse-workspace.tsx")).toContain("<WarehouseSupportLink")
+    expect(read("components/support/support-chrome.tsx")).toContain(
+      'if (isWarehouseRole(role)) return { href: WAREHOUSE_HOME, label: "Back to warehouse" }',
+    )
   })
 
   it("gates the workspace on the server too", () => {
