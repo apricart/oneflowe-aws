@@ -1091,8 +1091,9 @@ type AppliedApprover = {
 type ApproverRoleIds = { groupUser: number; branchAdmin: number }
 
 /**
- * A new approver with a temporary password and the level: a Branch Admin of the
- * one branch, or a Group User assigned to every branch when there are more.
+ * A new approver with a temporary password and the level: Levels 1 and 2 are
+ * always Group Users; later levels are Branch Admins for one branch or Group
+ * Users assigned to every branch when there are more.
  */
 async function createApprover(
   context: DecisionContext,

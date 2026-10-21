@@ -286,9 +286,9 @@ describe("DepartmentJoinReviewDialog — the role each approver ends with", () =
     branches: [{ requestBranchId: 31, kind: "existing", branchId: 5, name: "Clifton", costCenterId: null }],
   }
 
-  it("says a new approver for one branch becomes that branch's Financial Approver", async () => {
+  it("says a new Level 2 approver for one branch becomes a Group Financial Approver", async () => {
     renderDialog(baseReview(oneBranch))
-    expect(await screen.findByText(/a Financial Approver of Clifton is created with Level 2/)).toBeTruthy()
+    expect(await screen.findByText(/a Group Financial Approver is created with Level 2 and these branches/)).toBeTruthy()
     expect(screen.getByText("Order Initiator (one branch)")).toBeTruthy()
   })
 
@@ -321,7 +321,7 @@ describe("DepartmentJoinReviewDialog — the role each approver ends with", () =
     fireEvent.change(select, { target: { value: "5" } })
 
     expect(screen.getByText(/this person has 1 branch, not 2/)).toBeTruthy()
-    expect(screen.getByText(/a Financial Approver of Clifton is created with Level 2/)).toBeTruthy()
+    expect(screen.getByText(/a Group Financial Approver is created with Level 2 and these branches/)).toBeTruthy()
     expect(screen.getByText("Order Initiator (one branch)")).toBeTruthy()
   })
 })

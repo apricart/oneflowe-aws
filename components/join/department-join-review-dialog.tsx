@@ -182,7 +182,8 @@ const CONVERTED_NOTE = "They become a Group Financial Approver instead of a Fina
 /**
  * What approving does with one approver. `branchCount` is the count after
  * Head Office's choices in this dialog, so a new approver's role shown here is
- * the one the approval will give (one branch: Branch Admin; more: Group User).
+ * the one the approval will give (Levels 1 and 2: Group User; other levels:
+ * Branch Admin for one branch, Group User for more).
  */
 function resolutionText(
   resolution: ApproverResolution,
@@ -194,7 +195,7 @@ function resolutionText(
   const who = existingName ?? "Existing account"
   switch (resolution.kind) {
     case "create":
-      return newApproverRole(branchCount) === "BRANCH_ADMIN"
+      return newApproverRole(level, branchCount) === "BRANCH_ADMIN"
         ? `No account yet: a Financial Approver of ${onlyBranch} is created with Level ${level}, and a temporary password is emailed.`
         : `No account yet: a Group Financial Approver is created with Level ${level} and these branches, and a temporary password is emailed.`
     case "assign":
