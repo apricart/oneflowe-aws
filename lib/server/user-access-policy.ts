@@ -22,6 +22,9 @@ const ROLE_LEVEL: Record<SystemRole, number> = {
   WAREHOUSE: 7,
   // And Apricart's support agents (`lib/apricart-support-access.ts`).
   APRICART_SUPPORT: 7,
+  // And Apricart's riders (`lib/rider-access.ts`). Warehouse may create them
+  // too via rider-ops; level 7 keeps Head Office from assigning the role.
+  RIDER: 7,
   SUPER_ADMIN: 8,
 }
 

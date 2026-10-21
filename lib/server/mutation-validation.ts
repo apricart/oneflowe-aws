@@ -122,6 +122,8 @@ export const systemRoleSchema = z.enum([
   // Apricart's support agents: answer every organization's support requests
   // and reach nothing else (`lib/apricart-support-access.ts`).
   "APRICART_SUPPORT",
+  // Apricart's riders: deliver assigned orders (`lib/rider-access.ts`).
+  "RIDER",
 ])
 
 export type SystemRole = z.infer<typeof systemRoleSchema>

@@ -722,6 +722,13 @@
       "when": 1791100800000,
       "tag": "20261027120000_warehouse_city_organizations",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1791104400000,
+      "tag": "20261028120000_add_rider_delivery",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,7 @@ import { isOrderDeskRole, orderDeskUserShapeError } from "@/lib/order-desk-acces
 import { apricartExecutiveUserShapeError, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access"
 import { apricartSupportUserShapeError, isApricartSupportRole } from "@/lib/apricart-support-access"
+import { isRiderRole, riderUserShapeError } from "@/lib/rider-access"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { usernameExists } from "@/lib/user-username-uniqueness"
@@ -59,6 +60,7 @@ function apricartStaffShapeError(
   else if (isApricartExecutiveRole(role)) shapeError = apricartExecutiveUserShapeError(organizationId, branchId)
   else if (isWarehouseRole(role)) shapeError = warehouseUserShapeError(organizationId, branchId)
   else if (isApricartSupportRole(role)) shapeError = apricartSupportUserShapeError(organizationId, branchId)
+  else if (isRiderRole(role)) shapeError = riderUserShapeError(organizationId, branchId)
   else return undefined
   return shapeError ? { message: shapeError, status: 400 } : null
 }

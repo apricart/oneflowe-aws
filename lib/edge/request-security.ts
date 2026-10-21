@@ -48,6 +48,8 @@ export function requestBodyLimitForPath(pathname: string): number {
   // MAX_IMAGE_UPLOAD_BYTES once decoded; the allowance here covers the
   // multipart envelope around it.
   if (pathname === "/api/v1/support/attachments") return 5 * 1024 * 1024
+  // Rider proof-of-delivery: up to 3 images × 5 MB plus multipart overhead.
+  if (/^\/api\/v1\/rider\/orders\/[^/]+\/pod$/.test(pathname)) return 16 * 1024 * 1024
   if (pathname.includes("/import")) return 3 * 1024 * 1024
   if (pathname === "/api/v1/admin/global-inventory") return 7 * 1024 * 1024
   if (pathname.startsWith("/api/v1/inventory/global-products/")) return 7 * 1024 * 1024

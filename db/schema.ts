@@ -16,6 +16,7 @@ import {
   date,
   foreignKey,
   unique,
+  doublePrecision,
   type PgTableExtraConfigValue,
 } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
@@ -3504,5 +3505,157 @@ export const productRequests = pgTable(
       "product_requests_availability_ck",
       sql`${t.estimatedAvailableOn} IS NULL OR ${t.status} = 'APPROVED'`,
     ),
+  ],
+)
+
+// ---------------------------------------------------------------------------
+// Rider delivery (plans/OF-RIDER-DELIVERY-backend.md) — new tables only
+// ---------------------------------------------------------------------------
+
+export const riderProfiles = pgTable(
+  "rider_profiles",
+  {
+    userId: uuid("user_id")
+      .primaryKey()
+      .references(() => users.id, { onDelete: "cascade" }),
+    code: varchar("code", { length: 32 }).notNull(),
+    phone: varchar("phone", { length: 32 }),
+    vehicleNumber: varchar("vehicle_number", { length: 64 }),
+    isOnDuty: boolean("is_on_duty").notNull().default(false),
+    avatarUrl: text("avatar_url"),
+    createdByUserId: uuid("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [uniqueIndex("rider_profiles_code_uq").on(t.code)],
+)
+
+export const riderDepots = pgTable(
+  "rider_depots",
+  {
+    id: serial("id").primaryKey(),
+    warehouseUserId: uuid("warehouse_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 255 }).notNull().default("Warehouse"),
+    latitude: doublePrecision("latitude").notNull(),
+    longitude: doublePrecision("longitude").notNull(),
+    address: text("address"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("rider_depots_warehouse_user_uq").on(t.warehouseUserId),
+    check("rider_depots_lat_ck", sql`${t.latitude} >= -90 AND ${t.latitude} <= 90`),
+    check("rider_depots_lng_ck", sql`${t.longitude} >= -180 AND ${t.longitude} <= 180`),
+  ],
+)
+
+/** Delivery-leg statuses for rider_order_assignments (not orders.fulfillment_status). */
+export const RIDER_ASSIGNMENT_STATUSES = [
+  "ASSIGNED",
+  "OUT_FOR_DELIVERY",
+  "POD_SUBMITTED",
+  "POD_REJECTED",
+  "POD_APPROVED",
+  "FULFILLMENT_PENDING",
+  "FULFILLMENT_COMPLETED",
+] as const
+
+export type RiderAssignmentStatus = (typeof RIDER_ASSIGNMENT_STATUSES)[number]
+
+export const riderOrderAssignments = pgTable(
+  "rider_order_assignments",
+  {
+    id: serial("id").primaryKey(),
+    orderId: integer("order_id")
+      .notNull()
+      .references(() => orders.id, { onDelete: "cascade" }),
+    riderUserId: uuid("rider_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    assignedByUserId: uuid("assigned_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    deliverySequence: integer("delivery_sequence").notNull(),
+    deliveryLat: doublePrecision("delivery_lat").notNull(),
+    deliveryLng: doublePrecision("delivery_lng").notNull(),
+    deliveryAddressText: text("delivery_address_text"),
+    status: varchar("status", { length: 32 }).notNull().default("ASSIGNED"),
+    assignedAt: timestamp("assigned_at", { withTimezone: true }).defaultNow().notNull(),
+    outForDeliveryAt: timestamp("out_for_delivery_at", { withTimezone: true }),
+    podSubmittedAt: timestamp("pod_submitted_at", { withTimezone: true }),
+    podApprovedAt: timestamp("pod_approved_at", { withTimezone: true }),
+    podRejectedAt: timestamp("pod_rejected_at", { withTimezone: true }),
+    podRejectReason: text("pod_reject_reason"),
+    arrivedAt: timestamp("arrived_at", { withTimezone: true }),
+    arrivalLat: doublePrecision("arrival_lat"),
+    arrivalLng: doublePrecision("arrival_lng"),
+    fulfilledAt: timestamp("fulfilled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("rider_order_assignments_open_order_uq")
+      .on(t.orderId)
+      .where(sql`${t.status} <> 'FULFILLMENT_COMPLETED'`),
+    index("rider_order_assignments_rider_status_idx").on(t.riderUserId, t.status),
+    index("rider_order_assignments_rider_seq_idx").on(t.riderUserId, t.deliverySequence),
+    check(
+      "rider_order_assignments_status_ck",
+      sql`${t.status} IN ('ASSIGNED', 'OUT_FOR_DELIVERY', 'POD_SUBMITTED', 'POD_REJECTED', 'POD_APPROVED', 'FULFILLMENT_PENDING', 'FULFILLMENT_COMPLETED')`,
+    ),
+    check("rider_order_assignments_seq_ck", sql`${t.deliverySequence} >= 1`),
+    check("rider_order_assignments_lat_ck", sql`${t.deliveryLat} >= -90 AND ${t.deliveryLat} <= 90`),
+    check("rider_order_assignments_lng_ck", sql`${t.deliveryLng} >= -180 AND ${t.deliveryLng} <= 180`),
+  ],
+)
+
+export const riderPodImages = pgTable(
+  "rider_pod_images",
+  {
+    id: serial("id").primaryKey(),
+    assignmentId: integer("assignment_id")
+      .notNull()
+      .references(() => riderOrderAssignments.id, { onDelete: "cascade" }),
+    storageKey: varchar("storage_key", { length: 256 }).notNull(),
+    contentType: varchar("content_type", { length: 64 }).notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    uploadedByUserId: uuid("uploaded_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("rider_pod_images_assignment_idx").on(t.assignmentId),
+    uniqueIndex("rider_pod_images_storage_key_uq").on(t.storageKey),
+    check("rider_pod_images_size_ck", sql`${t.sizeBytes} > 0 AND ${t.sizeBytes} <= 5242880`),
+    check("rider_pod_images_key_ck", sql`${t.storageKey} LIKE 'rider-pod/%'`),
+  ],
+)
+
+export const riderLocationEvents = pgTable(
+  "rider_location_events",
+  {
+    id: serial("id").primaryKey(),
+    riderUserId: uuid("rider_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    assignmentId: integer("assignment_id").references(() => riderOrderAssignments.id, {
+      onDelete: "set null",
+    }),
+    kind: varchar("kind", { length: 32 }).notNull().default("ARRIVAL"),
+    latitude: doublePrecision("latitude").notNull(),
+    longitude: doublePrecision("longitude").notNull(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }).defaultNow().notNull(),
+    distanceMeters: doublePrecision("distance_meters"),
+  },
+  (t) => [
+    index("rider_location_events_rider_recorded_idx").on(t.riderUserId, t.recordedAt),
+    check("rider_location_events_kind_ck", sql`${t.kind} IN ('ARRIVAL', 'SAMPLE')`),
+    check("rider_location_events_lat_ck", sql`${t.latitude} >= -90 AND ${t.latitude} <= 90`),
+    check("rider_location_events_lng_ck", sql`${t.longitude} >= -180 AND ${t.longitude} <= 180`),
   ],
 )

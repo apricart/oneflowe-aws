@@ -44,6 +44,13 @@ import {
   isWarehouseRole,
 } from "@/lib/warehouse-access"
 import {
+  RIDER_AREAS,
+  RIDER_HOME,
+  isRiderApiRequestAllowed,
+  isRiderOpsApiRequestAllowed,
+  isRiderRole,
+} from "@/lib/rider-access"
+import {
   APRICART_SUPPORT_AREAS,
   APRICART_SUPPORT_HOME,
   isApricartSupportApiRequestAllowed,
@@ -269,8 +276,41 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
   }
   // And for Apricart's warehouse, which also has no organization of its own:
   // its queue, its progress write and the challan upload, nothing else.
-  if (isWarehouseRole((token as any)?.role) && !isWarehouseApiRequestAllowed(req.method, pathname)) {
+  // Rider-ops routes are additive and admitted here so warehouse can manage riders.
+  if (
+    isWarehouseRole((token as any)?.role) &&
+    !isWarehouseApiRequestAllowed(req.method, pathname) &&
+    !isRiderOpsApiRequestAllowed(req.method, pathname)
+  ) {
     logger("middleware", { reason: "warehouse_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
+  // Riders: Bearer-authenticated mobile API only. Login/refresh are public.
+  // Match `/api/v1/rider/...` only — never `/api/v1/rider-ops/...` (warehouse).
+  if (pathname === "/api/v1/rider" || pathname.startsWith("/api/v1/rider/")) {
+    if (!isRiderApiRequestAllowed(req.method, pathname)) {
+      logger("middleware", { reason: "rider_api_not_allowed", path: pathname })
+      return withSecurityHeaders(
+        NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+        pathname,
+      )
+    }
+    // Login + refresh need no session token.
+    if (
+      req.method.toUpperCase() === "POST" &&
+      (pathname === "/api/v1/rider/auth/login" ||
+        pathname === "/api/v1/rider/auth/refresh" ||
+        pathname === "/api/v1/rider/auth/login/" ||
+        pathname === "/api/v1/rider/auth/refresh/")
+    ) {
+      return withSecurityHeaders(response, pathname)
+    }
+  }
+  if (isRiderRole((token as any)?.role) && !isRiderApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "rider_session_api_not_allowed", path: pathname })
     return withSecurityHeaders(
       NextResponse.json({ error: "Forbidden" }, { status: 403 }),
       pathname,
@@ -418,6 +458,7 @@ const SINGLE_AREA_ROLES: ReadonlyArray<{
   { matches: isApricartExecutiveRole, allows: withinAreas(APRICART_EXECUTIVE_AREAS), home: APRICART_EXECUTIVE_HOME },
   { matches: isWarehouseRole, allows: withinAreas(WAREHOUSE_AREAS), home: WAREHOUSE_HOME },
   { matches: isApricartSupportRole, allows: withinAreas(APRICART_SUPPORT_AREAS), home: APRICART_SUPPORT_HOME },
+  { matches: isRiderRole, allows: withinAreas(RIDER_AREAS), home: RIDER_HOME },
 ]
 
 /**
