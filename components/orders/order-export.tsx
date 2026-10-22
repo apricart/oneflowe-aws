@@ -18,6 +18,7 @@ import { sanitizeSpreadsheetRecords } from "@/lib/spreadsheet"
 import { getOrderStatusDisplay } from "@/lib/order-status-display"
 import type { OrderStatusContext } from "@/lib/order-status"
 import { renamedRoleName } from "@/lib/role-display-names"
+import { isApricartSupportRole } from "@/lib/apricart-support-access"
 
 interface OrderExportProps {
     /**
@@ -35,7 +36,7 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
     const [isExporting, setIsExporting] = useState(false)
 
     const formatDataForExport = (order: any) => {
-        const isSuperAdmin = role === "SUPER_ADMIN"
+        const showOrganization = role === "SUPER_ADMIN" || isApricartSupportRole(role)
 
         const statusDisplay = getOrderStatusDisplay(order, statusContext)
 
@@ -54,7 +55,7 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
         }
 
         // Add Org for Super Admin
-        if (isSuperAdmin) {
+        if (showOrganization) {
             return {
                 "ID": data.ID,
                 "TID": data.TID,
@@ -106,9 +107,9 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
         doc.text(`Generated on: ${new Date().toLocaleDateString()}`, 14, 30)
         if (role) doc.text(`Role: ${renamedRoleName(role) ?? role.replaceAll("_", " ")}`, 14, 36)
 
-        const isSuperAdmin = role === "SUPER_ADMIN"
+        const showOrganization = role === "SUPER_ADMIN" || isApricartSupportRole(role)
         const headers = ["ID", "TID", "Date", "Group", "Branch", "Status", "Fulfillment", "Payment", "Refund", "Amount", "Items", "Reason"]
-        if (isSuperAdmin) headers.splice(2, 0, "Organization")
+        if (showOrganization) headers.splice(2, 0, "Organization")
 
         const tableData = orders.map(order => {
             const statusDisplay = getOrderStatusDisplay(order, statusContext)
@@ -127,7 +128,7 @@ export function OrderExport({ fetchOrders, totalOrders, role, statusContext = "d
                 order.itemNames || "-",
                 order.rejectionReason || "-"
             ]
-            if (isSuperAdmin) row.splice(2, 0, order.organizationName || "-")
+            if (showOrganization) row.splice(2, 0, order.organizationName || "-")
             return row
         })
 

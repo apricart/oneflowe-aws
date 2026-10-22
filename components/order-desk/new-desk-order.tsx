@@ -25,12 +25,16 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { fetcher } from "@/lib/fetcher"
+import { formatPriceInput } from "@/lib/group-price-input"
 import { INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH } from "@/lib/order-desk-access"
 import {
   buildDeskOrderRequest,
   deskDraftChecklist,
+  deskLineUnitPriceCents,
   estimateDraftTotalCents,
   filledLines,
+  isDeskPriceChanged,
+  parseDeskPriceInput,
   NOTES_MAX_LENGTH,
   SCREENSHOT_TYPES,
   screenshotFileError,
@@ -65,6 +69,7 @@ const EMPTY_DRAFT: DeskDraft = {
   organizationId: null,
   branchId: null,
   quantities: {},
+  prices: {},
   intakeChannel: "",
   intakeReference: "",
   poNumber: "",
@@ -187,34 +192,82 @@ function CustomerStep({
   )
 }
 
+/**
+ * The price the order charges for this product. Blank charges the catalogue
+ * price (shown as the placeholder); anything typed is charged instead and shown
+ * to the approving executive beside the catalogue price.
+ */
+function LinePriceInput({
+  item,
+  rawPrice,
+  disabled,
+  onPrice,
+}: Readonly<{ item: CatalogueItem; rawPrice: string | undefined; disabled: boolean; onPrice: (raw: string) => void }>) {
+  const invalid = parseDeskPriceInput(rawPrice, item.name).kind === "invalid"
+  return (
+    <div className="relative w-28">
+      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground" aria-hidden="true">Rs</span>
+      <Input
+        aria-label={`Price per ${item.unit} of ${item.name}, in rupees including tax`}
+        aria-invalid={invalid}
+        inputMode="decimal"
+        placeholder={item.priceCents === null ? "Price" : formatPriceInput(item.priceCents)}
+        value={rawPrice ?? ""}
+        disabled={disabled}
+        onChange={(event) => onPrice(event.target.value)}
+        className={cn("h-9 pl-8 text-right tabular-nums", invalid && "border-rose-400 focus-visible:ring-rose-400")}
+      />
+    </div>
+  )
+}
+
 function ProductRow({
   item,
   raw,
+  rawPrice,
   disabled,
   onQuantity,
-}: Readonly<{ item: CatalogueItem; raw: string | undefined; disabled: boolean; onQuantity: (quantity: number) => void }>) {
+  onPrice,
+}: Readonly<{
+  item: CatalogueItem
+  raw: string | undefined
+  rawPrice: string | undefined
+  disabled: boolean
+  onQuantity: (quantity: number) => void
+  onPrice: (raw: string) => void
+}>) {
   const quantity = parseQuantity(raw || 0)
   const selected = Number.isFinite(quantity) && quantity > 0
   const outOfStock = item.stockQuantity <= 0
-  const price = item.priceCents === null ? "No price" : `${formatPKR(item.priceCents / 100)} per ${item.unit}`
+  const changed = isDeskPriceChanged(item, rawPrice)
+  const price = item.priceCents === null ? "No catalogue price" : `${formatPKR(item.priceCents / 100)} per ${item.unit}`
   return (
     <li className={cn("flex flex-wrap items-center justify-between gap-3 px-3 py-2.5 transition-colors", selected && "bg-indigo-50/70 dark:bg-indigo-950/30")}>
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">{item.name}</p>
         <p className="text-xs text-muted-foreground">
-          {item.productCode} · {price} ·{" "}
+          {item.productCode} · <span className={cn(changed && "line-through")}>{price}</span>
+          {changed && (
+            <span className="ml-1 font-medium text-indigo-700 dark:text-indigo-300">
+              Custom {formatPKR((deskLineUnitPriceCents(item, rawPrice) ?? 0) / 100)}
+            </span>
+          )}
+          {" "}·{" "}
           <span className={cn(outOfStock && "font-medium text-amber-700 dark:text-amber-400")}>
             {outOfStock ? "Out of stock" : `${formatQuantity(item.stockQuantity)} in stock`}
           </span>
         </p>
       </div>
-      <QuantityStepper
-        value={selected ? quantity : 0}
-        step={sanitizeQuantityStep(item.allowDecimalQuantity, item.quantityStep)}
-        label={`Quantity of ${item.name}`}
-        disabled={disabled}
-        onChange={onQuantity}
-      />
+      <div className="flex items-center gap-2">
+        <LinePriceInput item={item} rawPrice={rawPrice} disabled={disabled} onPrice={onPrice} />
+        <QuantityStepper
+          value={selected ? quantity : 0}
+          step={sanitizeQuantityStep(item.allowDecimalQuantity, item.quantityStep)}
+          label={`Quantity of ${item.name}`}
+          disabled={disabled}
+          onChange={onQuantity}
+        />
+      </div>
     </li>
   )
 }
@@ -225,16 +278,20 @@ function ProductsStep({
   loading,
   failed,
   quantities,
+  prices,
   disabled,
   onQuantity,
+  onPrice,
 }: Readonly<{
   catalogueUrl: string | null
   catalogue: CatalogueItem[]
   loading: boolean
   failed: boolean
   quantities: Readonly<Record<number, string>>
+  prices: Readonly<Record<number, string>>
   disabled: boolean
   onQuantity: (inventoryId: number, quantity: number) => void
+  onPrice: (inventoryId: number, raw: string) => void
 }>) {
   const [search, setSearch] = useState("")
   const visible = useMemo(() => {
@@ -284,8 +341,10 @@ function ProductsStep({
                 key={item.organizationInventoryId}
                 item={item}
                 raw={quantities[item.organizationInventoryId]}
+                rawPrice={prices[item.organizationInventoryId]}
                 disabled={disabled}
                 onQuantity={(quantity) => onQuantity(item.organizationInventoryId, quantity)}
+                onPrice={(raw) => onPrice(item.organizationInventoryId, raw)}
               />
             ))}
           </ul>
@@ -297,7 +356,12 @@ function ProductsStep({
   return (
     <Card>
       <CardContent className="space-y-4 p-5">
-        <StepHeading number={2} done={chosen > 0} title="Products" description="Set a quantity for each product the customer asked for." />
+        <StepHeading
+          number={2}
+          done={chosen > 0}
+          title="Products"
+          description="Set a quantity for each product the customer asked for. Leave the price blank to charge the catalogue price, or type the price agreed with the customer (including tax)."
+        />
         {body}
       </CardContent>
     </Card>
@@ -446,20 +510,28 @@ function OriginStep({
   )
 }
 
-function SummaryLines({ lines, disabled, onRemove }: Readonly<{ lines: SummaryLine[]; disabled: boolean; onRemove: (inventoryId: number) => void }>) {
+function SummaryLines({
+  lines,
+  prices,
+  disabled,
+  onRemove,
+}: Readonly<{ lines: SummaryLine[]; prices: Readonly<Record<number, string>>; disabled: boolean; onRemove: (inventoryId: number) => void }>) {
   if (lines.length === 0) return <p className="text-sm text-muted-foreground">Nothing added yet.</p>
   return (
     <ul className="space-y-2">
       {lines.map(({ organizationInventoryId, raw, item }) => {
         const quantity = parseQuantity(raw)
-        const lineTotal = item.priceCents === null ? "—" : formatPKR(calculateLineCents(item.priceCents, quantity) / 100)
+        const unitPriceCents = deskLineUnitPriceCents(item, prices[organizationInventoryId])
+        const changed = isDeskPriceChanged(item, prices[organizationInventoryId])
+        const lineTotal = unitPriceCents === null ? "—" : formatPKR(calculateLineCents(unitPriceCents, quantity) / 100)
         return (
           <li key={organizationInventoryId} className="flex items-start justify-between gap-2 text-sm">
             <div className="min-w-0">
               <p className="truncate font-medium">{item.name}</p>
               <p className="text-xs text-muted-foreground">
                 {formatQuantity(quantity)} {item.unit}
-                {item.priceCents !== null && ` × ${formatPKR(item.priceCents / 100)}`}
+                {unitPriceCents !== null && ` × ${formatPKR(unitPriceCents / 100)}`}
+                {changed && <span className="ml-1 font-medium text-indigo-700 dark:text-indigo-300">(custom price)</span>}
               </p>
             </div>
             <div className="flex items-center gap-1">
@@ -522,6 +594,7 @@ function SummaryPanel({
   organization,
   branchName,
   lines,
+  prices,
   unavailableCount,
   estimatedCents,
   checks,
@@ -535,6 +608,7 @@ function SummaryPanel({
   organization: Target | null
   branchName: string | null
   lines: SummaryLine[]
+  prices: Readonly<Record<number, string>>
   unavailableCount: number
   estimatedCents: number
   checks: DeskDraftCheck[]
@@ -561,7 +635,7 @@ function SummaryPanel({
           </div>
           <div className="space-y-2">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Products ({lines.length})</p>
-            <SummaryLines lines={lines} disabled={busy} onRemove={onRemove} />
+            <SummaryLines lines={lines} prices={prices} disabled={busy} onRemove={onRemove} />
             <UnavailableLines count={unavailableCount} disabled={busy} onRemove={onRemoveUnavailable} />
           </div>
           <div className="flex items-baseline justify-between border-t pt-3">
@@ -580,7 +654,7 @@ function SummaryPanel({
           </Button>
           <p className="flex items-start gap-2 text-xs text-muted-foreground">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            An Apricart Executive approves the order before delivery. The final total is calculated when it is created.
+            An Apricart Executive approves the order before delivery, and sees any price you typed beside the catalogue price. The final total is calculated when it is created.
           </p>
         </CardContent>
       </Card>
@@ -641,6 +715,11 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
       ...current,
       quantities: { ...current.quantities, [inventoryId]: quantity > 0 ? String(quantity) : "" },
     }))
+  }
+
+  const setPrice = (inventoryId: number, raw: string) => {
+    setFormError(null)
+    setDraft((current) => ({ ...current, prices: { ...current.prices, [inventoryId]: raw } }))
   }
 
   const replacePreview = (next: string | null) => {
@@ -732,8 +811,8 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
           disabled={submitting}
           // A new organization means a new branch and a new catalogue: nothing
           // chosen for the previous one may carry over.
-          onOrganization={(value) => update({ organizationId: Number(value), branchId: null, quantities: {} })}
-          onBranch={(value) => update({ branchId: Number(value), quantities: {} })}
+          onOrganization={(value) => update({ organizationId: Number(value), branchId: null, quantities: {}, prices: {} })}
+          onBranch={(value) => update({ branchId: Number(value), quantities: {}, prices: {} })}
         />
         <ProductsStep
           key={catalogueUrl ?? "none"}
@@ -742,8 +821,10 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
           loading={catalogueLoading}
           failed={Boolean(catalogueError)}
           quantities={draft.quantities}
+          prices={draft.prices}
           disabled={submitting}
           onQuantity={setQuantity}
+          onPrice={setPrice}
         />
         <OriginStep
           draft={draft}
@@ -768,6 +849,7 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
         organization={organization}
         branchName={branch?.name ?? null}
         lines={lines}
+        prices={draft.prices}
         unavailableCount={unavailable.length}
         estimatedCents={estimateDraftTotalCents(draft, catalogue)}
         checks={deskDraftChecklist(draft)}

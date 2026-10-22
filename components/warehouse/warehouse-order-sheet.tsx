@@ -409,7 +409,7 @@ export function WarehouseOrderSheet({
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Order</p>
             <SheetTitle className="break-all font-mono text-lg">{order?.tid ?? "Loading…"}</SheetTitle>
             <SheetDescription className="mt-0.5">
-              {order ? `${order.organizationName} · ${order.branchName}` : "Loading the picking sheet"}
+              {order ? `Order ID ${order.id} · ${order.organizationName} · ${order.branchName}` : "Loading the picking sheet"}
             </SheetDescription>
           </div>
           {data && order && (

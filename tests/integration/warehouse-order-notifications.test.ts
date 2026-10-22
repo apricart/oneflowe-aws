@@ -23,6 +23,7 @@ import {
   users,
   warehouseAssignments,
   warehouseCityAssignments,
+  warehouseCityOrganizations,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 import { fulfillApprovedOrder } from "@/lib/server/order-fulfillment"
@@ -183,6 +184,10 @@ describe.skipIf(!hasTestDatabase)("warehouse order-stage notifications", () => {
       { userId: actors.whInactive.id, branchId: branchA1, createdByUserId: actors.superAdmin.id },
     ])
     await db.insert(warehouseCityAssignments).values({ userId: actors.whCity.id, cityKey: `lahore${suffix}`, createdByUserId: actors.superAdmin.id })
+    await db.insert(warehouseCityOrganizations).values([
+      { userId: actors.whCity.id, organizationId: orgA, createdByUserId: actors.superAdmin.id },
+      { userId: actors.whCity.id, organizationId: orgB, createdByUserId: actors.superAdmin.id },
+    ])
 
     const [product] = await db.insert(globalProducts).values({
       productCode: `ITWN-${suffix}`, name: `IT WN Rice ${suffix}`, basePrice: 71_000, status: "active", unit: "kg", stockQuantity: 100,
@@ -206,6 +211,7 @@ describe.skipIf(!hasTestDatabase)("warehouse order-stage notifications", () => {
     await db.delete(systemLogs).where(or(inArray(systemLogs.organizationId, organizationIds), inArray(systemLogs.userId, actorIds)))
     await db.delete(warehouseAssignments).where(inArray(warehouseAssignments.userId, actorIds))
     await db.delete(warehouseCityAssignments).where(inArray(warehouseCityAssignments.userId, actorIds))
+    await db.delete(warehouseCityOrganizations).where(inArray(warehouseCityOrganizations.userId, actorIds))
     await db.delete(globalProducts).where(eq(globalProducts.id, productId))
     await db.delete(branches).where(inArray(branches.organizationId, organizationIds))
     await db.delete(users).where(inArray(users.id, actorIds))
@@ -236,10 +242,23 @@ describe.skipIf(!hasTestDatabase)("warehouse order-stage notifications", () => {
       expect(JSON.stringify(outbox[0].payload)).not.toContain("raiser")
     })
 
-    it("follows a city assignment into another organization", async () => {
+    it("follows a city assignment into another chosen organization, and not into one that is not chosen", async () => {
       const order = await place({ organizationId: orgB, branchId: branchB1, status: "PENDING" })
       await queueWarehouseOrderNotifications(db, { order, event: "CREATED" })
       expect((await noticesFor(order.id)).map((row) => row.userId)).toEqual([actors.whCity.id])
+
+      // plans/OF-WAREHOUSE-city-assignments-by-organization.md: the city alone is not enough.
+      await db.delete(warehouseCityOrganizations).where(and(
+        eq(warehouseCityOrganizations.userId, actors.whCity.id),
+        eq(warehouseCityOrganizations.organizationId, orgB),
+      ))
+      try {
+        const unchosen = await place({ organizationId: orgB, branchId: branchB1, status: "PENDING" })
+        await queueWarehouseOrderNotifications(db, { order: unchosen, event: "CREATED" })
+        expect(await noticesFor(unchosen.id)).toEqual([])
+      } finally {
+        await db.insert(warehouseCityOrganizations).values({ userId: actors.whCity.id, organizationId: orgB })
+      }
     })
 
     it("queues each event once per recipient, however often it is asked", async () => {

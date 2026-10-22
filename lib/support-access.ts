@@ -10,6 +10,7 @@
  * | Viewer                              | Sees                                       |
  * |-------------------------------------|--------------------------------------------|
  * | `SUPER_ADMIN`, `APRICART_SUPPORT`   | every thread, every organization           |
+ * | `WAREHOUSE`                         | threads at a branch it serves, or citing an order at one |
  * | `HEAD_OFFICE`                       | every thread in their organization         |
  * | `BRANCH_ADMIN`                      | threads on their branch, plus their own    |
  * | `ORDER_PORTAL`                      | threads they raised                        |
@@ -21,22 +22,28 @@
  * would put one requester's complaint in front of another. Doing it later is a
  * change to `supportThreadVisibilityScope` and nothing else.
  *
+ * The warehouse is on Apricart's side of the conversation but its queue is
+ * fenced to the branches it serves (`reachBranchIds`, loaded from the database
+ * by `withSupportReach`); see plans/OF-WAREHOUSE-support-queue.md.
+ *
  * This module is pure — no database, no session, no request. It decides the
  * rule; callers supply the facts and are responsible for having read those
  * facts from the session rather than from the request.
  */
 
 import {
-  isSupportApricartRole,
+  readsWholeSupportQueue,
   isTerminalSupportStatus,
   supportSideForRole,
   type SupportStatus,
 } from "@/lib/support-thread"
+import { isWarehouseRole } from "@/lib/warehouse-access"
 
 /** Every role that may hold a conversation with Apricart. */
 export const SUPPORT_PARTICIPANT_ROLES = [
   "SUPER_ADMIN",
   "APRICART_SUPPORT",
+  "WAREHOUSE",
   "HEAD_OFFICE",
   "BRANCH_ADMIN",
   "GROUP_USER",
@@ -59,6 +66,12 @@ export type SupportViewer = {
   role: string | null | undefined
   organizationId: number | null | undefined
   branchId: number | null | undefined
+  /**
+   * The branches a `WAREHOUSE` viewer serves, read from the database by
+   * `withSupportReach` — never from the session or the request. Absent means
+   * not loaded, and a warehouse viewer without it reads nothing.
+   */
+  reachBranchIds?: readonly number[] | null
 }
 
 /** The parts of a thread the visibility rule needs. Structural, so it stays DB-free. */
@@ -66,12 +79,16 @@ export type SupportThreadSubject = {
   organizationId: number
   branchId: number | null | undefined
   createdByUserId: string
+  /** The branch of the order the thread cites, when it cites one of its own tenant. */
+  orderBranchId?: number | null
 }
 
 /**
  * How a viewer's thread list is narrowed.
  *
- * - `all`          — every thread on the platform (Apricart).
+ * - `all`          — every thread on the platform (Apricart's whole queue).
+ * - `branches`     — threads at one of `branchIds`, or citing an order at one
+ *                    (the warehouse).
  * - `organization` — every thread in `organizationId`.
  * - `branch`       — threads on `branchId`, plus threads this viewer raised.
  * - `own`          — threads this viewer raised, inside their organization.
@@ -83,6 +100,7 @@ export type SupportThreadSubject = {
  */
 export type SupportVisibilityScope =
   | { kind: "all" }
+  | { kind: "branches"; branchIds: number[] }
   | { kind: "organization"; organizationId: number }
   | { kind: "branch"; organizationId: number; branchId: number; userId: string }
   | { kind: "own"; organizationId: number; userId: string }
@@ -96,7 +114,16 @@ function positiveInteger(value: unknown): number | null {
 export function supportThreadVisibilityScope(viewer: SupportViewer): SupportVisibilityScope {
   if (!viewer?.userId || !isSupportParticipantRole(viewer.role)) return { kind: "none" }
 
-  if (isSupportApricartRole(viewer.role)) return { kind: "all" }
+  if (readsWholeSupportQueue(viewer.role)) return { kind: "all" }
+
+  if (isWarehouseRole(viewer.role)) {
+    // Its reach is the branches it serves, never an organization and never its
+    // session's claims. Not loaded, or empty, is nothing — never everything.
+    const branchIds = [...new Set((viewer.reachBranchIds ?? []).map(positiveInteger))]
+      .filter((id): id is number => id !== null)
+      .sort((a, b) => a - b)
+    return branchIds.length === 0 ? { kind: "none" } : { kind: "branches", branchIds }
+  }
 
   // Every other role is pinned to a tenant. A session without one is refused
   // rather than widened — an absent organization is not "all organizations".
@@ -134,6 +161,10 @@ export function canReadSupportThread(input: {
   switch (scope.kind) {
     case "all":
       return true
+    case "branches":
+      return [thread.branchId, thread.orderBranchId].some(
+        (branchId) => typeof branchId === "number" && scope.branchIds.includes(branchId),
+      )
     case "organization":
       return thread.organizationId === scope.organizationId
     case "branch":
@@ -190,7 +221,8 @@ export function canManageSupportThread(role: string | null | undefined): boolean
  * read the order in the first place. This is the *reference* rule and is
  * deliberately no wider than the order's own visibility:
  *
- * - Apricart may cite any order.
+ * - Apricart's whole-queue roles may cite any order. (The warehouse raises no
+ *   thread — it has no tenant — so it falls to the tenant check and cites none.)
  * - Head Office may cite any order in its organization.
  * - A branch administrator may cite any order on its branch.
  * - Everyone else may cite an order on their branch that they raised, or a
@@ -214,7 +246,7 @@ export function canReferenceOrderInSupportThread(input: {
   const { viewer, order } = input
   if (!order || !isSupportParticipantRole(viewer?.role)) return false
 
-  if (isSupportApricartRole(viewer.role)) return true
+  if (readsWholeSupportQueue(viewer.role)) return true
 
   const organizationId = positiveInteger(viewer.organizationId)
   if (organizationId === null || order.organizationId !== organizationId) return false

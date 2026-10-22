@@ -25,6 +25,10 @@ const dashboardStatusMetricSelection = {
     pendingCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) = 'PENDING' THEN 1 END), 0)`.mapWith(Number),
     approvedCount: metricExpressions.approvedCount,
     fulfilledCount: metricExpressions.fulfilledCount,
+    // The Fulfilled count split by `orders.payment_status`; anything not PAID
+    // is unpaid, as everywhere else. Together they add up to `fulfilledCount`.
+    fulfilledPaidCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) IN ('FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED') AND UPPER(COALESCE(${orders.paymentStatus}, 'UNPAID')) = 'PAID' THEN 1 END), 0)`.mapWith(Number),
+    fulfilledUnpaidCount: sql<number>`COALESCE(COUNT(CASE WHEN UPPER(${orders.status}) IN ('FULFILLED', 'PARTIAL', 'PARTIALLY_FULFILLED') AND UPPER(COALESCE(${orders.paymentStatus}, 'UNPAID')) <> 'PAID' THEN 1 END), 0)`.mapWith(Number),
     partialCount: metricExpressions.partialCount,
     refundedCount: metricExpressions.refundedCount,
     rejectedCount: metricExpressions.rejectedCount,
@@ -372,6 +376,8 @@ async function loadSalesComparison(context: any) {
         totalOrders: summary.totalOrders,
         totalItemsSold: summary.totalItemsSold,
         fulfilledCount: counts?.fulfilledCount || 0,
+        fulfilledPaidCount: counts?.fulfilledPaidCount || 0,
+        fulfilledUnpaidCount: counts?.fulfilledUnpaidCount || 0,
         partialCount: counts?.partialCount || 0,
         fulfilledNetSales: (counts?.fulfilledNetSales || 0) / 100,
         refundedCount: counts?.refundedCount || 0,
@@ -756,6 +762,8 @@ export async function GET(req: NextRequest) {
             pendingCount: number
             approvedCount: number
             fulfilledCount: number
+            fulfilledPaidCount: number
+            fulfilledUnpaidCount: number
             partialCount: number
             refundedCount: number
             rejectedCount: number
@@ -780,6 +788,8 @@ export async function GET(req: NextRequest) {
                     pendingCount: counts.pendingCount,
                     approvedCount: counts.approvedCount,
                     fulfilledCount: counts.fulfilledCount,
+                    fulfilledPaidCount: counts.fulfilledPaidCount,
+                    fulfilledUnpaidCount: counts.fulfilledUnpaidCount,
                     partialCount: counts.partialCount,
                     refundedCount: counts.refundedCount,
                     rejectedCount: counts.rejectedCount,

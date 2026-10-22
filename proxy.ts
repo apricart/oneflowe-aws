@@ -277,7 +277,7 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
     )
   }
   // And for Apricart's support agents, which also have no organization of
-  // their own: the support queue's calls, nothing else.
+  // their own: support operations plus explicitly listed read-only order calls.
   if (isApricartSupportRole((token as any)?.role) && !isApricartSupportApiRequestAllowed(req.method, pathname)) {
     logger("middleware", { reason: "apricart_support_api_not_allowed", path: pathname })
     return withSecurityHeaders(
@@ -399,8 +399,8 @@ function adminPortalRedirect(pathname: string): string | null {
  *   * APRICART_EXECUTIVE — Apricart's management: the delivery dashboard and
  *     nothing else, for the same reason.
  *   * WAREHOUSE — Apricart's warehouse: its delivery queue, for the same reason.
- *   * APRICART_SUPPORT — Apricart's support agents: the shared support pages and
- *     nothing else. Which threads it reads is `lib/support-access.ts`.
+ *   * APRICART_SUPPORT — Apricart's support agents: the shared support pages
+ *     and read-only order directory. Each handler re-checks the read scope.
  */
 type TenantClaims = { organizationId: unknown; branchId: unknown }
 

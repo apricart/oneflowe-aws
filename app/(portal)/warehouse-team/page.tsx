@@ -1,10 +1,12 @@
 import { Warehouse } from "lucide-react"
 
+import { ApricartWarehousesCard } from "@/components/warehouse/apricart-warehouses-card"
 import { WarehouseTeamCard } from "@/components/warehouse/warehouse-team-card"
 
 /**
- * Super Admin's warehouse page: every warehouse account and the branches it
- * serves. The role gate is the layout above.
+ * Super Admin's warehouse page: Apricart's warehouses (configuration only, see
+ * plans/OF-WAREHOUSE-order-ownership-and-transfer.md), then every warehouse
+ * account and the branches it serves. The role gate is the layout above.
  */
 export default function WarehouseTeamPage() {
   return (
@@ -18,6 +20,7 @@ export default function WarehouseTeamPage() {
           </p>
         </div>
       </div>
+      <ApricartWarehousesCard />
       <WarehouseTeamCard />
     </div>
   )

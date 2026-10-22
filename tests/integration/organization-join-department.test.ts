@@ -7,6 +7,7 @@ import * as mockedNextAuth from "next-auth"
 import * as decideRoute from "@/app/api/v1/join-requests/[id]/route"
 import * as lookupRoute from "@/app/api/v1/join/lookup/route"
 import * as submitRoute from "@/app/api/v1/join/requests/route"
+import { submitWithJoinEmailProof } from "./helpers/join-email-proof"
 import * as joinCodeRoute from "@/app/api/v1/organizations/join-code/route"
 import {
   auditLogs,
@@ -23,6 +24,7 @@ import {
   users,
   warehouseAssignments,
   warehouseCityAssignments,
+  warehouseCityOrganizations,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
@@ -136,7 +138,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
   }
 
   async function submitSignup(body: Record<string, unknown>) {
-    return submitRoute.POST(jsonRequest("/api/v1/join/requests", "POST", body))
+    return submitWithJoinEmailProof(submitRoute.POST)(jsonRequest("/api/v1/join/requests", "POST", body))
   }
 
   async function submitAccepted(body: Record<string, unknown>) {
@@ -333,7 +335,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
       const crc = `IT-NEW-${unique()}`.toUpperCase()
       const requestedName = `Signup Depot ${unique()}`
       const body = signup({
-        branches: [{ branchId: fixtures.northBranchId }, { name: `  ${requestedName} `, crc: crc.toLowerCase() }],
+        branches: [{ branchId: fixtures.northBranchId }, { name: `  ${requestedName} `, crc: crc.toLowerCase(), city: " karachi ", province: "Sindh" }],
         addresses: ["Plot 1, Clifton, Karachi", "Office 9, Saddar, Karachi"],
       })
       const stored = await submitAccepted(body)
@@ -346,10 +348,16 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
       const newBranch = item.branches.find((row: any) => row.kind === "new")
       const northRow = item.branches.find((row: any) => row.branchId === fixtures.northBranchId)
       // The branch is asked for by the applicant's name, with its CRC beside it.
-      expect(newBranch).toMatchObject({ costCenterId: crc, requestedName, name: null })
+      // ...and the city the applicant chose, in the list's spelling, with its province.
+      expect(newBranch).toMatchObject({ costCenterId: crc, requestedName, name: null, requestedCity: "Karachi", requestedProvince: "Sindh" })
       const [storedRow] = await db.select().from(organizationJoinRequestBranches)
         .where(eq(organizationJoinRequestBranches.id, newBranch.requestBranchId))
-      expect(storedRow).toMatchObject({ costCenterId: crc, requestedBranchName: requestedName })
+      expect(storedRow).toMatchObject({
+        costCenterId: crc,
+        requestedBranchName: requestedName,
+        requestedBranchCity: "Karachi",
+        requestedBranchProvince: "Sindh",
+      })
 
       const response = await decide(stored.id, {
         decision: "approve",
@@ -423,7 +431,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
     // carries used to be stored as that branch, dropping the new branch the
     // applicant asked for. It is now kept, and the review names the match.
     it("keeps a typed CRC an existing branch carries as a new branch, and shows Head Office the match", async () => {
-      const body = signup({ branches: [{ name: "Typed CRC Depot", crc: `it-crc-${fixtures.suffix}` }] })
+      const body = signup({ branches: [{ name: "Typed CRC Depot", crc: `it-crc-${fixtures.suffix}`, city: "Karachi", province: "Sindh" }] })
       const stored = await submitAccepted(body)
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
       expect(rows).toEqual([expect.objectContaining({
@@ -465,7 +473,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
         status: "active",
         costCenterId: crc,
       }).returning({ id: branches.id })
-      const body = signup({ branches: [{ name: `Orangi ${crc}`, crc }] })
+      const body = signup({ branches: [{ name: `Orangi ${crc}`, crc, city: "Karachi", province: "Sindh" }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       expect(item.branches[0].crcMatch).toEqual({ branchId: matching.id, name: `Matching ${crc}` })
@@ -784,10 +792,13 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
     let byCity = ""
     let byBranch = ""
     let inactive = ""
+    // Holds Sukkur too, but for the other tenant only
+    // (plans/OF-WAREHOUSE-city-assignments-by-organization.md).
+    let byCityElsewhere = ""
 
     beforeAll(async () => {
       const warehouseRole = await resolveRoleId("WAREHOUSE")
-      const people = await db.insert(users).values(["city", "branch", "inactive"].map((kind) => ({
+      const people = await db.insert(users).values(["city", "branch", "inactive", "elsewhere"].map((kind) => ({
         email: `wh-${kind}-${fixtures.suffix}@example.test`,
         username: `it-wh-${kind}-${fixtures.suffix}`,
         passwordHash: "x",
@@ -795,8 +806,8 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
         organizationId: null,
         isActive: kind !== "inactive",
       }))).returning({ id: users.id })
-      ;[byCity, byBranch, inactive] = people.map((person) => person.id)
-      warehouseIds.push(byCity, byBranch, inactive)
+      ;[byCity, byBranch, inactive, byCityElsewhere] = people.map((person) => person.id)
+      warehouseIds.push(byCity, byBranch, inactive, byCityElsewhere)
 
       // A branch of the *other* tenant in Larkana: a warehouse's city is
       // geography, so serving it there is serving Larkana.
@@ -810,6 +821,12 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
       await db.insert(warehouseCityAssignments).values([
         { userId: byCity, cityKey: "sukkur" },
         { userId: inactive, cityKey: "sukkur" },
+        { userId: byCityElsewhere, cityKey: "sukkur" },
+      ])
+      await db.insert(warehouseCityOrganizations).values([
+        { userId: byCity, organizationId: fixtures.organizationId },
+        { userId: inactive, organizationId: fixtures.organizationId },
+        { userId: byCityElsewhere, organizationId: fixtures.foreignOrganizationId },
       ])
       await db.insert(warehouseAssignments).values([
         { userId: byBranch, branchId: larkana.id },
@@ -823,7 +840,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
 
     async function approveNewBranch(location: { city: string; province: string }) {
       const crc = `IT-WH-${unique()}`.toUpperCase()
-      const stored = await submitAccepted(signup({ branches: [{ name: `Warehouse Depot ${unique()}`, crc }] }))
+      const stored = await submitAccepted(signup({ branches: [{ name: `Warehouse Depot ${unique()}`, crc, city: "Karachi", province: "Sindh" }] }))
       const { item } = await review(stored.id)
       const row = item.branches[0]
       const response = await decide(stored.id, {
@@ -836,7 +853,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
     }
 
     it("shows Head Office how many warehouses serve each city, and never who", async () => {
-      const stored = await submitAccepted(signup({ branches: [{ name: "Preview Depot", crc: `IT-WH-${unique()}` }] }))
+      const stored = await submitAccepted(signup({ branches: [{ name: "Preview Depot", crc: `IT-WH-${unique()}`, city: "Karachi", province: "Sindh" }] }))
       const { item } = await review(stored.id)
 
       expect(item.warehouseCities).toEqual(expect.arrayContaining([
@@ -862,6 +879,8 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, end to end", () => {
         .where(eq(warehouseAssignments.branchId, created.id))
       expect(rows).toEqual([])
       expect(await loadWarehouseReach(db, byCity)).toContain(created.id)
+      // A city held for another organization only does not reach it.
+      expect(await loadWarehouseReach(db, byCityElsewhere)).not.toContain(created.id)
       // An inactive warehouse reaches nothing, whatever it holds.
       expect(await loadWarehouseReach(db, inactive)).toEqual([])
     })

@@ -20,6 +20,7 @@ describe("the dashboard query", () => {
     expect(parsed).toEqual({
       ok: true,
       filters: {
+        orderId: null,
         organizationId: null,
         branchId: null,
         region: null,
@@ -33,10 +34,11 @@ describe("the dashboard query", () => {
   })
 
   it("accepts every known filter", () => {
-    const parsed = parse("organizationId=4&branchId=9&region=south&city=Lahore&fulfillmentStatus=out_for_delivery&view=overdue&deliveredFrom=2026-09-01&deliveredTo=2026-09-30")
+    const parsed = parse("orderId=123&organizationId=4&branchId=9&region=south&city=Lahore&fulfillmentStatus=out_for_delivery&view=overdue&deliveredFrom=2026-09-01&deliveredTo=2026-09-30")
     expect(parsed).toMatchObject({
       ok: true,
       filters: {
+        orderId: 123,
         organizationId: 4,
         branchId: 9,
         region: "SOUTH",
@@ -52,6 +54,8 @@ describe("the dashboard query", () => {
 
   it.each([
     ["an unknown filter", "status=PENDING"],
+    ["a non-numeric order ID", "orderId=abc"],
+    ["a zero order ID", "orderId=0"],
     ["a non-numeric organization", "organizationId=abc"],
     ["a zero organization", "organizationId=0"],
     ["a branch without its organization", "branchId=3"],
@@ -80,6 +84,7 @@ describe("branch regions", () => {
 
 describe("building the dashboard", () => {
   const filters = (overrides: Partial<DeliveryDashboardFilters> = {}): DeliveryDashboardFilters => ({
+    orderId: null,
     organizationId: null,
     branchId: null,
     region: null,

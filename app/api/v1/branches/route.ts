@@ -11,6 +11,8 @@ import { logError } from "@/lib/global-logger"
 import { getCached, invalidateByPrefix, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
 import { branchCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { createBranchInTx } from "@/lib/server/branch-creation"
+import { branchHierarchyInputError, hierarchyForNewBranch } from "@/lib/branch-hierarchy"
+import { isBranchHierarchyConstraintError, parentBranchNameSql, HIERARCHY_CONFLICT_MESSAGE } from "@/lib/server/branch-hierarchy"
 import {
   BRANCH_CREATION_ROLES,
   resolveBranchCreationAccess,
@@ -19,6 +21,16 @@ import {
   resolveScopedBranchIds,
   usesMultiBranchScope,
 } from "@/lib/server/multi-branch-scope"
+
+/**
+ * The most branches one list response carries. Super Admin's unfiltered list
+ * spans every tenant, and several screens (Organizations, Users, the context
+ * switcher) count and render it whole, so the bound sits well above the total
+ * rather than at a page size: at 500 the 2026-10-22 import (755 branches) made
+ * them silently drop the oldest tenants' branches. A response that hits the
+ * bound says so (`truncated`) instead of pretending to be complete.
+ */
+const BRANCH_LIST_LIMIT = 5_000
 
 type BranchCreateInput = ReturnType<typeof branchCreateSchema.parse>
 type RequestScope = NonNullable<Awaited<ReturnType<typeof getRequestScope>>>
@@ -101,6 +113,7 @@ function validateBranchFields(body: BranchCreateInput) {
 }
 
 function getBranchConstraintResponse(exception: any) {
+  if (isBranchHierarchyConstraintError(exception)) return error(HIERARCHY_CONFLICT_MESSAGE, 409)
   const databaseError = exception?.cause ?? exception
   const databaseCode = databaseError?.code ?? exception?.code
   const databaseConstraint = databaseError?.constraint ?? exception?.constraint
@@ -215,6 +228,10 @@ export async function GET(req: Request) {
           groupId: branchesTable.groupId,
           adminUserId: branchesTable.adminUserId,
           headCount: branchesTable.headCount,
+          contactPhone: branchesTable.contactPhone,
+          hierarchyRole: branchesTable.hierarchyRole,
+          parentBranchId: branchesTable.parentBranchId,
+          parentBranchName: parentBranchNameSql,
           createdAt: branchesTable.createdAt,
           updatedAt: branchesTable.updatedAt,
           groupName: sql<string | null>`(
@@ -224,9 +241,13 @@ export async function GET(req: Request) {
         .from(branchesTable)
         .where(getBranchQueryCondition(scopedOrgIds, groupIds, scopedBranchId, assignedBranchIds))
         .orderBy(desc(branchesTable.createdAt))
-        .limit(500)
+        // One past the bound, so a cut-off list is detected rather than assumed complete.
+        .limit(BRANCH_LIST_LIMIT + 1)
 
-      return { items, count: items.length }
+      const truncated = items.length > BRANCH_LIST_LIMIT
+      if (truncated) logError(new Error(`Branch list truncated at ${BRANCH_LIST_LIMIT}`), 'BRANCHES_GET')
+      const page = truncated ? items.slice(0, BRANCH_LIST_LIMIT) : items
+      return { items: page, count: page.length, truncated }
     }
 
     const result = shouldRefresh
@@ -278,6 +299,8 @@ export async function POST(req: Request) {
 
     const validated = validateBranchFields(body)
     if (validated.response) return validated.response
+    const hierarchyError = branchHierarchyInputError(body)
+    if (hierarchyError) return error(hierarchyError, 400)
     const { name, province, city, address, costCenterId, status } = validated.values!
 
     const creation = await db.transaction((tx) => createBranchInTx(
@@ -292,6 +315,8 @@ export async function POST(req: Request) {
         status,
         region: body.region ?? null,
         headCount: body.headCount ?? null,
+        contactPhone: body.contactPhone ?? null,
+        hierarchy: hierarchyForNewBranch(body),
       },
       { userId: scope.userId, role: scope.role },
     ))
@@ -301,6 +326,9 @@ export async function POST(req: Request) {
     }
     if (creation.kind === "duplicate-name") {
       return error("A branch with this name already exists in this organization.", 409)
+    }
+    if (creation.kind === "hierarchy-refused") {
+      return error(creation.refusal.message, creation.refusal.status)
     }
 
     // Invalidate branches cache

@@ -8,6 +8,7 @@ import {
   globalProductUpdateSchema,
   moneyBudgetUpdateSchema,
   orderCreateSchema,
+  orderDeskEditSchema,
   orderUpdateSchema,
   organizationProductUpdateSchema,
   supplierCreateSchema,
@@ -141,6 +142,27 @@ describe("strict mutation schemas", () => {
         items: validOrder.items,
         notes: validOrder.notes,
         [hiddenField]: hiddenField.endsWith("Cents") ? 1 : "attacker",
+      }).success).toBe(false)
+    }
+  })
+
+  it("accepts a line price only where the Order Desk may send one, and bounds it", () => {
+    // plans/OF-ORDER-DESK-line-price-entry.md. Who may send it is the route's
+    // check (`orderLinePriceFailure`); the shape only bounds it.
+    const pricedLine = { organizationInventoryId: 10, quantity: 2, unitPriceCents: 5_500 }
+    expect(orderCreateSchema.safeParse({ items: [pricedLine] }).success).toBe(true)
+    expect(orderDeskEditSchema.safeParse({ items: [pricedLine] }).success).toBe(true)
+
+    for (const unitPriceCents of [0, -1, 10.5, "5500", 2_000_000_001]) {
+      expect(orderCreateSchema.safeParse({ items: [{ ...pricedLine, unitPriceCents }] }).success).toBe(false)
+    }
+
+    // The requester edit never accepts a line price, whoever sends it.
+    expect(orderUpdateSchema.safeParse({ items: [pricedLine] }).success).toBe(false)
+    // Nor may a line smuggle the stored columns in.
+    for (const field of ["priceCents", "priceEnteredManually", "cataloguePriceCents"]) {
+      expect(orderCreateSchema.safeParse({
+        items: [{ organizationInventoryId: 10, quantity: 2, [field]: field === "priceEnteredManually" ? true : 1 }],
       }).success).toBe(false)
     }
   })

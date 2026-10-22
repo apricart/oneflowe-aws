@@ -18,7 +18,9 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
+import { formatPriceInput } from "@/lib/group-price-input"
 import type { FulfillmentStatus } from "@/lib/fulfillment-status"
+import type { PaymentStatus } from "@/lib/payment-status"
 import { ORDER_CORRECTION_TEXT_MAX_LENGTH } from "@/lib/order-correction"
 import { CANCELLATION_REASON_MAX_LENGTH, type IntakeChannel } from "@/lib/order-desk-access"
 import {
@@ -26,6 +28,7 @@ import {
   buildDeskRefundRequest,
   estimateDraftTotalCents,
   NOTES_MAX_LENGTH,
+  parseDeskPriceInput,
   unavailableDraftLines,
   type DeskCatalogueItem,
 } from "@/lib/order-desk-draft"
@@ -39,6 +42,7 @@ export type DeskOrder = {
   tid: string
   status: string
   fulfillmentStatus: FulfillmentStatus
+  paymentStatus?: PaymentStatus
   /** Set while an Apricart Executive has it back with the desk for correction. */
   returnedForCorrectionAt: string | null
   correctionRequestNote: string | null
@@ -66,7 +70,17 @@ export type DeskOrder = {
   fulfilledAt: string | null
   cancelledAt: string | null
   cancellationReason: string | null
-  items: { id: number; organizationInventoryId: number | null; productName: string; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    organizationInventoryId: number | null
+    productName: string
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually?: boolean
+    cataloguePriceCents?: number | null
+  }[]
 }
 
 type DialogProps = Readonly<{ order: DeskOrder; onClose: () => void; onSaved: () => void }>
@@ -89,15 +103,22 @@ async function sendJson(url: string, method: string, body: unknown): Promise<{ o
 }
 
 /**
- * Change the lines, notes or PO number of an Active order that is not yet
- * delivered. Every product the branch may order is listed, prefilled with what
- * the order holds now; the server re-prices and re-checks stock and budget.
+ * Change the lines, notes or PO number of a pending order. Every product the
+ * branch may order is listed, prefilled with what the order holds now — a line
+ * the desk priced keeps its price in the box, so saving does not drop it; a
+ * blank price is re-priced at today's catalogue. The server re-prices and
+ * re-checks stock and budget.
  */
 export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
   const [quantities, setQuantities] = useState<Record<number, string>>(() => Object.fromEntries(
     order.items
       .filter((item) => item.organizationInventoryId !== null)
       .map((item) => [item.organizationInventoryId as number, String(item.quantity)]),
+  ))
+  const [prices, setPrices] = useState<Record<number, string>>(() => Object.fromEntries(
+    order.items
+      .filter((item) => item.organizationInventoryId !== null && item.priceEnteredManually)
+      .map((item) => [item.organizationInventoryId as number, formatPriceInput(item.priceCents)]),
   ))
   const [notes, setNotes] = useState(order.notes ?? "")
   const [poNumber, setPoNumber] = useState(order.poNumber ?? "")
@@ -109,7 +130,7 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
     fetcher,
   )
   const catalogue = useMemo(() => data?.items ?? [], [data])
-  const estimate = estimateDraftTotalCents({ quantities }, catalogue)
+  const estimate = estimateDraftTotalCents({ quantities, prices }, catalogue)
   // Lines of this order the branch no longer offers. Judged only once the
   // catalogue has loaded, or every line would look unavailable meanwhile.
   const unavailable = data
@@ -125,7 +146,7 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
 
   const save = async () => {
     if (saving) return
-    const built = buildDeskEditRequest({ quantities, notes, poNumber }, catalogue)
+    const built = buildDeskEditRequest({ quantities, prices, notes, poNumber }, catalogue)
     if (!built.ok) {
       setFormError(built.error)
       return
@@ -148,7 +169,7 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
         <DialogHeader>
           <DialogTitle>Edit {order.tid}</DialogTitle>
           <DialogDescription>
-            {order.organizationName} · {order.branchName}. The order is re-priced at today&apos;s prices when saved.
+            {order.organizationName} · {order.branchName}. A blank price is charged at today&apos;s catalogue price; a typed one (including tax) is charged as typed.
           </DialogDescription>
         </DialogHeader>
 
@@ -162,7 +183,7 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
               <thead className="sticky top-0 bg-muted/80 text-left text-xs uppercase text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2">Product</th>
-                  <th className="px-3 py-2 text-right">Price</th>
+                  <th className="w-36 px-3 py-2 text-right">Price (Rs)</th>
                   <th className="w-32 px-3 py-2">Quantity</th>
                 </tr>
               </thead>
@@ -173,7 +194,21 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
                       <div className="font-medium">{item.name}</div>
                       <div className="text-xs text-muted-foreground">{item.productCode} · per {item.unit}</div>
                     </td>
-                    <td className="px-3 py-2 text-right">{item.priceCents === null ? "—" : formatPKR(item.priceCents / 100)}</td>
+                    <td className="px-3 py-2">
+                      <Input
+                        aria-label={`Price per ${item.unit} of ${item.name}, in rupees including tax`}
+                        aria-invalid={parseDeskPriceInput(prices[item.organizationInventoryId], item.name).kind === "invalid"}
+                        inputMode="decimal"
+                        className="text-right tabular-nums"
+                        placeholder={item.priceCents === null ? "Price" : formatPriceInput(item.priceCents)}
+                        value={prices[item.organizationInventoryId] ?? ""}
+                        disabled={saving}
+                        onChange={(event) => {
+                          setFormError(null)
+                          setPrices((current) => ({ ...current, [item.organizationInventoryId]: event.target.value }))
+                        }}
+                      />
+                    </td>
                     <td className="px-3 py-2">
                       <Input
                         aria-label={`Quantity for ${item.name}`}

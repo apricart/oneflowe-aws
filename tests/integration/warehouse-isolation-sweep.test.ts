@@ -14,6 +14,7 @@ import {
   orders,
   organizations,
   roles,
+  supportThreads,
   systemLogs,
   users,
   warehouseAssignments,
@@ -109,6 +110,7 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every API handler d
   const ids = {
     orgA: 0, orgB: 0, branchA1: 0, branchA2: 0, branchB1: 0, groupB: 0,
     orderX: 0, orderY: 0, orderZ: 0, productId: 0,
+    threadA2: 0, threadB: 0, threadHeadOfficeB: 0,
     warehouse: "", raiserA2: "", raiserB: "", raiserA1: "", headOfficeB: "",
   }
   const userIds: string[] = []
@@ -190,6 +192,19 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every API handler d
     ids.orderY = await place(`${OUT_A2}Y`, ids.orgA, ids.branchA2, ids.raiserA2, `${OUT_A2} note`)
     ids.orderZ = await place(`${OUT_B}Z`, ids.orgB, ids.branchB1, ids.raiserB, `${OUT_B} note`)
 
+    // Support threads it must never read (plans/OF-WAREHOUSE-support-queue.md):
+    // one at the other branch of its own tenant, one at the other tenant, and a
+    // branchless Head Office one there citing that tenant's order.
+    const raiseThread = async (organizationId: number, branchId: number | null, createdByUserId: string, subject: string, orderId: number | null) => {
+      const [row] = await db.insert(supportThreads).values({
+        organizationId, branchId, createdByUserId, subject, orderId, category: "OTHER", messageCount: 0,
+      }).returning({ id: supportThreads.id })
+      return row.id
+    }
+    ids.threadA2 = await raiseThread(ids.orgA, ids.branchA2, ids.raiserA2, `${OUT_A2} thread`, null)
+    ids.threadB = await raiseThread(ids.orgB, ids.branchB1, ids.raiserB, `${OUT_B} thread`, null)
+    ids.threadHeadOfficeB = await raiseThread(ids.orgB, null, ids.headOfficeB, `${OUT_B} head office thread`, ids.orderZ)
+
     vi.mocked(getServerSession).mockResolvedValue({
       user: {
         id: ids.warehouse,
@@ -205,6 +220,7 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every API handler d
   afterAll(async () => {
     if (!ids.orgA) return
     const organizationIds = [ids.orgA, ids.orgB]
+    await db.delete(supportThreads).where(inArray(supportThreads.organizationId, organizationIds))
     const orderRows = await db.select({ id: orders.id }).from(orders).where(inArray(orders.organizationId, organizationIds))
     const orderIds = orderRows.map((row) => row.id)
     if (orderIds.length > 0) {
@@ -229,6 +245,7 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every API handler d
     if (param === "orderId") return [String(ids.orderY), String(ids.orderZ)]
     if (param === "id") {
       if (/\/orders\/$/.test(before) || /\/approvals\/$/.test(before)) return [String(ids.orderY), String(ids.orderZ)]
+      if (/\/support\/threads\/$/.test(before)) return [String(ids.threadA2), String(ids.threadB), String(ids.threadHeadOfficeB)]
       if (/\/branches\/$/.test(before)) return [String(ids.branchA2), String(ids.branchB1)]
       if (/\/organizations\/$/.test(before)) return [String(ids.orgB)]
       if (/\/groups\/$/.test(before)) return [String(ids.groupB)]
@@ -342,4 +359,7 @@ const ANSWERS_ANY_SIGNED_IN_CALLER = new Set<string>([
   // override or price is joined for a caller with no organization.
   "app/api/v1/analytics/products/list/route.ts",
   "app/api/v1/analytics/products/catalog-performance/route.ts",
+  // The support raise dialog's product picker: a caller with no organization —
+  // the warehouse, which answers threads and raises none — gets an empty list.
+  "app/api/v1/support/products/route.ts",
 ])

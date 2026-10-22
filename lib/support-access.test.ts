@@ -90,7 +90,7 @@ describe("the visibility scope each role is narrowed to", () => {
     expect(supportThreadVisibilityScope(SUPPORT_AGENT)).toEqual({ kind: "all" })
   })
 
-  it("gives Apricart's other staff roles nothing", () => {
+  it("gives Apricart's other staff roles nothing — the warehouse too, until its reach is loaded", () => {
     for (const role of ["ORDER_DESK", "APRICART_EXECUTIVE", "WAREHOUSE"]) {
       expect(supportThreadVisibilityScope({ ...SUPPORT_AGENT, role }), role).toEqual({ kind: "none" })
     }
@@ -264,9 +264,11 @@ describe("raising and triaging", () => {
   it("keeps triage with Apricart alone", () => {
     expect(canManageSupportThread("SUPER_ADMIN")).toBe(true)
     expect(canManageSupportThread("APRICART_SUPPORT")).toBe(true)
+    // On the threads it can read (plans/OF-WAREHOUSE-support-queue.md).
+    expect(canManageSupportThread("WAREHOUSE")).toBe(true)
     for (const role of [
       "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL", "VIEWER",
-      "ORDER_DESK", "APRICART_EXECUTIVE", "WAREHOUSE", null,
+      "ORDER_DESK", "APRICART_EXECUTIVE", null,
     ]) {
       expect(canManageSupportThread(role), String(role)).toBe(false)
     }
@@ -408,5 +410,66 @@ describe("which order a thread may cite", () => {
         order: { ...ownOrder, organizationId: null },
       }),
     ).toBe(false)
+  })
+})
+
+describe("the warehouse reads the support threads of the branches it serves", () => {
+  // Serves branch 5 of organization 10 and branch 7 of organization 11.
+  const WAREHOUSE: SupportViewer = {
+    userId: "wh-1",
+    role: "WAREHOUSE",
+    organizationId: null,
+    branchId: null,
+    reachBranchIds: [7, 5, 5],
+  }
+
+  it("is a participant fenced to its branches, deduplicated and sorted", () => {
+    expect(SUPPORT_PARTICIPANT_ROLES).toContain("WAREHOUSE")
+    expect(supportThreadVisibilityScope(WAREHOUSE)).toEqual({ kind: "branches", branchIds: [5, 7] })
+  })
+
+  it("reads nothing with no reach, an empty one, or only invalid ids — never everything", () => {
+    for (const reachBranchIds of [undefined, null, [], [0, -1, 1.5, Number.NaN]]) {
+      const viewer = { ...WAREHOUSE, reachBranchIds: reachBranchIds as number[] | null | undefined }
+      expect(supportThreadVisibilityScope(viewer), String(reachBranchIds)).toEqual({ kind: "none" })
+      expect(canReadSupportThread({ viewer, thread: ownThread })).toBe(false)
+    }
+  })
+
+  it("is not widened by an organization or branch on its session", () => {
+    const pinned = { ...WAREHOUSE, organizationId: 12, branchId: 99, reachBranchIds: [5] }
+    expect(supportThreadVisibilityScope(pinned)).toEqual({ kind: "branches", branchIds: [5] })
+    expect(canReadSupportThread({ viewer: pinned, thread: { organizationId: 12, branchId: 99, createdByUserId: "x" } })).toBe(false)
+  })
+
+  it("reads every thread at a branch it serves, whoever raised it", () => {
+    for (const thread of [ownThread, peerThread, otherTenantThread]) {
+      expect(canReadSupportThread({ viewer: WAREHOUSE, thread })).toBe(true)
+    }
+  })
+
+  it("does not read a thread at another branch, even in an organization it serves", () => {
+    expect(canReadSupportThread({ viewer: WAREHOUSE, thread: otherBranchThread })).toBe(false)
+  })
+
+  it("reads a branchless thread only when it cites an order at a branch it serves", () => {
+    const headOfficeThread = { organizationId: 10, branchId: null, createdByUserId: "ho-1" }
+    expect(canReadSupportThread({ viewer: WAREHOUSE, thread: headOfficeThread })).toBe(false)
+    expect(canReadSupportThread({ viewer: WAREHOUSE, thread: { ...headOfficeThread, orderBranchId: 5 } })).toBe(true)
+    expect(canReadSupportThread({ viewer: WAREHOUSE, thread: { ...headOfficeThread, orderBranchId: 6 } })).toBe(false)
+    // A thread raised elsewhere about an order at a served branch is in reach too.
+    expect(canReadSupportThread({ viewer: WAREHOUSE, thread: { ...otherBranchThread, orderBranchId: 5 } })).toBe(true)
+  })
+
+  it("replies on Apricart's side and triages, but never to a closed thread", () => {
+    expect(canPostSupportMessage({ viewer: WAREHOUSE, thread: { ...ownThread, status: "OPEN" } })).toBe(true)
+    expect(canPostSupportMessage({ viewer: WAREHOUSE, thread: { ...ownThread, status: "CLOSED" } })).toBe(false)
+    expect(canPostSupportMessage({ viewer: WAREHOUSE, thread: { ...otherBranchThread, status: "OPEN" } })).toBe(false)
+    expect(canManageSupportThread("WAREHOUSE")).toBe(true)
+  })
+
+  it("cites no order: it raises no thread, having no tenant", () => {
+    const order = { organizationId: 10, branchId: 5, createdByUserId: "op-1" }
+    expect(canReferenceOrderInSupportThread({ viewer: WAREHOUSE, order, scopedBranchIds: [5] })).toBe(false)
   })
 })

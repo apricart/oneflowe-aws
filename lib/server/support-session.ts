@@ -9,6 +9,8 @@ import { db } from "@/lib/db"
 import type { SupportViewer } from "@/lib/support-access"
 import { isSupportApricartRole } from "@/lib/support-thread"
 import type { SupportAuthor } from "@/lib/server/support-threads"
+import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
+import { isWarehouseRole } from "@/lib/warehouse-access"
 
 /**
  * Turning a session into the facts the support rules need.
@@ -58,6 +60,23 @@ export function supportReaderFromSession(session: unknown): SupportViewer | null
   const role = viewerReadRole(viewer)
   if (role === null) return null
   return { ...viewer, role }
+}
+
+/**
+ * The viewer with the reach its role's queue is fenced to, read from the
+ * database on this request.
+ *
+ * A warehouse reads the threads of the branches it serves
+ * (plans/OF-WAREHOUSE-support-queue.md), so its branches are loaded here —
+ * assigned one by one or by city, through the same `loadWarehouseReach` every
+ * warehouse endpoint uses, which also re-reads the account and returns nothing
+ * for one deactivated or moved out of the role. Every other viewer is returned
+ * unchanged. Every support handler calls this; a warehouse viewer that skipped
+ * it would carry no reach and read nothing (`supportThreadVisibilityScope`).
+ */
+export async function withSupportReach(viewer: SupportViewer | null): Promise<SupportViewer | null> {
+  if (!viewer || !isWarehouseRole(viewer.role)) return viewer
+  return { ...viewer, reachBranchIds: await loadWarehouseReach(db, viewer.userId) }
 }
 
 /**

@@ -24,8 +24,14 @@ const branches = [
   { id: 21, organizationId: 2, name: "Clifton", city: "Karachi", cityKey: "karachi", status: "active" },
 ]
 const cities = [
-  { key: "karachi", label: "Karachi", branchCount: 3, organizationCount: 2 },
-  { key: "lahore", label: "Lahore", branchCount: 1, organizationCount: 1 },
+  {
+    key: "karachi",
+    label: "Karachi",
+    branchCount: 3,
+    organizationCount: 2,
+    organizations: [{ organizationId: 1, branchCount: 2 }, { organizationId: 2, branchCount: 1 }],
+  },
+  { key: "lahore", label: "Lahore", branchCount: 1, organizationCount: 1, organizations: [{ organizationId: 1, branchCount: 1 }] },
 ]
 
 const member = (overrides: Record<string, unknown> = {}) => ({
@@ -36,6 +42,7 @@ const member = (overrides: Record<string, unknown> = {}) => ({
   isActive: true,
   branchIds: [11, 21],
   cityKeys: [],
+  cityOrganizationIds: [],
   ...overrides,
 })
 
@@ -70,12 +77,17 @@ describe("Warehouse team", () => {
     swr.data = team([
       member(),
       member({ id: "x", fullName: "Nadia", branchIds: [] }),
-      member({ id: "y", fullName: "Bilal", branchIds: [11], cityKeys: ["karachi"] }),
+      member({ id: "y", fullName: "Bilal", branchIds: [11], cityKeys: ["karachi"], cityOrganizationIds: [1, 2] }),
+      member({ id: "z", fullName: "Sana", branchIds: [], cityKeys: ["karachi"], cityOrganizationIds: [2] }),
+      member({ id: "w", fullName: "Omar", branchIds: [], cityKeys: ["karachi"], cityOrganizationIds: [] }),
     ])
     render(<WarehouseTeamCard />)
     expect(within(screen.getByText("Kamran Store").closest("tr")!).getByText("2 branches — Meezan, UBL")).toBeTruthy()
     expect(within(screen.getByText("Nadia").closest("tr")!).getByText("None")).toBeTruthy()
     expect(within(screen.getByText("Bilal").closest("tr")!).getByText("Karachi · 4 branches — Meezan, UBL")).toBeTruthy()
+    // A city reaches only the chosen organizations' branches, and nothing without one.
+    expect(within(screen.getByText("Sana").closest("tr")!).getByText("Karachi · 1 branch — UBL")).toBeTruthy()
+    expect(within(screen.getByText("Omar").closest("tr")!).getByText("Karachi · no organization chosen")).toBeTruthy()
   })
 
   it("says so when there is no warehouse account yet", () => {
@@ -84,56 +96,104 @@ describe("Warehouse team", () => {
     expect(screen.getByText("No warehouse accounts yet.")).toBeTruthy()
   })
 
-  describe("by city", () => {
-    it("opens on the cities, across every organization, with their counts", () => {
+  describe("by city, in two steps", () => {
+    const ok = () => new Response(JSON.stringify({ item: {} }), { status: 200 })
+
+    it("opens on the organizations and lists no city until one is chosen", () => {
       swr.data = team([member()])
       render(<WarehouseTeamCard />)
       const dialog = openDialog()
       expect(within(dialog).getByRole("tab", { name: "By city" }).getAttribute("aria-selected")).toBe("true")
-      expect(within(dialog).getByText("3 branches · 2 organizations")).toBeTruthy()
-      expect(within(dialog).getByText("1 branch · 1 organization")).toBeTruthy()
+      expect(within(dialog).getByRole("heading", { name: "1. Organizations" })).toBeTruthy()
+      expect(within(dialog).getByLabelText(/Meezan/)).toBeTruthy()
+      expect(within(dialog).getByLabelText(/UBL/)).toBeTruthy()
+      expect(within(dialog).getByText("0 organizations chosen.")).toBeTruthy()
+      expect(within(dialog).getByText("Choose an organization first; its cities are listed here.")).toBeTruthy()
+      expect(within(dialog).queryByLabelText(/Karachi/)).toBeNull()
     })
 
-    it("assigns a city with one request naming its key, and refreshes", async () => {
+    it("chooses an organization with one request, then offers only its cities, counted within it", async () => {
       swr.data = team([member()])
       let finish: (value: Response) => void = () => {}
       fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { finish = resolve }))
       render(<WarehouseTeamCard />)
       const dialog = openDialog()
 
-      const karachi = within(dialog).getByLabelText(/Karachi/)
-      fireEvent.click(karachi)
-      fireEvent.click(karachi)
+      const ubl = within(dialog).getByLabelText(/UBL/)
+      fireEvent.click(ubl)
+      fireEvent.click(ubl)
 
       expect(fetchMock).toHaveBeenCalledTimes(1)
-      expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/warehouse-team/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4/cities")
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/warehouse-team/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4/city-organizations")
       expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("PUT")
-      expect(sentBody(0)).toEqual({ city: "karachi", assigned: true })
+      expect(sentBody(0)).toEqual({ organizationId: 2, assigned: true })
 
-      finish(new Response(JSON.stringify({ item: {} }), { status: 200 }))
+      finish(ok())
       await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
-      expect(within(dialog).getByText("1 city assigned.")).toBeTruthy()
+      expect(within(dialog).getByText("1 organization chosen.")).toBeTruthy()
+      // UBL has a branch in Karachi only.
+      expect(within(dialog).getByLabelText(/Karachi/)).toBeTruthy()
+      expect(within(dialog).getByText("1 branch · 1 organization")).toBeTruthy()
+      expect(within(dialog).queryByLabelText(/Lahore/)).toBeNull()
     })
 
-    it("withdraws an assigned city", async () => {
-      swr.data = team([member({ cityKeys: ["karachi"] })])
-      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ item: {} }), { status: 200 }))
+    it("sums a city over every chosen organization", () => {
+      swr.data = team([member({ cityOrganizationIds: [1, 2] })])
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      expect(within(dialog).getByText("3 branches · 2 organizations")).toBeTruthy()
+      expect(within(dialog).getByText("1 branch · 1 organization")).toBeTruthy()
+    })
+
+    it("assigns a city of a chosen organization with one request naming its key", async () => {
+      swr.data = team([member({ cityOrganizationIds: [1] })])
+      fetchMock.mockResolvedValueOnce(ok())
       render(<WarehouseTeamCard />)
       const dialog = openDialog()
       fireEvent.click(within(dialog).getByLabelText(/Karachi/))
       await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
-      expect(sentBody(0)).toEqual({ city: "karachi", assigned: false })
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/warehouse-team/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4/cities")
+      expect(sentBody(0)).toEqual({ city: "karachi", assigned: true })
+      expect(within(dialog).getByText("1 city assigned.")).toBeTruthy()
+    })
+
+    it("withdraws an organization and keeps its cities, offering one now outside them only to withdraw it", async () => {
+      swr.data = team([member({ cityKeys: ["lahore"], cityOrganizationIds: [1] })])
+      fetchMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce(ok())
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByLabelText(/Meezan/))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ organizationId: 1, assigned: false })
+      expect(within(dialog).getByText("1 city assigned.")).toBeTruthy()
+      expect(within(dialog).getByText("not in the chosen organizations")).toBeTruthy()
+
+      fireEvent.click(within(dialog).getByLabelText(/Lahore/))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(2))
+      expect(sentBody(1)).toEqual({ city: "lahore", assigned: false })
       expect(within(dialog).getByText("0 cities assigned.")).toBeTruthy()
     })
 
     it("keeps the city unchanged with the server's reason when refused", async () => {
-      swr.data = team([member()])
-      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "No branch is in that city" }), { status: 400 }))
+      swr.data = team([member({ cityOrganizationIds: [1] })])
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "No branch of the chosen organizations is in that city" }), { status: 400 }))
       render(<WarehouseTeamCard />)
       const dialog = openDialog()
       fireEvent.click(within(dialog).getByLabelText(/Lahore/))
-      expect(await within(dialog).findByText("No branch is in that city")).toBeTruthy()
+      expect(await within(dialog).findByText("No branch of the chosen organizations is in that city")).toBeTruthy()
       expect(within(dialog).getByText("0 cities assigned.")).toBeTruthy()
+      expect(swr.mutate).not.toHaveBeenCalled()
+    })
+
+    it("keeps the organization unchanged with the server's reason when refused", async () => {
+      swr.data = team([member()])
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "The organization does not exist" }), { status: 400 }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      fireEvent.click(within(dialog).getByLabelText(/Meezan/))
+      expect(await within(dialog).findByText("The organization does not exist")).toBeTruthy()
+      expect(within(dialog).getByText("0 organizations chosen.")).toBeTruthy()
       expect(swr.mutate).not.toHaveBeenCalled()
     })
   })
@@ -177,7 +237,7 @@ describe("Warehouse team", () => {
     })
 
     it("shows a branch an assigned city covers as served and locked, and leaves it out of All / none", async () => {
-      swr.data = team([member({ branchIds: [11], cityKeys: ["karachi"] })])
+      swr.data = team([member({ branchIds: [11], cityKeys: ["karachi"], cityOrganizationIds: [1] })])
       fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ item: {} }), { status: 200 }))
       render(<WarehouseTeamCard />)
       const dialog = openDialog()
@@ -194,6 +254,18 @@ describe("Warehouse team", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
       expect(sentBody(0)).toEqual({ organizationId: 1, branchIds: [] })
+    })
+
+    it("does not count a city for an organization that is not chosen for it", () => {
+      swr.data = team([member({ branchIds: [11], cityKeys: ["karachi"], cityOrganizationIds: [2] })])
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      showTab(dialog, "By branch")
+      const south = within(dialog).getByLabelText(/South/)
+      expect(south.getAttribute("aria-checked")).toBe("false")
+      expect((south as HTMLButtonElement).disabled).toBe(false)
+      expect(within(dialog).queryByText("via Karachi")).toBeNull()
+      expect(within(dialog).getByText("1 of 3 served in this organization.")).toBeTruthy()
     })
 
     it("keeps the dialog open with the server's reason when refused", async () => {

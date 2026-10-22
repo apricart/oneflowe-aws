@@ -4,6 +4,10 @@ import "server-only"
 import { eq } from "drizzle-orm"
 
 import { branches, orders } from "@/db/schema"
+import {
+  APRICART_SUPPORT_ROLE,
+  hasApricartSupportOrderReadScope,
+} from "@/lib/apricart-support-access"
 import { verifyResourceAccess, type RequestScope } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { canOrderPortalReadOrder } from "@/lib/group-order-visibility"
@@ -23,6 +27,7 @@ export const ORDER_DETAIL_READ_ROLES = [
   "GROUP_USER",
   "GROUP_ORDER_PORTAL",
   "ORDER_PORTAL",
+  APRICART_SUPPORT_ROLE,
 ] as const
 
 export type OrderReadOptions = {
@@ -51,6 +56,7 @@ export async function hasBranchAccessForOrderRead(
   order: { organizationId: number; branchId: number },
   options: OrderReadOptions = {},
 ): Promise<boolean> {
+  if (hasApricartSupportOrderReadScope(role, userId, scope)) return true
   if (!usesMultiBranchScope(role)) {
     return verifyResourceAccess(order.organizationId, order.branchId, options)
   }

@@ -19,6 +19,7 @@ import {
   users,
   warehouseAssignments,
   warehouseCityAssignments,
+  warehouseCityOrganizations,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 import { WAREHOUSE_API_RULES } from "@/lib/warehouse-access"
@@ -120,6 +121,8 @@ const ANSWERS_ANY_CALLER = new Set<string>([
   "app/api/v1/auth/password-reset/verify/route.ts",
   "app/api/v1/auth/password-reset/complete/route.ts",
   "app/api/v1/join/requests/route.ts",
+  "app/api/v1/join/email-verification/request/route.ts",
+  "app/api/v1/join/email-verification/verify/route.ts",
   // "Mark all read" on the caller's own notices; for a role outside its list —
   // the warehouse among them — it answers { updated: 0 } and runs no update.
   "app/api/v1/notifications/route.ts",
@@ -167,7 +170,10 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every write handler
       .where(eq(warehouseAssignments.userId, ids.warehouse)).orderBy(warehouseAssignments.branchId)
     const cityRows = await db.select({ cityKey: warehouseCityAssignments.cityKey }).from(warehouseCityAssignments)
       .where(eq(warehouseCityAssignments.userId, ids.warehouse))
-    return { orderRows, lineRows, organizationRows, branchRows, groupRows, userRows, productRows, reachRows, cityRows }
+    const cityOrganizationRows = await db.select({ organizationId: warehouseCityOrganizations.organizationId })
+      .from(warehouseCityOrganizations)
+      .where(eq(warehouseCityOrganizations.userId, ids.warehouse))
+    return { orderRows, lineRows, organizationRows, branchRows, groupRows, userRows, productRows, reachRows, cityRows, cityOrganizationRows }
   }
 
   beforeAll(async () => {
@@ -263,6 +269,7 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every write handler
     await db.delete(systemLogs).where(or(inArray(systemLogs.organizationId, organizationIds), inArray(systemLogs.userId, userIds)))
     await db.delete(warehouseAssignments).where(inArray(warehouseAssignments.userId, userIds))
     await db.delete(warehouseCityAssignments).where(inArray(warehouseCityAssignments.userId, userIds))
+    await db.delete(warehouseCityOrganizations).where(inArray(warehouseCityOrganizations.userId, userIds))
     await db.delete(groups).where(eq(groups.id, ids.groupB))
     await db.delete(globalProducts).where(eq(globalProducts.id, ids.productId))
     await db.delete(branches).where(inArray(branches.organizationId, organizationIds))
@@ -393,6 +400,7 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every write handler
     const valid: Array<[string, string, string, unknown]> = [
       ["PUT", "app/api/v1/warehouse-team/[userId]/branches/route.ts", `/api/v1/warehouse-team/${ids.warehouse}/branches`, { organizationId: ids.orgA, branchIds: [ids.branchA1, ids.branchA2] }],
       ["PUT", "app/api/v1/warehouse-team/[userId]/cities/route.ts", `/api/v1/warehouse-team/${ids.warehouse}/cities`, { city: `Wsweep other ${suffix}`, assigned: true }],
+      ["PUT", "app/api/v1/warehouse-team/[userId]/city-organizations/route.ts", `/api/v1/warehouse-team/${ids.warehouse}/city-organizations`, { organizationId: ids.orgB, assigned: true }],
       ["POST", "app/api/v1/orders/[id]/approve/route.ts", `/api/v1/orders/${ids.orderX}/approve`, {}],
       ["POST", "app/api/v1/orders/[id]/approve/route.ts", `/api/v1/orders/${ids.orderZ}/approve`, {}],
       ["POST", "app/api/v1/orders/[id]/reject/route.ts", `/api/v1/orders/${ids.orderX}/reject`, { reason: "sweep" }],

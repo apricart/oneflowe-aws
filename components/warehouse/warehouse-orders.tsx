@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import type { FulfillmentStatus } from "@/lib/fulfillment-status"
+import { PAYMENT_STATUS_LABELS, type PaymentStatus } from "@/lib/payment-status"
 import { formatPKR } from "@/lib/utils"
 import {
   PICKING_LIST_HEADERS,
@@ -87,12 +88,13 @@ function when(value: string | null): string {
   return Number.isNaN(date.getTime()) ? "—" : format(date, "d MMM, h:mm a")
 }
 
-function buildQuery(input: { tab: Tab; organizationId: string; branchId: string; search: string; page: number; limit?: number; lines?: boolean }): string {
+function buildQuery(input: { tab: Tab; organizationId: string; branchId: string; paymentStatus: PaymentStatus | null; search: string; page: number; limit?: number; lines?: boolean }): string {
   const params = new URLSearchParams()
   params.set("view", input.tab.view)
   if (input.tab.stage) params.set("stage", input.tab.stage)
   if (input.organizationId !== ALL) params.set("organizationId", input.organizationId)
   if (input.branchId !== ALL) params.set("branchId", input.branchId)
+  if (input.tab.view === "delivered" && input.paymentStatus) params.set("paymentStatus", input.paymentStatus)
   if (input.search) params.set("q", input.search)
   params.set("page", String(input.page))
   if (input.limit) params.set("limit", String(input.limit))
@@ -104,6 +106,7 @@ export function WarehouseOrders() {
   const [tabKey, setTabKey] = useState("open")
   const [organizationId, setOrganizationId] = useState(ALL)
   const [branchId, setBranchId] = useState(ALL)
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
   const [searchInput, setSearchInput] = useState("")
   const search = useDeferredValue(searchInput.trim())
   const [page, setPage] = useState(1)
@@ -112,8 +115,8 @@ export function WarehouseOrders() {
 
   const tab = TABS.find((candidate) => candidate.key === tabKey) ?? TABS[0]
   const key = useMemo(
-    () => buildQuery({ tab, organizationId, branchId, search, page }),
-    [tab, organizationId, branchId, search, page],
+    () => buildQuery({ tab, organizationId, branchId, paymentStatus, search, page }),
+    [tab, organizationId, branchId, paymentStatus, search, page],
   )
   const { data, error, isLoading, isValidating, mutate } = useSWR<QueueResponse>(key, fetcher, {
     keepPreviousData: true,
@@ -141,7 +144,7 @@ export function WarehouseOrders() {
       let total = 0
       for (let current = 1; current <= EXPORT_MAX_PAGES; current += 1) {
         const pageData = await fetcher<QueueResponse>(buildQuery({
-          tab, organizationId, branchId, search, page: current, limit: WAREHOUSE_ORDER_PAGE_SIZE_MAX, lines: true,
+          tab, organizationId, branchId, paymentStatus, search, page: current, limit: WAREHOUSE_ORDER_PAGE_SIZE_MAX, lines: true,
         }))
         for (const row of pageData.items) {
           orders.push({
@@ -187,7 +190,7 @@ export function WarehouseOrders() {
             aria-selected={candidate.key === tab.key}
             size="sm"
             variant={candidate.key === tab.key ? "default" : "outline"}
-            onClick={() => { setTabKey(candidate.key); setPage(1) }}
+            onClick={() => { setTabKey(candidate.key); if (candidate.view !== "delivered") setPaymentStatus(null); setPage(1) }}
           >
             {candidate.label}
             {candidate.count && data && (
@@ -212,6 +215,19 @@ export function WarehouseOrders() {
             </SelectContent>
           </Select>
         </div>
+        {tab.view === "delivered" && (
+          <div className="space-y-1">
+            <Label htmlFor="warehouse-payment">Payment</Label>
+            <Select value={paymentStatus ?? ALL} onValueChange={(value) => { setPaymentStatus(value === ALL ? null : value as PaymentStatus); setPage(1) }}>
+              <SelectTrigger id="warehouse-payment" className="w-40"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All payments</SelectItem>
+                <SelectItem value="PAID">Paid</SelectItem>
+                <SelectItem value="UNPAID">Unpaid</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <div className="space-y-1">
           <Label htmlFor="warehouse-branch">Branch</Label>
           <Select value={branchId} onValueChange={(value) => { setBranchId(value); setPage(1) }}>
@@ -231,7 +247,7 @@ export function WarehouseOrders() {
             <Input
               id="warehouse-search"
               className="w-64 pl-8"
-              placeholder="Order, invoice or branch"
+              placeholder="Order ID, reference, invoice or branch"
               maxLength={100}
               value={searchInput}
               onChange={(event) => { setSearchInput(event.target.value); setPage(1) }}
@@ -270,6 +286,7 @@ export function WarehouseOrders() {
               <table className="w-full min-w-[960px] text-sm">
                 <thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground">
                   <tr>
+                    <th className="px-3 py-2">Order ID</th>
                     <th className="px-3 py-2">Order</th>
                     <th className="px-3 py-2">Branch</th>
                     <th className="px-3 py-2">Destination</th>
@@ -288,6 +305,7 @@ export function WarehouseOrders() {
                       className="cursor-pointer border-t hover:bg-muted/40"
                       onClick={() => setOpenOrderId(row.id)}
                     >
+                      <td className="px-3 py-2 font-mono text-xs tabular-nums">{row.id}</td>
                       <td className="px-3 py-2">
                         <button
                           type="button"
@@ -318,7 +336,9 @@ export function WarehouseOrders() {
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums">{row.itemCount}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{formatPKR(row.totalCents / 100)}</td>
-                      <td className="px-3 py-2">{row.paymentStatus}</td>
+                      <td className="px-3 py-2">
+                        <Badge variant="outline">{PAYMENT_STATUS_LABELS[row.paymentStatus as PaymentStatus] ?? row.paymentStatus}</Badge>
+                      </td>
                       <td className="px-3 py-2">{when(tab.view === "delivered" ? row.deliveredAt : row.approvedAt)}</td>
                     </tr>
                   ))}

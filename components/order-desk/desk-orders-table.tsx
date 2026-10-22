@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -31,6 +32,7 @@ import {
 import { CHANNEL_META, STAGE_META, StagePill, TAB_LABELS } from "@/components/order-desk/desk-theme"
 import { fetcher } from "@/lib/fetcher"
 import { FULFILLMENT_STATUSES, FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
+import { PAYMENT_STATUS_LABELS, type PaymentStatus } from "@/lib/payment-status"
 import {
   DESK_ORDER_STATUS_FILTERS,
   deskOrderStage,
@@ -118,6 +120,7 @@ function OrderCard({
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="font-semibold">{order.tid}</h3>
               <StagePill stage={stage} />
+              {stage === "fulfilled" && <PaymentStatusBadge order={order} />}
               {order.status.toUpperCase() === "REFUNDED" && (
                 <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">Fully refunded</span>
               )}
@@ -270,6 +273,7 @@ function OrderCard({
  */
 export function DeskOrdersTable({ initialTab = "awaiting_approval" }: Readonly<{ initialTab?: DeskOrderStatusFilter }>) {
   const [tab, setTab] = useState<DeskOrderStatusFilter>(initialTab)
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
   const [organizationId, setOrganizationId] = useState(ALL)
   const [branchId, setBranchId] = useState(ALL)
   const [searchInput, setSearchInput] = useState("")
@@ -286,6 +290,7 @@ export function DeskOrdersTable({ initialTab = "awaiting_approval" }: Readonly<{
   const params = new URLSearchParams({ status: tab, page: String(page) })
   if (organizationId !== ALL) params.set("organizationId", organizationId)
   if (branchId !== ALL) params.set("branchId", branchId)
+  if (tab === "fulfilled" && paymentStatus) params.set("paymentStatus", paymentStatus)
   if (search) params.set("q", search)
   const { data, error, isLoading, mutate } = useSWR<DeskOrderPage>(`${DESK_ORDERS_KEY_PREFIX}?${params.toString()}`, fetcher, {
     keepPreviousData: true,
@@ -297,6 +302,7 @@ export function DeskOrdersTable({ initialTab = "awaiting_approval" }: Readonly<{
 
   const chooseTab = (next: DeskOrderStatusFilter) => {
     setTab(next)
+    if (next !== "fulfilled") setPaymentStatus(null)
     setPage(1)
   }
 
@@ -360,6 +366,24 @@ export function DeskOrdersTable({ initialTab = "awaiting_approval" }: Readonly<{
           )
         })}
       </div>
+
+      {tab === "fulfilled" && (
+        <div className="flex w-fit items-center rounded-xl border bg-muted/40 p-1" role="group" aria-label="Filter fulfilled orders by payment status">
+          {([null, "PAID", "UNPAID"] as const).map((nextPaymentStatus) => (
+            <Button
+              key={nextPaymentStatus ?? "all"}
+              type="button"
+              size="sm"
+              variant={paymentStatus === nextPaymentStatus ? "secondary" : "ghost"}
+              aria-pressed={paymentStatus === nextPaymentStatus}
+              onClick={() => { setPage(1); setPaymentStatus(nextPaymentStatus) }}
+              className="h-8 rounded-lg px-3 text-xs font-bold"
+            >
+              {nextPaymentStatus ? PAYMENT_STATUS_LABELS[nextPaymentStatus] : "All payments"}
+            </Button>
+          ))}
+        </div>
+      )}
 
       {readyCount > 0 && tab !== "ready_to_fulfil" && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-100">

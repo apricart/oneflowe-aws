@@ -29,6 +29,7 @@ import type { DeliveryGroupRow, DeliveryListView } from "@/lib/delivery-sla"
 const ALL = "all"
 
 type Filters = {
+  orderId: string
   organizationId: string
   region: string
   city: string
@@ -39,6 +40,7 @@ type Filters = {
 }
 
 const EMPTY_FILTERS: Filters = {
+  orderId: "",
   organizationId: ALL,
   region: ALL,
   city: ALL,
@@ -62,6 +64,7 @@ const dashboardTimelineEndpoint = (orderId: number) => `/api/v1/delivery-dashboa
 
 function buildQuery(filters: Filters, view: DeliveryListView, base: string): string {
   const params = new URLSearchParams()
+  if (filters.orderId) params.set("orderId", filters.orderId)
   if (filters.organizationId !== ALL) params.set("organizationId", filters.organizationId)
   if (filters.organizationId !== ALL && filters.branchId !== ALL) params.set("branchId", filters.branchId)
   if (filters.region !== ALL) params.set("region", filters.region)
@@ -102,9 +105,11 @@ function delayText(row: Pick<DeliveryListRow, "hoursOverdue" | "hoursRemaining" 
 export function DeliveryDashboard({
   dashboardEndpoint = DASHBOARD_ENDPOINT,
   timelineEndpoint = dashboardTimelineEndpoint,
+  warehouseOrderIdTools = false,
 }: Readonly<{
   dashboardEndpoint?: string
   timelineEndpoint?: (orderId: number) => string
+  warehouseOrderIdTools?: boolean
 }> = {}) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
   const [view, setView] = useState<DeliveryListView>("ALL")
@@ -144,7 +149,13 @@ export function DeliveryDashboard({
         </Button>
       </div>
 
-      <FilterBar filters={filters} data={data} onChange={update} onReset={() => setFilters(EMPTY_FILTERS)} />
+      <FilterBar
+        filters={filters}
+        data={data}
+        onChange={update}
+        onReset={() => setFilters(EMPTY_FILTERS)}
+        showOrderIdSearch={warehouseOrderIdTools}
+      />
 
       {error && (
         <Card role="alert" className="border-rose-200 bg-rose-50/60 dark:border-rose-900/60 dark:bg-rose-950/20">
@@ -177,6 +188,7 @@ export function DeliveryDashboard({
               view={view}
               onViewChange={setView}
               onOpen={setTimelineOrder}
+              showOrderId={warehouseOrderIdTools}
             />
           </div>
 
@@ -194,7 +206,12 @@ export function DeliveryDashboard({
         </>
       )}
 
-      <TimelineSheet order={timelineOrder} timelineEndpoint={timelineEndpoint} onClose={() => setTimelineOrder(null)} />
+      <TimelineSheet
+        order={timelineOrder}
+        timelineEndpoint={timelineEndpoint}
+        onClose={() => setTimelineOrder(null)}
+        showOrderId={warehouseOrderIdTools}
+      />
     </div>
   )
 }
@@ -204,16 +221,33 @@ function FilterBar({
   data,
   onChange,
   onReset,
+  showOrderIdSearch,
 }: Readonly<{
   filters: Filters
   data: DeliveryDashboardResponse | undefined
   onChange: (patch: Partial<Filters>) => void
   onReset: () => void
+  showOrderIdSearch: boolean
 }>) {
   const options = data?.options
   return (
     <Card>
-      <CardContent className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      <CardContent className={cn("grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4", showOrderIdSearch ? "xl:grid-cols-8" : "xl:grid-cols-7")}>
+        {showOrderIdSearch && (
+          <div className="space-y-1">
+            <Label htmlFor="delivery-filter-order-id" className="text-xs">Order ID</Label>
+            <Input
+              id="delivery-filter-order-id"
+              type="search"
+              inputMode="numeric"
+              placeholder="Search order ID"
+              value={filters.orderId}
+              onChange={(event) => {
+                if (/^\d*$/.test(event.target.value)) onChange({ orderId: event.target.value })
+              }}
+            />
+          </div>
+        )}
         <FilterSelect
           id="delivery-filter-organization"
           label="Client"
@@ -488,11 +522,13 @@ function OrdersCard({
   view,
   onViewChange,
   onOpen,
+  showOrderId,
 }: Readonly<{
   data: DeliveryDashboardResponse
   view: DeliveryListView
   onViewChange: (view: DeliveryListView) => void
   onOpen: (row: DeliveryListRow) => void
+  showOrderId: boolean
 }>) {
   const { items, total, order } = data.orders
   const newestFirst = order === "newest"
@@ -533,6 +569,7 @@ function OrdersCard({
             <table className="w-full min-w-[56rem] text-sm">
               <thead>
                 <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                  {showOrderId && <th scope="col" className="px-4 py-2 font-medium">Order ID</th>}
                   <th scope="col" className="px-4 py-2 font-medium">Order</th>
                   <th scope="col" className="px-4 py-2 font-medium">Client</th>
                   <th scope="col" className="px-4 py-2 font-medium">Region</th>
@@ -552,6 +589,7 @@ function OrdersCard({
                     onClick={() => onOpen(row)}
                     className="cursor-pointer border-b last:border-0 hover:bg-slate-50 dark:hover:bg-slate-800/40"
                   >
+                    {showOrderId && <td className="px-4 py-2 font-mono text-xs tabular-nums">{row.id}</td>}
                     <td className="px-4 py-2">
                       <button
                         type="button"
@@ -728,7 +766,13 @@ function TimelineSheet({
   order,
   timelineEndpoint,
   onClose,
-}: Readonly<{ order: DeliveryListRow | null; timelineEndpoint: (orderId: number) => string; onClose: () => void }>) {
+  showOrderId,
+}: Readonly<{
+  order: DeliveryListRow | null
+  timelineEndpoint: (orderId: number) => string
+  onClose: () => void
+  showOrderId: boolean
+}>) {
   const { data, error, isLoading } = useSWR<TimelineResponse>(
     order ? timelineEndpoint(order.id) : null,
     fetcher,
@@ -739,7 +783,9 @@ function TimelineSheet({
         <SheetHeader>
           <SheetTitle>Order {order?.tid}</SheetTitle>
           <SheetDescription>
-            {order ? `${order.organizationName} · ${order.branchName} · ${order.city}` : "Delivery journey"}
+            {order
+              ? `${showOrderId ? `Order ID ${order.id} · ` : ""}${order.organizationName} · ${order.branchName} · ${order.city}`
+              : "Delivery journey"}
           </SheetDescription>
         </SheetHeader>
         <div className="space-y-4 p-4">

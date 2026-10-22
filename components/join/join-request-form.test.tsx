@@ -104,3 +104,25 @@ describe("JoinRequestForm — the email is locked to the organization's domain",
     expect(screen.getByRole("alert").textContent).toContain("Use your @ke.com.pk email address")
   })
 })
+
+describe("JoinRequestForm — an address already verified by an emailed code", () => {
+  it("shows it read-only and sends it", async () => {
+    const onSubmit = vi.fn(async (_payload: Record<string, unknown>) => {})
+    render(<JoinRequestForm options={OPTIONS} lockedEmailLocalPart="ada" onSubmit={onSubmit} onBack={vi.fn()} />)
+
+    const email = screen.getByLabelText(/^Work email \(verified\)/) as HTMLInputElement
+    expect(email.value).toBe("ada")
+    expect(email.readOnly).toBe(true)
+
+    fireEvent.change(screen.getByLabelText(/^First name/), { target: { value: "Ada" } })
+    fireEvent.change(screen.getByLabelText(/^Last name/), { target: { value: "Lovelace" } })
+    fireEvent.change(screen.getByLabelText(/^Username/), { target: { value: "ada" } })
+    fireEvent.change(screen.getByLabelText(/^Password/), { target: { value: "Join-Flow-2026!x" } })
+    fireEvent.change(screen.getByLabelText(/^Confirm password/), { target: { value: "Join-Flow-2026!x" } })
+    fireEvent.click(screen.getByRole("button", { name: "Order Initiator" }))
+    fireEvent.change(screen.getByLabelText(/^Branch/), { target: { value: "7" } })
+    await send()
+
+    expect(onSubmit.mock.calls[0][0].email).toBe("ada@ke.com.pk")
+  })
+})

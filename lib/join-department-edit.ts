@@ -26,13 +26,17 @@ import {
   SIGNUP_MAX_BRANCHES,
   SIGNUP_PHONE_PATTERN,
   type RequestedBranchEntry,
+  type RequestedHierarchy,
   type RequestedNewBranch,
   crcError,
   isDepartment,
   normalizeBranchName,
   normalizeCrc,
+  requestedBranchHierarchyError,
   requestedBranchNameError,
+  requestedHierarchyOf,
 } from "@/lib/join-department-signup"
+import { BRANCH_HIERARCHY_LABELS, type BranchHierarchyRole, isBranchHierarchyRole } from "@/lib/branch-hierarchy"
 import { emailMatchesDomain } from "@/lib/organization-email-domain"
 import { USERNAME_BASE_MAX_LENGTH } from "@/lib/username-prefix"
 
@@ -69,6 +73,10 @@ export type StoredRequestBranchRow = {
   existingBranchId: number | null
   costCenterId: string | null
   requestedBranchName: string | null
+  requestedBranchCity?: string | null
+  requestedHierarchyRole?: string | null
+  requestedParentBranchId?: number | null
+  requestedParentCrc?: string | null
 }
 
 export type RequestBranchEditPlan = {
@@ -77,37 +85,101 @@ export type RequestBranchEditPlan = {
   insertNewBranches: RequestedNewBranch[]
   /** Kept CRC rows whose name the edit gives or changes. */
   renames: Array<{ id: number; name: string }>
+  /** Kept CRC rows whose city (and so province) the edit gives or changes. */
+  relocations: Array<{ id: number; city: string; province: string }>
+  /** Kept CRC rows whose proposed type the edit gives or changes (plans/OF-JOIN-new-branch-parent-child.md). */
+  retypes: Array<{ id: number; hierarchy: RequestedHierarchy }>
+}
+
+/** The type a stored row proposes, or null. */
+export function storedRequestedHierarchy(row: StoredRequestBranchRow): RequestedHierarchy | null {
+  if (!isBranchHierarchyRole(row.requestedHierarchyRole)) return null
+  return {
+    hierarchyRole: row.requestedHierarchyRole,
+    parentBranchId: row.requestedParentBranchId ?? null,
+    parentCrc: row.requestedParentCrc ?? null,
+  }
+}
+
+function sameRequestedHierarchy(left: RequestedHierarchy | null, right: RequestedHierarchy | null): boolean {
+  return left?.hierarchyRole === right?.hierarchyRole
+    && (left?.parentBranchId ?? null) === (right?.parentBranchId ?? null)
+    && (left?.parentCrc ?? null) === (right?.parentCrc ?? null)
+}
+
+/**
+ * The edited branches to create, each with the type it will hold: the edit's
+ * own when it gives one, else the one the same CRC's row holds now. What the
+ * server validates as a whole before writing anything.
+ */
+export function withKeptHierarchy(
+  current: readonly StoredRequestBranchRow[],
+  newBranches: readonly RequestedNewBranch[],
+): RequestedNewBranch[] {
+  const storedByCrc = new Map(current.flatMap((row) => (
+    row.existingBranchId === null && row.costCenterId !== null ? [[normalizeCrc(row.costCenterId), row] as const] : []
+  )))
+  return newBranches.map((branch) => {
+    if (branch.hierarchy) return branch
+    const stored = storedByCrc.get(normalizeCrc(branch.crc))
+    return { ...branch, hierarchy: stored ? storedRequestedHierarchy(stored) : null }
+  })
+}
+
+/** What a kept CRC row takes from the edit: its name, city and type when given and different. */
+function keptRowChanges(
+  row: StoredRequestBranchRow,
+  wanted: RequestedNewBranch,
+): Pick<RequestBranchEditPlan, "renames" | "relocations" | "retypes"> {
+  const renames = wanted.name && wanted.name !== row.requestedBranchName ? [{ id: row.id, name: wanted.name }] : []
+  const moves = Boolean(wanted.city && wanted.province) && wanted.city !== (row.requestedBranchCity ?? null)
+  const relocations = moves ? [{ id: row.id, city: wanted.city as string, province: wanted.province as string }] : []
+  const retypes = wanted.hierarchy && !sameRequestedHierarchy(wanted.hierarchy, storedRequestedHierarchy(row))
+    ? [{ id: row.id, hierarchy: wanted.hierarchy }]
+    : []
+  return { renames, relocations, retypes }
 }
 
 /**
  * The request branch rows an edit keeps, drops and adds. `next` is the edited
  * list: existing branch ids picked by name, and the branches still to be
- * created (a typed CRC is always one of these). A row is kept when it names the same branch or the same
- * CRC; a kept CRC row takes the edit's name when one is given, and keeps its
- * own when none is.
+ * created (a typed CRC is always one of these). A row is kept when it names the
+ * same branch or the same CRC; a kept CRC row takes the edit's name, city and
+ * type when they are given, and keeps its own when they are not.
  */
 export function planRequestBranchEdit(
   current: readonly StoredRequestBranchRow[],
   next: Readonly<{ existingIds: readonly number[]; newBranches: readonly RequestedNewBranch[] }>,
 ): RequestBranchEditPlan {
   const wantedExisting = new Set(next.existingIds)
-  const wantedNew = new Map(next.newBranches.map((entry) => [
-    normalizeCrc(entry.crc),
-    normalizeBranchName(entry.name) || null,
-  ]))
+  const wantedNew = new Map(next.newBranches.map((entry): [string, RequestedNewBranch] => {
+    const crc = normalizeCrc(entry.crc)
+    return [crc, {
+      crc,
+      name: normalizeBranchName(entry.name) || null,
+      city: entry.city,
+      province: entry.province,
+      hierarchy: entry.hierarchy ?? null,
+    }]
+  }))
   const keptExisting = new Set<number>()
   const keptCrcs = new Set<string>()
   const deleteIds: number[] = []
   const renames: Array<{ id: number; name: string }> = []
+  const relocations: Array<{ id: number; city: string; province: string }> = []
+  const retypes: Array<{ id: number; hierarchy: RequestedHierarchy }> = []
 
   for (const row of current) {
     const crc = row.costCenterId === null ? null : normalizeCrc(row.costCenterId)
+    const wanted = crc === null ? undefined : wantedNew.get(crc)
     if (row.existingBranchId !== null && wantedExisting.has(row.existingBranchId)) {
       keptExisting.add(row.existingBranchId)
-    } else if (row.existingBranchId === null && crc !== null && wantedNew.has(crc)) {
+    } else if (row.existingBranchId === null && crc !== null && wanted) {
       keptCrcs.add(crc)
-      const name = wantedNew.get(crc)
-      if (name && name !== row.requestedBranchName) renames.push({ id: row.id, name })
+      const changes = keptRowChanges(row, wanted)
+      renames.push(...changes.renames)
+      relocations.push(...changes.relocations)
+      retypes.push(...changes.retypes)
     } else {
       deleteIds.push(row.id)
     }
@@ -116,10 +188,10 @@ export function planRequestBranchEdit(
   return {
     deleteIds,
     insertExistingIds: [...wantedExisting].filter((id) => !keptExisting.has(id)),
-    insertNewBranches: [...wantedNew.entries()]
-      .filter(([crc]) => !keptCrcs.has(crc))
-      .map(([crc, name]) => ({ crc, name: name ?? null })),
+    insertNewBranches: [...wantedNew.values()].filter((entry) => !keptCrcs.has(entry.crc)),
     renames,
+    relocations,
+    retypes,
   }
 }
 
@@ -184,7 +256,25 @@ export function editedBranchListError(branches: readonly RequestedBranchEntry[])
 
 export type JoinEditBranch =
   | { key: string; kind: "existing"; branchId: number; label: string }
-  | { key: string; kind: "crc"; crc: string; name: string | null; label: string }
+  | {
+      key: string
+      kind: "crc"
+      crc: string
+      name: string | null
+      label: string
+      /** The applicant's listed city and its province, carried through an edit unchanged. */
+      city?: string | null
+      province?: string | null
+      /**
+       * The proposed type, carried through an edit unchanged unless a parent
+       * on the request is removed (`removeEditBranch`); Head Office sets the
+       * type itself in the review (plans/OF-JOIN-new-branch-parent-child.md).
+       */
+      hierarchyRole?: BranchHierarchyRole | null
+      parentBranchId?: number | null
+      parentBranchName?: string | null
+      parentCrc?: string | null
+    }
 
 export type DepartmentJoinEditDraft = {
   firstName: string
@@ -219,6 +309,12 @@ export type JoinEditSource = {
     name: string | null
     costCenterId: string | null
     requestedName: string | null
+    requestedCity?: string | null
+    requestedProvince?: string | null
+    requestedHierarchyRole?: BranchHierarchyRole | null
+    requestedParentBranchId?: number | null
+    requestedParentBranchName?: string | null
+    requestedParentCrc?: string | null
   }>
   addresses: ReadonlyArray<{ requestAddressId: number; address: string }>
   approvers: ReadonlyArray<{ level: number; email: string; designation: string }>
@@ -259,6 +355,12 @@ export function draftFromReview(review: JoinEditSource): DepartmentJoinEditDraft
           crc: normalizeCrc(row.costCenterId),
           name: row.requestedName,
           label: newBranchLabel(row.costCenterId, row.requestedName),
+          city: row.requestedCity ?? null,
+          province: row.requestedProvince ?? null,
+          hierarchyRole: row.requestedHierarchyRole ?? null,
+          parentBranchId: row.requestedParentBranchId ?? null,
+          parentBranchName: row.requestedParentBranchName ?? null,
+          parentCrc: row.requestedParentCrc ?? null,
         }]
       }
       return []
@@ -314,6 +416,38 @@ function approverDraftErrors(draft: DepartmentJoinEditDraft, emailDomain: string
   }
 }
 
+/**
+ * How a branch to create's proposed type reads in the edit list: "Parent",
+ * "Child of …" (an existing branch's name, or the name of the branch on the
+ * request it names), "Standalone"; null when none was proposed.
+ */
+export function editBranchHierarchyText(entry: JoinEditBranch, branches: readonly JoinEditBranch[]): string | null {
+  if (entry.kind !== "crc") return null
+  const hierarchy = requestedHierarchyOf(entry)
+  if (!hierarchy) return null
+  if (hierarchy.hierarchyRole !== "CHILD") return BRANCH_HIERARCHY_LABELS[hierarchy.hierarchyRole]
+  if (hierarchy.parentCrc !== null) {
+    const parent = branches.find((other) => other.kind === "crc" && other.crc === hierarchy.parentCrc)
+    return `Child of ${parent?.kind === "crc" ? parent.name ?? `CRC ${parent.crc}` : `CRC ${hierarchy.parentCrc}`}`
+  }
+  return `Child of ${entry.parentBranchName ?? "an existing branch"}`
+}
+
+/**
+ * The draft without one branch. A branch to create that named the removed one
+ * as its parent becomes Standalone, so the request never names a parent that
+ * is not on it; the list shows the change before anything is saved.
+ */
+export function removeEditBranch(branches: readonly JoinEditBranch[], key: string): JoinEditBranch[] {
+  const removed = branches.find((entry) => entry.key === key)
+  const removedCrc = removed?.kind === "crc" ? removed.crc : null
+  return branches
+    .filter((entry) => entry.key !== key)
+    .map((entry) => (entry.kind === "crc" && removedCrc !== null && entry.parentCrc === removedCrc
+      ? { ...entry, hierarchyRole: "STANDALONE" as const, parentBranchId: null, parentBranchName: null, parentCrc: null }
+      : entry))
+}
+
 /** Every problem with the draft, keyed by field; empty when it can be saved. */
 export function departmentJoinEditErrors(
   draft: DepartmentJoinEditDraft,
@@ -325,7 +459,9 @@ export function departmentJoinEditErrors(
 
   const branchProblem = editedBranchListError(draft.branches.map((entry) => (
     entry.kind === "existing" ? { branchId: entry.branchId } : { crc: entry.crc }
-  )))
+  ))) ?? requestedBranchHierarchyError(draft.branches.flatMap((entry) => (entry.kind === "crc"
+    ? [{ crc: entry.crc, name: entry.name, city: null, province: null, hierarchy: requestedHierarchyOf(entry) }]
+    : [])))
   if (branchProblem) errors.branches = branchProblem
 
   const addresses = draft.addresses.map((row) => row.address)
@@ -375,7 +511,15 @@ export function toDepartmentJoinUpdatePayload(draft: DepartmentJoinEditDraft) {
       department: draft.department,
       branches: draft.branches.map((entry) => {
         if (entry.kind === "existing") return { branchId: entry.branchId }
-        return entry.name ? { crc: entry.crc, name: entry.name } : { crc: entry.crc }
+        const hierarchy = requestedHierarchyOf(entry)
+        return {
+          crc: entry.crc,
+          ...(entry.name ? { name: entry.name } : {}),
+          ...(entry.city && entry.province ? { city: entry.city, province: entry.province } : {}),
+          ...(hierarchy ? { hierarchyRole: hierarchy.hierarchyRole } : {}),
+          ...(hierarchy?.parentBranchId ? { parentBranchId: hierarchy.parentBranchId } : {}),
+          ...(hierarchy?.parentCrc ? { parentCrc: hierarchy.parentCrc } : {}),
+        }
       }),
       addresses: draft.addresses.map((row) => row.address.trim()),
       approvers: draft.approvers.map((approver) => ({

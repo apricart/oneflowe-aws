@@ -6,6 +6,7 @@ import { branches, budgets, globalProducts, orderItems, orders, organizations, r
 import { db } from "@/lib/db"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isOrderDelivered, normalizeFulfillmentStatus, type FulfillmentStatus } from "@/lib/fulfillment-status"
+import { normalizePaymentStatus } from "@/lib/payment-status"
 import { STAGES_BEFORE_TAX_INVOICE, isBeforeTaxInvoiceStage } from "@/lib/invoice-policy"
 import { deskOrderActions, type DeskOrderActions, type IntakeChannel } from "@/lib/order-desk-access"
 import {
@@ -74,7 +75,17 @@ export type DeskOrderSummary = DeskOrderActions & {
   fulfilledAt: Date | null
   cancelledAt: Date | null
   cancellationReason: string | null
-  items: { id: number; organizationInventoryId: number | null; productName: string; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    organizationInventoryId: number | null
+    productName: string
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually: boolean
+    cataloguePriceCents: number | null
+  }[]
 }
 
 export type DeskOrderPage = {
@@ -110,6 +121,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
   // Filters only narrow what the reach above already allows.
   if (query.organizationId !== null) conditions.push(eq(orders.organizationId, query.organizationId))
   if (query.branchId !== null) conditions.push(eq(orders.branchId, query.branchId))
+  if (query.paymentStatus !== null) conditions.push(eq(orderSelectColumns.paymentStatus, query.paymentStatus))
   if (query.search) {
     // A parameter, with the LIKE wildcards in what was typed escaped.
     const pattern = `%${escapeLikePattern(query.search)}%`
@@ -144,6 +156,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       correctionRequestNote: orders.correctionRequestNote,
       rejectionReason: orders.rejectionReason,
       fulfillmentStatus: orders.fulfillmentStatus,
+      paymentStatus: orderSelectColumns.paymentStatus,
       organizationId: orders.organizationId,
       organizationName: organizations.name,
       branchId: orders.branchId,
@@ -184,6 +197,8 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
           quantity: orderItems.quantity,
           unit: orderItems.unit,
           priceCents: orderItems.priceCents,
+          priceEnteredManually: orderItems.priceEnteredManually,
+          cataloguePriceCents: orderItems.cataloguePriceCents,
         })
         .from(orderItems)
         .where(inArray(orderItems.orderId, orderIds)),
@@ -201,6 +216,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       ...row,
       ...deskOrderActions(row),
       fulfillmentStatus: normalizeFulfillmentStatus(row.fulfillmentStatus),
+      paymentStatus: normalizePaymentStatus(row.paymentStatus),
       totalCents: Number(row.totalCents),
       refundedCents: Number(row.refundedCents ?? 0),
       pendingRefundCents: pendingByOrder.get(row.id) ?? 0,
@@ -210,10 +226,11 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       hasAttachment: intakeAttachmentKey !== null,
       items: lineRows
         .filter((line) => line.orderId === row.id)
-        .map(({ orderId: _orderId, quantity, priceCents, ...line }) => ({
+        .map(({ orderId: _orderId, quantity, priceCents, cataloguePriceCents, ...line }) => ({
           ...line,
           quantity: Number(quantity),
           priceCents: Number(priceCents),
+          cataloguePriceCents: cataloguePriceCents === null ? null : Number(cataloguePriceCents),
         })),
     })),
     pagination: {

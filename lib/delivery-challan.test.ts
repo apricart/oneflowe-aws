@@ -116,10 +116,10 @@ describe("the challan routes", () => {
       expect(source, route).toContain("await canReadOrderDetail({ orderId, scope, viewerReadsAsHeadOffice: true })")
     }
     const detail = read("app/api/v1/orders/[id]/route.ts")
-    expect(detail).toContain('import { hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"')
+    expect(detail).toContain('import { ORDER_DETAIL_READ_ROLES, hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"')
     // The shared role list is exactly the order detail's allowlist, with the
     // same read-only Viewer opt-in.
-    expect(detail).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"], { viewerReadsAsHeadOffice: true })')
+    expect(detail).toContain("requireApiRole([...ORDER_DETAIL_READ_ROLES], { viewerReadsAsHeadOffice: true })")
     expect(read("lib/server/order-read-access.ts")).toContain(`export const ORDER_DETAIL_READ_ROLES = [
   "SUPER_ADMIN",
   "HEAD_OFFICE",
@@ -127,6 +127,7 @@ describe("the challan routes", () => {
   "GROUP_USER",
   "GROUP_ORDER_PORTAL",
   "ORDER_PORTAL",
+  APRICART_SUPPORT_ROLE,
 ] as const`)
   })
 

@@ -20,7 +20,7 @@ import { useSession } from "next-auth/react"
 import { useTheme } from "next-themes"
 import Image from "next/image"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { useEffect,useState } from "react"
 
 async function logout() {
@@ -35,12 +35,14 @@ async function logout() {
 export function Topbar() {
   const { data: session } = useSession()
   const router = useRouter()
+  const pathname = usePathname()
   const [mounted, setMounted] = useState(false)
   const { theme, setTheme } = useTheme()
   const { organizationId, branchIds, setBranchIds } = useAppContext()
   // An organization-wide Viewer gets Head Office's filters and links; it reads
   // the same pages, read-only.
   const { viewRole: userRole } = viewerAccessFor(session?.user)
+  const isGlobalInventory = userRole === "SUPER_ADMIN" && pathname === "/inventory"
 
   useEffect(() => {
     setMounted(true)
@@ -52,7 +54,7 @@ export function Topbar() {
     >
       <div className="flex items-center gap-3">
         <div className="hidden lg:flex">
-          <ContextSelector />
+          <ContextSelector disabled={isGlobalInventory} />
         </div>
         
         {/* Global Branch Filter for HEAD_OFFICE */}

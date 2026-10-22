@@ -41,6 +41,8 @@ export type SalesPerformanceResponse = {
         totalOrders: number
         totalItemsSold?: number
         fulfilledCount?: number
+        fulfilledPaidCount?: number
+        fulfilledUnpaidCount?: number
         fulfilledNetSales?: number
         refundedCount?: number
         rejectedCount?: number
@@ -62,6 +64,8 @@ export type SalesPerformanceResponse = {
         pendingCount: number
         approvedCount: number
         fulfilledCount: number
+        fulfilledPaidCount?: number
+        fulfilledUnpaidCount?: number
         partialCount: number
         refundedCount: number
         rejectedCount: number

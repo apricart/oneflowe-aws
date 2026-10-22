@@ -7,6 +7,7 @@ import {
   type FulfillmentStatus,
 } from "@/lib/fulfillment-status"
 import { FULFILLED_ORDER_STATUSES } from "@/lib/order-delivery-status"
+import { parsePaymentStatusFilter, type PaymentStatus } from "@/lib/payment-status"
 import { neutralizeSpreadsheetFormula } from "@/lib/spreadsheet"
 
 /**
@@ -33,6 +34,7 @@ export const WAREHOUSE_DELIVERED_DAYS_MAX = 366
 export type WarehouseOrderListQuery = {
   view: WarehouseOrderView
   stage: FulfillmentStatus | null
+  paymentStatus: PaymentStatus | null
   organizationId: number | null
   branchId: number | null
   /** Matched against the order number, the invoice number and the branch name. Empty means none. */
@@ -48,7 +50,7 @@ export type WarehouseOrderListQueryResult =
   | { ok: true; value: WarehouseOrderListQuery }
   | { ok: false; error: string }
 
-const ALLOWED_KEYS = new Set(["view", "stage", "organizationId", "branchId", "q", "days", "lines", "page", "limit"])
+const ALLOWED_KEYS = new Set(["view", "stage", "paymentStatus", "organizationId", "branchId", "q", "days", "lines", "page", "limit"])
 
 function optionalId(raw: string | null, name: string): { ok: true; value: number | null } | { ok: false; error: string } {
   if (raw === null || raw.trim() === "") return { ok: true, value: null }
@@ -87,6 +89,8 @@ export function parseWarehouseOrderListQuery(params: URLSearchParams): Warehouse
     }
     stage = normalized as FulfillmentStatus
   }
+  const paymentStatus = parsePaymentStatusFilter(params.get("paymentStatus"))
+  if (!paymentStatus.ok) return { ok: false, error: paymentStatus.message }
 
   const organizationId = optionalId(params.get("organizationId"), "organizationId")
   if (!organizationId.ok) return organizationId
@@ -106,6 +110,7 @@ export function parseWarehouseOrderListQuery(params: URLSearchParams): Warehouse
     value: {
       view: rawView as WarehouseOrderView,
       stage,
+      paymentStatus: paymentStatus.status,
       organizationId: organizationId.value,
       branchId: branchId.value,
       search,

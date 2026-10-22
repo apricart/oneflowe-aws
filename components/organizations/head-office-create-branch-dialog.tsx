@@ -3,7 +3,9 @@
 import { useState, type SubmitEvent } from "react"
 import { GitBranch, Save } from "lucide-react"
 
+import { BranchContactPhoneField } from "@/components/branches/branch-contact-phone-field"
 import { BranchHeadCountField } from "@/components/branches/branch-head-count-field"
+import { BranchHierarchyField } from "@/components/branches/branch-hierarchy-field"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -19,7 +21,13 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
+import { parseContactPhoneInput } from "@/lib/branch-contact-phone"
 import { parseHeadCountInput } from "@/lib/branch-head-count"
+import {
+  DEFAULT_BRANCH_HIERARCHY_ROLE,
+  branchHierarchyInputError,
+  type BranchHierarchy,
+} from "@/lib/branch-hierarchy"
 
 export type CreatedBranch = {
   id: number
@@ -31,8 +39,12 @@ export type CreatedBranch = {
 
 type Props = {
   organizationId: number | null
+  /** The organization's parent branches (`parentBranchOptions`), for a child's parent. */
+  parentOptions: ReadonlyArray<{ id: number; name: string; status: string | null }>
   onCreated: (branch: CreatedBranch) => void
 }
+
+const initialHierarchy: BranchHierarchy = { hierarchyRole: DEFAULT_BRANCH_HIERARCHY_ROLE, parentBranchId: null }
 
 const initialForm = {
   name: "",
@@ -41,14 +53,16 @@ const initialForm = {
   address: "",
   costCenterId: "",
   headCount: "",
+  contactPhone: "",
   isActive: true,
 }
 
-export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Readonly<Props>) {
+export function HeadOfficeCreateBranchDialog({ organizationId, parentOptions, onCreated }: Readonly<Props>) {
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState(initialForm)
+  const [hierarchy, setHierarchy] = useState<BranchHierarchy>(initialHierarchy)
 
   const normalized = {
     name: form.name.trim(),
@@ -58,8 +72,11 @@ export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Read
     costCenterId: form.costCenterId.trim(),
   }
   const headCount = parseHeadCountInput(form.headCount)
+  const contactPhone = parseContactPhoneInput(form.contactPhone)
   const canSubmit = Boolean(
     headCount !== undefined &&
+    contactPhone !== undefined &&
+    branchHierarchyInputError(hierarchy) === null &&
     organizationId &&
     normalized.name.length >= 2 && normalized.name.length <= 100 &&
     normalized.province.length >= 2 && normalized.province.length <= 100 &&
@@ -90,6 +107,9 @@ export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Read
           address: normalized.address,
           costCenterId: normalized.costCenterId || null,
           headCount: headCount ?? null,
+          contactPhone: contactPhone ?? null,
+          hierarchyRole: hierarchy.hierarchyRole,
+          parentBranchId: hierarchy.parentBranchId,
           status: form.isActive ? "active" : "inactive",
         }),
       })
@@ -100,6 +120,7 @@ export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Read
       }
 
       setForm(initialForm)
+      setHierarchy(initialHierarchy)
       setOpen(false)
       onCreated(payload.item as CreatedBranch)
       toast({
@@ -222,10 +243,25 @@ export function HeadOfficeCreateBranchDialog({ organizationId, onCreated }: Read
               />
             </div>
 
+            <BranchContactPhoneField
+              id="head-office-branch-contact-phone"
+              value={form.contactPhone}
+              onChange={(value) => updateField("contactPhone", value)}
+              disabled={saving}
+            />
+
             <BranchHeadCountField
               id="head-office-branch-head-count"
               value={form.headCount}
               onChange={(value) => updateField("headCount", value)}
+              disabled={saving}
+            />
+
+            <BranchHierarchyField
+              id="head-office-branch-hierarchy"
+              value={hierarchy}
+              onChange={setHierarchy}
+              parentOptions={parentOptions}
               disabled={saving}
             />
 

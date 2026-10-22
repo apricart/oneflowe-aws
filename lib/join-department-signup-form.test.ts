@@ -16,8 +16,12 @@ import {
   departmentSignupErrors,
   emptyDepartmentSignupDraft,
   joinPasswordError,
+  chipHierarchyText,
   newBranchChipError,
   newBranchNameChipError,
+  parentChoiceOptions,
+  parentChoiceValue,
+  parseParentChoice,
   payloadSizeError,
   sameBranchName,
   toDepartmentSignupPayload,
@@ -25,6 +29,8 @@ import {
 import { MAX_APPROVAL_LEVELS } from "./order-approval-levels"
 
 /** plans/OF-JOIN-department-signup-multi-user.md */
+
+const STANDALONE = { hierarchyRole: "STANDALONE" as const, parentBranchId: null, parentCrc: null }
 
 function validDraft(): DepartmentSignupDraft {
   return {
@@ -41,8 +47,8 @@ function validDraft(): DepartmentSignupDraft {
     ],
     branches: [
       { key: "b1", kind: "existing", branchId: 4, label: "Head Office", checked: true },
-      { key: "cX", kind: "crc", crc: "AB-ABC-123", name: "Korangi Depot", label: "Korangi Depot", checked: true },
-      { key: "cY", kind: "crc", crc: "AB-ABC-999", name: "Unchecked Depot", label: "Unchecked Depot", checked: false },
+      { key: "cX", kind: "crc", crc: "AB-ABC-123", name: "Korangi Depot", city: "Karachi", province: "Sindh", ...STANDALONE, label: "Korangi Depot", checked: true },
+      { key: "cY", kind: "crc", crc: "AB-ABC-999", name: "Unchecked Depot", city: "Lahore", province: "Punjab", ...STANDALONE, label: "Unchecked Depot", checked: false },
     ],
     addresses: [
       { key: "a1", address: "Plot 1, Clifton, Karachi", checked: true },
@@ -112,13 +118,22 @@ describe("departmentSignupErrors", () => {
     expect(newBranchNameChipError(chips, known, "korangi depot")).toBe("This branch is already added")
     expect(newBranchNameChipError(chips, known, "Saddar Depot")).toBeNull()
 
-    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "" })).toEqual({ field: "crc", message: "Enter a CRC number" })
-    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "AB 12" }))
+    const city = "Karachi"
+    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "", city })).toEqual({ field: "crc", message: "Enter a CRC number" })
+    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "AB 12", city }))
       .toEqual({ field: "crc", message: "Use letters, numbers and dashes only" })
-    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: " ab-abc-123 " }))
+    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: " ab-abc-123 ", city }))
       .toEqual({ field: "crc", message: "This CRC is already added" })
-    expect(newBranchChipError(chips, known, { name: "K", crc: "AB-1" })?.field).toBe("name")
-    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "ab-1" })).toBeNull()
+    expect(newBranchChipError(chips, known, { name: "K", crc: "AB-1", city })?.field).toBe("name")
+    expect(newBranchChipError(chips, known, { name: "Saddar Depot", crc: "ab-1", city })).toBeNull()
+  })
+
+  it("refuses a new branch with no city, or a city not on Pakistan's list", () => {
+    const chips = validDraft().branches
+    const entry = { name: "Saddar Depot", crc: "AB-1" }
+    expect(newBranchChipError(chips, [], { ...entry, city: " " })).toEqual({ field: "city", message: "Choose the city of the new branch" })
+    expect(newBranchChipError(chips, [], { ...entry, city: "Karachee" })).toEqual({ field: "city", message: "Choose the city from the list" })
+    expect(newBranchChipError(chips, [], { ...entry, city: "karachi" })).toBeNull()
   })
 
   it("reads two branch names as one, case and spacing aside", () => {
@@ -130,6 +145,69 @@ describe("departmentSignupErrors", () => {
     expect(addressDraftError("abc")).toMatch(/at least 5/)
     expect(addressDraftError("x".repeat(SIGNUP_ADDRESS_MAX_LENGTH + 1))).toMatch(/At most/)
     expect(addressDraftError("Plot 1, Clifton")).toBeNull()
+  })
+})
+
+describe("a new branch's type (plans/OF-JOIN-new-branch-parent-child.md)", () => {
+  const listed = [{ id: 4, name: "Head Office" }, { id: 7, name: "North Region" }]
+  const parentChip = {
+    key: "cP", kind: "crc" as const, crc: "AB-P-1", name: "Gulshan Hub", city: "Karachi", province: "Sindh",
+    hierarchyRole: "PARENT" as const, parentBranchId: null, parentCrc: null, label: "Gulshan Hub", checked: true,
+  }
+  const childOfNew = {
+    ...parentChip, key: "cC", crc: "AB-C-1", name: "Gulshan Block 2", label: "Gulshan Block 2",
+    hierarchyRole: "CHILD" as const, parentCrc: "AB-P-1",
+  }
+  const childOfExisting = {
+    ...parentChip, key: "cE", crc: "AB-C-2", name: "North Kiosk", label: "North Kiosk",
+    hierarchyRole: "CHILD" as const, parentBranchId: 7,
+  }
+
+  it("offers the organization's parent branches and the new branches added as Parent", () => {
+    expect(parentChoiceOptions(listed, [7], [parentChip, childOfNew])).toEqual([
+      { value: "branch:7", label: "North Region" },
+      { value: "crc:AB-P-1", label: "Gulshan Hub (new)" },
+    ])
+    // A listed branch that is not a parent, and a new one that is not, are not offered.
+    expect(parentChoiceOptions(listed, [], [childOfNew])).toEqual([])
+  })
+
+  it("round-trips a parent choice through the select's value", () => {
+    expect(parseParentChoice(parentChoiceValue({ parentBranchId: 7, parentCrc: null }))).toEqual({ parentBranchId: 7, parentCrc: null })
+    expect(parseParentChoice(parentChoiceValue({ parentBranchId: null, parentCrc: "AB-P-1" }))).toEqual({ parentBranchId: null, parentCrc: "AB-P-1" })
+    expect(parseParentChoice("")).toEqual({ parentBranchId: null, parentCrc: null })
+    expect(parseParentChoice("branch:abc")).toEqual({ parentBranchId: null, parentCrc: null })
+  })
+
+  it("refuses to add a child that names no parent", () => {
+    const entry = { name: "Saddar Depot", crc: "AB-9", city: "Karachi", hierarchyRole: "CHILD" as const }
+    expect(newBranchChipError([], [], { ...entry, parent: { parentBranchId: null, parentCrc: null } }))
+      .toEqual({ field: "parent", message: "Choose the parent branch" })
+    expect(newBranchChipError([], [], { ...entry, parent: { parentBranchId: 7, parentCrc: null } })).toBeNull()
+    expect(newBranchChipError([], [], { ...entry, hierarchyRole: "PARENT" })).toBeNull()
+  })
+
+  it("names the type on the chip", () => {
+    const chips = [parentChip, childOfNew, childOfExisting]
+    expect(chipHierarchyText(parentChip, chips, listed)).toBe("Parent branch")
+    expect(chipHierarchyText(childOfNew, chips, listed)).toBe("Child of Gulshan Hub")
+    expect(chipHierarchyText(childOfExisting, chips, listed)).toBe("Child of North Region")
+    expect(chipHierarchyText(validDraft().branches[1], chips, listed)).toBeNull()
+  })
+
+  it("refuses to send a child whose parent on the form was unchecked", () => {
+    const draft = { ...validDraft(), branches: [{ ...parentChip, checked: false }, childOfNew] }
+    expect(departmentSignupErrors(draft).branches).toMatch(/Gulshan Block 2: its parent must be a new branch on this request marked Parent/)
+    expect(departmentSignupErrors({ ...draft, branches: [parentChip, childOfNew] }).branches).toBeUndefined()
+  })
+
+  it("sends each type with its parent, an existing one by id and a new one by CRC", () => {
+    const payload = toDepartmentSignupPayload({ ...validDraft(), branches: [parentChip, childOfNew, childOfExisting] }, "ubl.com.pk")
+    expect(payload.branches).toEqual([
+      { name: "Gulshan Hub", crc: "AB-P-1", city: "Karachi", province: "Sindh", hierarchyRole: "PARENT" },
+      { name: "Gulshan Block 2", crc: "AB-C-1", city: "Karachi", province: "Sindh", hierarchyRole: "CHILD", parentCrc: "AB-P-1" },
+      { name: "North Kiosk", crc: "AB-C-2", city: "Karachi", province: "Sindh", hierarchyRole: "CHILD", parentBranchId: 7 },
+    ])
   })
 })
 
@@ -145,7 +223,10 @@ describe("toDepartmentSignupPayload", () => {
       ipExtension: "1234",
       employeeId: "E-1",
       department: "Finance",
-      branches: [{ branchId: 4 }, { name: "Korangi Depot", crc: "AB-ABC-123" }],
+      branches: [
+        { branchId: 4 },
+        { name: "Korangi Depot", crc: "AB-ABC-123", city: "Karachi", province: "Sindh", hierarchyRole: "STANDALONE" },
+      ],
       addresses: ["Plot 1, Clifton, Karachi"],
       approvers: [
         { level: 1, email: "first.approver@ubl.com.pk", designation: "Head of Finance" },
@@ -179,6 +260,13 @@ describe("the 8 KB WAF limit", () => {
           kind: "crc" as const,
           crc: `${index}`.padEnd(CRC_MAX_LENGTH, "C"),
           name: `${index}`.padEnd(NEW_BRANCH_FIELD_RULES.name.max, "N"),
+          // The longest city and province on the list, together.
+          city: "Islamabad",
+          province: "Islamabad Capital Territory",
+          // The longest type, naming the longest parent CRC.
+          hierarchyRole: "CHILD" as const,
+          parentBranchId: null,
+          parentCrc: "P".repeat(CRC_MAX_LENGTH),
           label: "",
           checked: true,
         })),

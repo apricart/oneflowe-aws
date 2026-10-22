@@ -108,8 +108,28 @@ describe("DepartmentJoinReviewDialog — a new branch's details", () => {
     await waitFor(() => expect(onDecided).toHaveBeenCalled())
     const body = JSON.parse(jsonFetcher.mock.calls[0][1].body)
     expect(body.newBranches).toEqual([
-      { requestBranchId: 31, name: "Demo Tower", province: "Sindh", city: "Karachi", address: "Plot 4, Clifton" },
+      { requestBranchId: 31, name: "Demo Tower", province: "Sindh", city: "Karachi", address: "Plot 4, Clifton", hierarchyRole: "STANDALONE" },
     ])
+  })
+
+  it("starts the city and province from the applicant's, and sends them unless Head Office changes them", async () => {
+    const located = { ...REVIEW, branches: [{ ...REVIEW.branches[0], requestedCity: "karachi", requestedProvince: "Sindh" }] }
+    const onDecided = renderDialog([], located as typeof REVIEW)
+    await screen.findByLabelText("Province")
+    expect(screen.getByRole("combobox", { name: "City" }).textContent).toBe("Karachi")
+    expect((screen.getByLabelText("Province") as HTMLInputElement).value).toBe("Sindh")
+
+    approve()
+    await waitFor(() => expect(onDecided).toHaveBeenCalled())
+    expect(JSON.parse(jsonFetcher.mock.calls[0][1].body).newBranches[0]).toMatchObject({ city: "Karachi", province: "Sindh" })
+  })
+
+  it("lets Head Office change the applicant's city", async () => {
+    const located = { ...REVIEW, branches: [{ ...REVIEW.branches[0], requestedCity: "Karachi", requestedProvince: "Sindh" }] }
+    renderDialog([], located as typeof REVIEW)
+    await screen.findByLabelText("Province")
+    await chooseCity("Lahore")
+    expect((screen.getByLabelText("Province") as HTMLInputElement).value).toBe("Punjab")
   })
 
   it("starts the branch name from the applicant's, and lists the branch by it", async () => {
@@ -236,7 +256,94 @@ describe("DepartmentJoinReviewDialog — a CRC an existing branch carries", () =
 
     await waitFor(() => expect(onDecided).toHaveBeenCalled())
     expect(JSON.parse(jsonFetcher.mock.calls[0][1].body).newBranches).toEqual([
-      { requestBranchId: 31, name: "Orangi Depot", province: "Sindh", city: "Karachi", address: "Plot 4, Clifton" },
+      { requestBranchId: 31, name: "Orangi Depot", province: "Sindh", city: "Karachi", address: "Plot 4, Clifton", hierarchyRole: "STANDALONE" },
     ])
+  })
+})
+
+describe("DepartmentJoinReviewDialog — a new branch's type (plans/OF-JOIN-new-branch-parent-child.md)", () => {
+  const newRow = (requestBranchId: number, crc: string, name: string, hierarchy: Record<string, unknown>) => ({
+    ...REVIEW.branches[0],
+    requestBranchId,
+    costCenterId: crc,
+    requestedName: name,
+    requestedCity: "Karachi",
+    requestedProvince: "Sindh",
+    ...hierarchy,
+  })
+  const FAMILY = {
+    ...REVIEW,
+    initiatorRole: "GROUP_ORDER_PORTAL",
+    branches: [
+      newRow(31, "PAR-1", "Gulshan Hub", { requestedHierarchyRole: "PARENT" }),
+      newRow(32, "KID-1", "Gulshan Block 2", { requestedHierarchyRole: "CHILD", requestedParentCrc: "PAR-1" }),
+    ],
+  }
+  const CHILD_OF_EXISTING = {
+    ...REVIEW,
+    branches: [newRow(31, "KID-2", "North Kiosk", {
+      requestedHierarchyRole: "CHILD",
+      requestedParentBranchId: 7,
+      requestedParentBranchName: "North Region",
+    })],
+  }
+  const sentBranches = () => JSON.parse(jsonFetcher.mock.calls[0][1].body).newBranches
+  const typeOf = (crc: string) => screen.getByRole("combobox", { name: `Branch type for CRC ${crc}` }) as HTMLSelectElement
+  const parentOf = (crc: string) => screen.getByRole("combobox", { name: `Parent branch for CRC ${crc}` }) as HTMLSelectElement
+
+  it("starts from the applicant's family and creates the child under the parent created here", async () => {
+    const onDecided = renderDialog([], FAMILY as unknown as typeof REVIEW)
+    await screen.findByText("The applicant proposed: Child of the new branch for CRC PAR-1.")
+
+    expect(typeOf("PAR-1").value).toBe("PARENT")
+    expect(typeOf("KID-1").value).toBe("CHILD")
+    expect(parentOf("KID-1").value).toBe("request:31")
+    approve()
+
+    await waitFor(() => expect(onDecided).toHaveBeenCalled())
+    expect(sentBranches()).toEqual([
+      expect.objectContaining({ requestBranchId: 31, hierarchyRole: "PARENT" }),
+      expect.objectContaining({ requestBranchId: 32, hierarchyRole: "CHILD", parentRequestBranchId: 31 }),
+    ])
+    expect(sentBranches()[1]).not.toHaveProperty("parentBranchId")
+  })
+
+  it("sends a child of an existing parent branch by its id", async () => {
+    const onDecided = renderDialog([{ id: 7, name: "North Region", hierarchyRole: "PARENT" }] as never, CHILD_OF_EXISTING as unknown as typeof REVIEW)
+    await screen.findByText("The applicant proposed: Child of North Region.")
+    await waitFor(() => expect(parentOf("KID-2").value).toBe("branch:7"))
+    approve()
+
+    await waitFor(() => expect(onDecided).toHaveBeenCalled())
+    expect(sentBranches()).toEqual([expect.objectContaining({ hierarchyRole: "CHILD", parentBranchId: 7 })])
+  })
+
+  it("asks again when the proposed parent is not a parent branch now, and sends nothing", async () => {
+    renderDialog([{ id: 7, name: "North Region", hierarchyRole: "STANDALONE" }] as never, CHILD_OF_EXISTING as unknown as typeof REVIEW)
+    await screen.findByText("The applicant proposed: Child of North Region.")
+
+    approve()
+
+    expect(screen.getByRole("alert").textContent).toMatch(/parent branch/)
+    expect(screen.getByText("That branch is not a parent branch now. Choose another.")).toBeTruthy()
+    expect(parentOf("KID-2").getAttribute("aria-invalid")).toBe("true")
+    expect(jsonFetcher).not.toHaveBeenCalled()
+  })
+
+  it("lets Head Office change the type, and no longer offers a parent that stopped being one", async () => {
+    const onDecided = renderDialog([], FAMILY as unknown as typeof REVIEW)
+    await screen.findByText("The applicant proposed: Parent.")
+
+    fireEvent.change(typeOf("PAR-1"), { target: { value: "STANDALONE" } })
+    // Gulshan Hub is no longer created as a parent: still shown, so Head Office
+    // sees what changed, but no longer choosable, and the child must be re-decided.
+    const stale = [...parentOf("KID-1").options].find((option) => option.value === "request:31")
+    expect(stale?.disabled).toBe(true)
+    expect(stale?.textContent).toMatch(/not a parent branch now/)
+    fireEvent.change(typeOf("KID-1"), { target: { value: "STANDALONE" } })
+    approve()
+
+    await waitFor(() => expect(onDecided).toHaveBeenCalled())
+    expect(sentBranches().map((branch: { hierarchyRole: string }) => branch.hierarchyRole)).toEqual(["STANDALONE", "STANDALONE"])
   })
 })

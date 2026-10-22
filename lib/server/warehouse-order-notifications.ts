@@ -12,6 +12,7 @@ import {
   users,
   warehouseAssignments,
   warehouseCityAssignments,
+  warehouseCityOrganizations,
 } from "@/db/schema"
 import { db } from "@/lib/db"
 import { sendWarehouseOrderEmail } from "@/lib/email/warehouse-order"
@@ -27,7 +28,7 @@ import {
   type WarehouseOrderEvent,
   type WarehouseOrderPayload,
 } from "@/lib/warehouse-order-notifications"
-import { branchCityKeySql } from "@/lib/server/branch-city-key"
+import { warehouseCityBranchOn, warehouseCityOrganizationOn } from "@/lib/server/warehouse-city-rule"
 import {
   markFailedAttempt,
   markSent,
@@ -62,7 +63,7 @@ const NONE: QueuedWarehouseNotifications = { eventKeys: [], recipientCount: 0 }
 
 /**
  * Every active warehouse user whose reach covers the branch: assigned it one by
- * one, or assigned its city. The same union `loadWarehouseReach` computes, asked
+ * one, or assigned its city with its organization chosen. The same union `loadWarehouseReach` computes, asked
  * the other way round — by branch, not by user.
  */
 async function loadWarehouseRecipients(
@@ -86,7 +87,8 @@ async function loadWarehouseRecipients(
         exists(
           client.select({ one: sql`1` })
             .from(warehouseCityAssignments)
-            .innerJoin(branches, eq(branchCityKeySql(branches.city), warehouseCityAssignments.cityKey))
+            .innerJoin(branches, warehouseCityBranchOn())
+            .innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())
             .where(and(eq(warehouseCityAssignments.userId, users.id), eq(branches.id, branchId))),
         ),
       ),

@@ -4,7 +4,13 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { orders, branches, organizations, groups } from "@/db/schema"
-import { and, eq, gte, lte, inArray, desc, sql } from "drizzle-orm"
+import { and, eq, gte, lte, inArray, desc, or, sql } from "drizzle-orm"
+import { alias } from "drizzle-orm/pg-core"
+import {
+    parseHierarchyRolesParam,
+    parseParentBranchIdsParam,
+    type BranchHierarchyRole,
+} from "@/lib/branch-hierarchy"
 import { metricExpressions, REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { lacksAnalyticsTenant, resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
@@ -15,6 +21,10 @@ type BranchPerformanceFilters = {
     organizationId: number | null
     groupIds: number[]
     branchIds: number[]
+    // Parent / child label filters (plans/OF-BRANCH-parent-child-label.md).
+    // Both only narrow: they are added after the tenant and assignment scope.
+    hierarchyRoles: BranchHierarchyRole[]
+    parentBranchIds: number[]
     months: number[]
     years: number[]
     compareMonths: number[]
@@ -29,7 +39,14 @@ function parseNumberList(value: string | null, isValid = (number: number) => !Nu
     return value ? value.split(',').map(Number).filter(isValid) : []
 }
 
-function parseBranchFilters(searchParams: URLSearchParams, userRole: string, userOrganizationId: number | null) {
+const parentBranches = alias(branches, "parent_branch")
+
+function parseBranchFilters(
+    searchParams: URLSearchParams,
+    userRole: string,
+    userOrganizationId: number | null,
+    hierarchy: { hierarchyRoles: BranchHierarchyRole[]; parentBranchIds: number[] },
+) {
     const requestedOrganizationId = searchParams.get("organizationId")
     let organizationId = userOrganizationId
     if (userRole === "SUPER_ADMIN") {
@@ -41,6 +58,8 @@ function parseBranchFilters(searchParams: URLSearchParams, userRole: string, use
         organizationId,
         groupIds: parseNumberList(searchParams.get("groupIds")),
         branchIds: parseNumberList(searchParams.get("branchIds")),
+        hierarchyRoles: hierarchy.hierarchyRoles,
+        parentBranchIds: hierarchy.parentBranchIds,
         months: parseNumberList(searchParams.get("months"), isMonth),
         years: parseNumberList(searchParams.get("years"), isYear),
         compareMonths: parseNumberList(searchParams.get("compareMonths"), isMonth),
@@ -58,6 +77,11 @@ function getScopeConditions(filters: BranchPerformanceFilters) {
         filters.organizationId ? eq(branches.organizationId, filters.organizationId) : undefined,
         filters.groupIds.length > 0 ? inArray(branches.groupId, filters.groupIds) : undefined,
         filters.branchIds.length > 0 ? inArray(branches.id, filters.branchIds) : undefined,
+        filters.hierarchyRoles.length > 0 ? inArray(branches.hierarchyRole, filters.hierarchyRoles) : undefined,
+        // A parent and its children.
+        filters.parentBranchIds.length > 0
+            ? or(inArray(branches.id, filters.parentBranchIds), inArray(branches.parentBranchId, filters.parentBranchIds))
+            : undefined,
     ]
 }
 
@@ -167,6 +191,10 @@ async function getBranchItems(filters: BranchPerformanceFilters, conditions: any
             status: branches.status,
             organizationName: organizations.name,
             groupName: groups.name,
+            hierarchyRole: branches.hierarchyRole,
+            parentBranchId: branches.parentBranchId,
+            parentBranchName: parentBranches.name,
+            parentBranchStatus: parentBranches.status,
             totalOrders: sql<number>`count(${orders.id})`.mapWith(Number),
             fulfilledOrders: sql<number>`count(CASE WHEN UPPER(${orders.status}) = 'FULFILLED' AND COALESCE(${orders.refundAmountCents}, 0) = 0 THEN 1 END)`.mapWith(Number),
             revenue: metricExpressions.revenue,
@@ -175,9 +203,11 @@ async function getBranchItems(filters: BranchPerformanceFilters, conditions: any
         .from(branches)
         .leftJoin(organizations, eq(branches.organizationId, organizations.id))
         .leftJoin(groups, eq(branches.groupId, groups.id))
+        // Same organization by branches_parent_org_fk.
+        .leftJoin(parentBranches, eq(branches.parentBranchId, parentBranches.id))
         .leftJoin(orders, and(eq(orders.branchId, branches.id), ...conditions))
         .where(and(...getScopeConditions(filters).slice(1)))
-        .groupBy(branches.id, organizations.name, groups.name)
+        .groupBy(branches.id, organizations.name, groups.name, parentBranches.name, parentBranches.status)
         .orderBy(desc(metricExpressions.revenue))
     return { items }
 }
@@ -199,7 +229,12 @@ export async function GET(req: NextRequest) {
             pricesHidden ? redactAnalyticsPrices({ ...payload, pricesHidden }) : { ...payload, pricesHidden },
         )
         const searchParams = new URL(req.url).searchParams
-        const requestedFilters = parseBranchFilters(searchParams, userRole, userOrganizationId)
+        const hierarchyRoles = parseHierarchyRolesParam(searchParams.get("hierarchyRoles"))
+        const parentBranchIds = parseParentBranchIdsParam(searchParams.get("parentBranchIds"))
+        if (!hierarchyRoles || !parentBranchIds) {
+            return NextResponse.json({ error: "Invalid branch type or parent branch filter" }, { status: 400 })
+        }
+        const requestedFilters = parseBranchFilters(searchParams, userRole, userOrganizationId, { hierarchyRoles, parentBranchIds })
 
         // A multi-branch role reports on the branches assigned to it and on
         // nothing else, so its assignments replace whatever branch filter the

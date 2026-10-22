@@ -694,6 +694,62 @@
       "when": 1791086400000,
       "tag": "20261023120000_add_apricart_support_role",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1791090000000,
+      "tag": "20261024120000_branch_hierarchy",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1791093600000,
+      "tag": "20261025120000_join_email_verification",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1791097200000,
+      "tag": "20261026120000_join_request_branch_city",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1791100800000,
+      "tag": "20261027120000_warehouse_city_organizations",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1791104400000,
+      "tag": "20261028120000_join_request_branch_hierarchy",
+      "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1791108000000,
+      "tag": "20261029120000_apricart_warehouses",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1791111600000,
+      "tag": "20261030120000_branch_contact_phone",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1791115200000,
+      "tag": "20261031120000_order_item_entered_price",
+      "breakpoints": true
     }
   ]
 }

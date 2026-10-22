@@ -125,6 +125,16 @@ describe("the warehouse queue", () => {
     expect(lastKey().searchParams.get("page")).toBe("1")
   })
 
+  it("shows the numeric order ID and sends it through the server-backed search", () => {
+    state.respond = () => page([row(742)], 1)
+    render(<WarehouseOrders />)
+
+    expect(screen.getByRole("columnheader", { name: "Order ID" })).toBeTruthy()
+    expect(screen.getByText("742")).toBeTruthy()
+    fireEvent.change(screen.getByLabelText("Search"), { target: { value: "742" } })
+    expect(lastKey().searchParams.get("q")).toBe("742")
+  })
+
   it("renders hostile text as text, never as markup", () => {
     state.respond = () => page([row(1, { notes: null, destination: '<img src=x onerror="alert(1)">', branchName: "<script>alert(1)</script>" })], 1)
     const { container } = render(<WarehouseOrders />)

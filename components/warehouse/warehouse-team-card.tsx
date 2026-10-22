@@ -24,11 +24,13 @@ import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import {
   branchesInOrganization,
+  citiesForOrganizations,
   cityCoveringBranch,
   cityLabel,
   describeWarehouseReach,
   toggleAllBranches,
   toggleBranch,
+  type CityChoice,
 } from "@/lib/warehouse-team-view"
 
 type Member = {
@@ -39,6 +41,7 @@ type Member = {
   isActive: boolean
   branchIds: number[]
   cityKeys: string[]
+  cityOrganizationIds: number[]
 }
 
 type Organization = { id: number; name: string; code: string | null; status: string | null }
@@ -50,7 +53,13 @@ type Branch = {
   cityKey: string | null
   status: string | null
 }
-type City = { key: string; label: string; branchCount: number; organizationCount: number }
+type City = {
+  key: string
+  label: string
+  branchCount: number
+  organizationCount: number
+  organizations: Array<{ organizationId: number; branchCount: number }>
+}
 type WarehouseTeam = { members: Member[]; organizations: Organization[]; branches: Branch[]; cities: City[] }
 
 export const WAREHOUSE_TEAM_KEY = "/api/v1/warehouse-team"
@@ -62,87 +71,194 @@ async function errorMessage(response: Response, fallback: string): Promise<strin
   return typeof data?.error === "string" ? data.error : fallback
 }
 
+type CityReach = { cityKeys: string[]; cityOrganizationIds: number[] }
+
 /**
- * Whole cities: ticking one saves at once, one city per request, and covers
- * every branch in it — in every organization, including branches opened there
- * later. See plans/OF-WAREHOUSE-city-assignments.md.
+ * Whole cities, in two steps: first the organizations, then the cities those
+ * organizations have branches in. The user serves every branch that is in a
+ * ticked organization **and** a ticked city — including branches opened there
+ * later. Every tick saves at once, one per request, one request at a time.
+ * See plans/OF-WAREHOUSE-city-assignments-by-organization.md.
  */
 function CitiesPanel({
   member,
+  organizations,
   cities,
-  cityKeys,
+  reach,
   onChanged,
-}: Readonly<{ member: Member; cities: City[]; cityKeys: string[]; onChanged: (cityKeys: string[]) => void }>) {
-  const [filter, setFilter] = useState("")
+}: Readonly<{
+  member: Member
+  organizations: Organization[]
+  cities: City[]
+  reach: CityReach
+  onChanged: (reach: CityReach) => void
+}>) {
+  const [organizationFilter, setOrganizationFilter] = useState("")
+  const [cityFilter, setCityFilter] = useState("")
   const [pending, setPending] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
-  const needle = filter.trim().toLowerCase()
-  const shown = cities.filter((city) => city.label.toLowerCase().includes(needle))
+  const organizationNeedle = organizationFilter.trim().toLowerCase()
+  const shownOrganizations = organizations.filter((organization) => organization.name.toLowerCase().includes(organizationNeedle))
+  const cityNeedle = cityFilter.trim().toLowerCase()
+  const offered = citiesForOrganizations(cities, reach.cityOrganizationIds, reach.cityKeys)
+  const shownCities = offered.filter((city) => city.label.toLowerCase().includes(cityNeedle))
+  const chosenCount = reach.cityOrganizationIds.length
 
-  const toggle = async (city: City) => {
-    if (pending) return
-    const assigned = !cityKeys.includes(city.key)
-    setPending(city.key)
-    setFormError(null)
+  const send = async (path: string, body: unknown, fallback: string): Promise<boolean> => {
     try {
-      const response = await fetch(`${WAREHOUSE_TEAM_KEY}/${member.id}/cities`, {
+      const response = await fetch(`${WAREHOUSE_TEAM_KEY}/${member.id}/${path}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ city: city.key, assigned }),
+        body: JSON.stringify(body),
       })
       if (!response.ok) {
-        setFormError(await errorMessage(response, "The city could not be saved"))
-        return
+        setFormError(await errorMessage(response, fallback))
+        return false
       }
-      onChanged(assigned
-        ? [...cityKeys, city.key].sort((a, b) => a.localeCompare(b))
-        : cityKeys.filter((key) => key !== city.key))
+      return true
+    } catch {
+      setFormError("The request could not be sent. Check the connection and try again.")
+      return false
+    }
+  }
+
+  const toggleOrganization = async (organization: Organization) => {
+    if (pending) return
+    const assigned = !reach.cityOrganizationIds.includes(organization.id)
+    setPending(`organization-${organization.id}`)
+    setFormError(null)
+    try {
+      const saved = await send(
+        "city-organizations",
+        { organizationId: organization.id, assigned },
+        "The organization could not be saved",
+      )
+      if (!saved) return
+      onChanged({ ...reach, cityOrganizationIds: toggleBranch(reach.cityOrganizationIds, organization.id) })
+      toast({
+        title: assigned ? `${organization.name} chosen` : `${organization.name} withdrawn`,
+        description: member.fullName ?? member.email,
+      })
+    } finally {
+      setPending(null)
+    }
+  }
+
+  const toggleCity = async (city: CityChoice) => {
+    if (pending) return
+    const assigned = !reach.cityKeys.includes(city.key)
+    setPending(`city-${city.key}`)
+    setFormError(null)
+    try {
+      const saved = await send("cities", { city: city.key, assigned }, "The city could not be saved")
+      if (!saved) return
+      onChanged({
+        ...reach,
+        cityKeys: assigned
+          ? [...reach.cityKeys, city.key].sort((a, b) => a.localeCompare(b))
+          : reach.cityKeys.filter((key) => key !== city.key),
+      })
       toast({
         title: assigned ? `${city.label} assigned` : `${city.label} withdrawn`,
         description: `${member.fullName ?? member.email} · ${plural(city.branchCount, "branch", "branches")}`,
       })
-    } catch {
-      setFormError("The request could not be sent. Check the connection and try again.")
     } finally {
       setPending(null)
     }
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
-        A ticked city covers every branch in it, in every organization — including branches opened there later.
-        Each tick is saved at once.
+        The user serves every branch that is in a ticked organization and in a ticked city — including branches opened
+        there later. Each tick is saved at once.
       </p>
-      <Input placeholder="Filter cities" value={filter} onChange={(event) => setFilter(event.target.value)} maxLength={100} />
-      <fieldset className="max-h-72 space-y-1 overflow-y-auto rounded-md border p-2">
-        <legend className="sr-only">Cities</legend>
-        {shown.length === 0 && <p className="p-2 text-sm text-muted-foreground">No cities.</p>}
-        {shown.map((city) => {
-          const id = `warehouse-city-${encodeURIComponent(city.key)}`
-          return (
-            <div key={city.key} className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-muted/50">
-              <Checkbox
-                id={id}
-                checked={cityKeys.includes(city.key)}
-                disabled={pending !== null}
-                onCheckedChange={() => { void toggle(city) }}
-              />
-              <label htmlFor={id} className="flex flex-1 flex-wrap items-center gap-2 text-sm">
-                {city.label}
-                <span className="text-xs text-muted-foreground">
-                  {city.branchCount === 0
-                    ? "no branches now"
-                    : `${plural(city.branchCount, "branch", "branches")} · ${plural(city.organizationCount, "organization")}`}
-                </span>
-                {pending === city.key && <Loader2 className="h-3 w-3 animate-spin" aria-label="Saving" />}
-              </label>
-            </div>
-          )
-        })}
-      </fieldset>
-      <p className="text-xs text-muted-foreground">{plural(cityKeys.length, "city", "cities")} assigned.</p>
+
+      <section aria-labelledby="warehouse-step-organizations" className="space-y-2">
+        <h3 id="warehouse-step-organizations" className="text-sm font-medium">1. Organizations</h3>
+        <Input
+          placeholder="Filter organizations"
+          aria-label="Filter organizations"
+          value={organizationFilter}
+          onChange={(event) => setOrganizationFilter(event.target.value)}
+          maxLength={100}
+        />
+        <fieldset className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
+          <legend className="sr-only">Organizations</legend>
+          {shownOrganizations.length === 0 && <p className="p-2 text-sm text-muted-foreground">No organizations.</p>}
+          {shownOrganizations.map((organization) => {
+            const id = `warehouse-city-org-${organization.id}`
+            return (
+              <div key={organization.id} className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-muted/50">
+                <Checkbox
+                  id={id}
+                  checked={reach.cityOrganizationIds.includes(organization.id)}
+                  disabled={pending !== null}
+                  onCheckedChange={() => { void toggleOrganization(organization) }}
+                />
+                <label htmlFor={id} className="flex flex-1 flex-wrap items-center gap-2 text-sm">
+                  {organization.name}
+                  {organization.code && <span className="text-xs text-muted-foreground">{organization.code}</span>}
+                  {organization.status && organization.status.toLowerCase() !== "active" && (
+                    <Badge variant="outline">{organization.status}</Badge>
+                  )}
+                  {pending === `organization-${organization.id}` && <Loader2 className="h-3 w-3 animate-spin" aria-label="Saving" />}
+                </label>
+              </div>
+            )
+          })}
+        </fieldset>
+        <p className="text-xs text-muted-foreground">{plural(chosenCount, "organization")} chosen.</p>
+      </section>
+
+      <section aria-labelledby="warehouse-step-cities" className="space-y-2">
+        <h3 id="warehouse-step-cities" className="text-sm font-medium">2. Cities</h3>
+        {chosenCount === 0 && offered.length === 0 ? (
+          <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
+            Choose an organization first; its cities are listed here.
+          </p>
+        ) : (
+          <>
+            <Input
+              placeholder="Filter cities"
+              aria-label="Filter cities"
+              value={cityFilter}
+              onChange={(event) => setCityFilter(event.target.value)}
+              maxLength={100}
+            />
+            <fieldset className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
+              <legend className="sr-only">Cities</legend>
+              {shownCities.length === 0 && <p className="p-2 text-sm text-muted-foreground">No cities.</p>}
+              {shownCities.map((city) => {
+                const id = `warehouse-city-${encodeURIComponent(city.key)}`
+                const assigned = reach.cityKeys.includes(city.key)
+                return (
+                  <div key={city.key} className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-muted/50">
+                    <Checkbox
+                      id={id}
+                      checked={assigned}
+                      // A city outside the chosen organizations is offered only to withdraw it.
+                      disabled={pending !== null || (city.outside && !assigned)}
+                      onCheckedChange={() => { void toggleCity(city) }}
+                    />
+                    <label htmlFor={id} className="flex flex-1 flex-wrap items-center gap-2 text-sm">
+                      {city.label}
+                      <span className="text-xs text-muted-foreground">
+                        {city.outside
+                          ? "not in the chosen organizations"
+                          : `${plural(city.branchCount, "branch", "branches")} · ${plural(city.organizationCount, "organization")}`}
+                      </span>
+                      {pending === `city-${city.key}` && <Loader2 className="h-3 w-3 animate-spin" aria-label="Saving" />}
+                    </label>
+                  </div>
+                )
+              })}
+            </fieldset>
+          </>
+        )}
+        <p className="text-xs text-muted-foreground">{plural(reach.cityKeys.length, "city", "cities")} assigned.</p>
+      </section>
       {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
     </div>
   )
@@ -163,7 +279,10 @@ function BranchesDialog({
   const firstAssigned = team.branches.find((branch) => member.branchIds.includes(branch.id))?.organizationId
   const [organizationId, setOrganizationId] = useState<number | null>(firstAssigned ?? team.organizations[0]?.id ?? null)
   const [assigned, setAssigned] = useState<number[]>(member.branchIds)
-  const [cityKeys, setCityKeys] = useState<string[]>(member.cityKeys)
+  const [cityReach, setCityReach] = useState<CityReach>({
+    cityKeys: member.cityKeys,
+    cityOrganizationIds: member.cityOrganizationIds,
+  })
   const [selected, setSelected] = useState<number[]>(
     organizationId === null ? [] : branchesInOrganization(member.branchIds, team.branches, organizationId),
   )
@@ -176,7 +295,7 @@ function BranchesDialog({
     [team.branches, organizationId],
   )
   const coveredIds = new Set(
-    organizationBranches.filter((branch) => cityCoveringBranch(branch, cityKeys)).map((branch) => branch.id),
+    organizationBranches.filter((branch) => cityCoveringBranch(branch, cityReach)).map((branch) => branch.id),
   )
   const uncoveredIds = organizationBranches.map((branch) => branch.id).filter((id) => !coveredIds.has(id))
   const served = organizationBranches.filter((branch) => coveredIds.has(branch.id) || selected.includes(branch.id)).length
@@ -199,8 +318,8 @@ function BranchesDialog({
     ...toggleAllBranches(current.filter((id) => !coveredIds.has(id)), uncoveredIds),
   ].sort((a, b) => a - b))
 
-  const changeCities = (next: string[]) => {
-    setCityKeys(next)
+  const changeCities = (next: CityReach) => {
+    setCityReach(next)
     onSaved()
   }
 
@@ -231,12 +350,12 @@ function BranchesDialog({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose() }}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Branches for {member.fullName ?? member.email}</DialogTitle>
           <DialogDescription>
             They pick, dispatch and deliver the approved orders of the branches assigned here, and no others —
-            whole cities, or single branches.
+            the cities of chosen organizations, or single branches.
           </DialogDescription>
         </DialogHeader>
         <Tabs defaultValue="cities">
@@ -245,7 +364,13 @@ function BranchesDialog({
             <TabsTrigger value="branches">By branch</TabsTrigger>
           </TabsList>
           <TabsContent value="cities">
-            <CitiesPanel member={member} cities={team.cities} cityKeys={cityKeys} onChanged={changeCities} />
+            <CitiesPanel
+              member={member}
+              organizations={team.organizations}
+              cities={team.cities}
+              reach={cityReach}
+              onChanged={changeCities}
+            />
           </TabsContent>
           <TabsContent value="branches" className="space-y-3">
             <div className="space-y-1">
@@ -273,7 +398,7 @@ function BranchesDialog({
               {shown.length === 0 && <p className="p-2 text-sm text-muted-foreground">No branches.</p>}
               {shown.map((branch) => {
                 const id = `warehouse-branch-${branch.id}`
-                const viaCity = cityCoveringBranch(branch, cityKeys)
+                const viaCity = cityCoveringBranch(branch, cityReach)
                 return (
                   <div key={branch.id} className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-muted/50">
                     <Checkbox

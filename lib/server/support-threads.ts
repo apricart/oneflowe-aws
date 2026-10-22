@@ -22,7 +22,7 @@ import {
   type SupportViewer,
 } from "@/lib/support-access"
 import {
-  SUPPORT_APRICART_ROLES,
+  SUPPORT_WHOLE_QUEUE_ROLES,
   nextSupportStatusAfterMessage,
   supportOrderSearchId,
   supportSideForRole,
@@ -82,6 +82,8 @@ export function supportScopeCondition(viewer: SupportViewer): SQL | null {
       // `and(...)` with nothing in it must not become "no filter" by accident
       // for some other scope.
       return sql`true`
+    case "branches":
+      return supportBranchReachCondition(scope.branchIds)
     case "organization":
       return eq(supportThreads.organizationId, scope.organizationId)
     case "branch":
@@ -100,6 +102,37 @@ export function supportScopeCondition(viewer: SupportViewer): SQL | null {
     default:
       return null
   }
+}
+
+/**
+ * A warehouse's queue: threads at a branch it serves, or citing an order at one
+ * (plans/OF-WAREHOUSE-support-queue.md).
+ *
+ * Both halves also hold the branch or the order to the **thread's own**
+ * organization, as `loadWarehouseOrderInReach` does for an order, so a row that
+ * somehow paired one tenant's thread with another's branch or order reads as
+ * out of reach rather than in it. `EXISTS` rather than a predicate on the
+ * joined rows, for the reason `supportOrderSearchCondition` gives: the list's
+ * count reads `support_threads` alone.
+ */
+function supportBranchReachCondition(branchIds: readonly number[]): SQL {
+  const ids = [...branchIds]
+  return or(
+    and(
+      inArray(supportThreads.branchId, ids),
+      sql`exists (
+        select 1 from ${branches}
+        where ${branches.id} = ${supportThreads.branchId}
+        and ${branches.organizationId} = ${supportThreads.organizationId}
+      )`,
+    ),
+    sql`exists (
+      select 1 from ${orders}
+      where ${orders.id} = ${supportThreads.orderId}
+      and ${orders.organizationId} = ${supportThreads.organizationId}
+      and ${inArray(orders.branchId, ids)}
+    )`,
+  )!
 }
 
 /**
@@ -144,6 +177,8 @@ export type SupportThreadListItem = {
   branchName: string | null
   orderId: number | null
   orderTid: string | null
+  /** The cited order's branch, when the order is the thread's own tenant's. */
+  orderBranchId: number | null
   productId: number | null
   /** The catalogue code, e.g. `KE-00421`. What people actually quote. */
   productCode: string | null
@@ -217,6 +252,8 @@ export async function listSupportThreads(
       branchName: branches.name,
       orderId: supportThreads.orderId,
       orderTid: orders.tid,
+      orderBranchId: orders.branchId,
+      orderOrganizationId: orders.organizationId,
       productId: supportThreads.productId,
       productCode: globalProducts.productCode,
       productName: sql<string | null>`coalesce(${organizationInventory.customName}, ${globalProducts.name})`,
@@ -273,6 +310,7 @@ export async function listSupportThreads(
     branchName: row.branchName,
     orderId: row.orderId,
     orderTid: row.orderTid,
+    orderBranchId: row.orderOrganizationId === row.organizationId ? row.orderBranchId : null,
     productId: row.productId,
     productCode: row.productCode,
     productName: row.productName,
@@ -1050,7 +1088,10 @@ function planStatusTransition(input: {
   }
 }
 
-/** An assignee must be an active Apricart account on the support queue, or nobody. */
+/**
+ * An assignee must be an active Apricart account on the whole support queue, or
+ * nobody. A warehouse reads only its branches' threads, so it is never one.
+ */
 async function resolveAssignee(tx: any, userId: string | null): Promise<string | null> {
   if (!userId) return null
 
@@ -1060,7 +1101,7 @@ async function resolveAssignee(tx: any, userId: string | null): Promise<string |
     .innerJoin(roles, eq(roles.id, users.roleId))
     .where(and(
       eq(users.id, userId),
-      inArray(roles.name, [...SUPPORT_APRICART_ROLES]),
+      inArray(roles.name, [...SUPPORT_WHOLE_QUEUE_ROLES]),
       eq(users.isActive, true),
       isNull(users.deletedAt),
     ))

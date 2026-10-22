@@ -1,8 +1,9 @@
 "use client"
 
+import Link from "next/link"
 import { useState } from "react"
 import useSWR from "swr"
-import { Ban, Pencil, Send } from "lucide-react"
+import { Ban, Pencil, Route, Send } from "lucide-react"
 
 import { TokenHandoff } from "@/components/group-portal/token-handoff"
 import { OrderDetailPanel, type OrderDetails } from "@/components/orders/order-detail-panel"
@@ -135,6 +136,12 @@ export function BranchOrderDetailSheet({
             onRetryDetails={() => setReloadKey((key) => key + 1)}
             actions={
               <div className="mt-auto shrink-0 space-y-4 border-t border-slate-100 bg-white/80 px-6 py-4 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/80">
+                <Button asChild type="button" variant="outline" className="w-full gap-2">
+                  <Link href={`/group-portal/tracking?reference=${encodeURIComponent(order.tid)}`}>
+                    <Route className="h-4 w-4" />
+                    Track order
+                  </Link>
+                </Button>
                 {String(detailedOrder.status).toUpperCase() === "APPROVED" && token && (
                   <TokenHandoff
                     orderId={order.id}

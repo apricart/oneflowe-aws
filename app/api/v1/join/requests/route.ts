@@ -4,6 +4,7 @@ import { error, ok, readJson } from "@/lib/api"
 import { handleError } from "@/lib/error-handler"
 import {
   DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE,
+  JOIN_EMAIL_NOT_VERIFIED_MESSAGE,
   JOIN_IDENTITY_CONFLICT_MESSAGE,
   JOIN_REQUEST_RECEIVED_MESSAGE,
   UNKNOWN_JOIN_CODE_MESSAGE,
@@ -29,6 +30,7 @@ import {
   validationMessage,
 } from "@/lib/server/mutation-validation"
 import { resolveRequestClientIp } from "@/lib/server/request-ip"
+import { joinEmailProofIsLive } from "@/lib/server/join-email-verification"
 import {
   createJoinRequest,
   normalizeJoinSubmissionIdentity,
@@ -47,11 +49,12 @@ const STANDARD_FORM_ONLY_MESSAGE =
 const DEPARTMENT_FORM_ONLY_MESSAGE =
   "This organization uses the department sign-up. Reload the page and try again."
 
-type JoinFailure = { kind: "identity" | "scope" | "limit"; message: string; status: number }
+type JoinFailure = { kind: "identity" | "scope" | "limit" | "unverified"; message: string; status: number }
 
 function failureResponse(outcome: JoinFailure, identityConflictMessage: string) {
-  // Only the identity conflict is flattened: the other two describe the
-  // tenant's own structure or its queue, which the code already disclosed.
+  // Only the identity conflict is flattened: the others describe the tenant's
+  // own structure or its queue, which the code already disclosed, or the
+  // applicant's own proof.
   const message = outcome.kind === "identity" ? identityConflictMessage : outcome.message
   return error(message, outcome.status)
 }
@@ -81,6 +84,12 @@ function failureResponse(outcome: JoinFailure, identityConflictMessage: string) 
  *      organization with none takes no request at all. Checked here, against
  *      the domain read on this request, so a caller that skips the join page —
  *      or edits what it was told — is held to the same rule.
+ *   4a. **Proof that the applicant receives mail at that address**
+ *      (plans/OF-JOIN-email-otp-verification.md): the proof answered by
+ *      `/api/v1/join/email-verification/verify`, issued for this organization
+ *      and exactly this address. Read here so a lapsed proof costs no password
+ *      hash; spent inside the transaction that stores the request, which is
+ *      what decides.
  *   5. **Role allowlist** — `JOINABLE_ROLES`, in the schema, in the server
  *      module and in a check constraint. `HEAD_OFFICE` is unreachable.
  *   6. **One conflict message per form.** It lists every field that is checked
@@ -131,6 +140,11 @@ export async function POST(req: Request) {
     const domainRefusal = joinEmailDomainRefusal(identity.email, organization.emailDomain)
     if (domainRefusal) return error(domainRefusal.message, domainRefusal.status)
 
+    const emailProof = { challengeId: input.emailVerification.challengeId, proof: input.emailVerification.proof }
+    if (!(await joinEmailProofIsLive({ ...emailProof, organizationId: organization.organizationId, email: identity.email }))) {
+      return error(JOIN_EMAIL_NOT_VERIFIED_MESSAGE, 400)
+    }
+
     // An organization with order approval levels on takes only the department
     // sign-up: the standard form would let an applicant skip naming approvers.
     // Judged on the setting read on this request, never on what the page says.
@@ -161,6 +175,7 @@ export async function POST(req: Request) {
       // Request is already in hand, and the dynamic API needs a request store
       // this handler has no reason to depend on.
       submittedUserAgent: req.headers.get("user-agent")?.slice(0, 512) ?? null,
+      emailProof,
     })
 
     if ("kind" in outcome) return failureResponse(outcome, JOIN_IDENTITY_CONFLICT_MESSAGE)
@@ -206,6 +221,11 @@ async function submitDepartmentSignup(req: Request, rawBody: unknown) {
   const domainRefusal = joinEmailDomainRefusal(identity.email, organization.emailDomain)
   if (domainRefusal) return error(domainRefusal.message, domainRefusal.status)
 
+  const emailProof = { challengeId: input.emailVerification.challengeId, proof: input.emailVerification.proof }
+  if (!(await joinEmailProofIsLive({ ...emailProof, organizationId: organization.organizationId, email: identity.email }))) {
+    return error(JOIN_EMAIL_NOT_VERIFIED_MESSAGE, 400)
+  }
+
   const settings = await loadDepartmentJoinSettings(db, organization.organizationId)
   if (!settings || !usesDepartmentSignup(settings)) return error(STANDARD_FORM_ONLY_MESSAGE, 400)
 
@@ -235,6 +255,7 @@ async function submitDepartmentSignup(req: Request, rawBody: unknown) {
     approvalLevelsSnapshot: departmentSignupBands(settings),
     submittedIp: await resolveRequestClientIp(),
     submittedUserAgent: req.headers.get("user-agent")?.slice(0, 512) ?? null,
+    emailProof,
   })
   if ("kind" in outcome) return failureResponse(outcome, DEPARTMENT_JOIN_IDENTITY_CONFLICT_MESSAGE)
 

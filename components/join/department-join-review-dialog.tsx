@@ -6,6 +6,7 @@ import useSWR from "swr"
 import { AlertTriangle, Loader2, Pencil } from "lucide-react"
 
 import { DepartmentJoinEditForm } from "@/components/join/department-join-edit-form"
+import { EmailVerifiedNote } from "@/components/join/email-verified-note"
 import { PakistanCityCombobox } from "@/components/join/pakistan-city-combobox"
 import type { JoinOption } from "@/components/join/join-scope-picker"
 import { Badge } from "@/components/ui/badge"
@@ -32,6 +33,13 @@ import {
   initiatorRoleForBranchCount,
   newBranchDraftErrors,
 } from "@/lib/join-department-signup"
+import {
+  BRANCH_HIERARCHY_LABELS,
+  BRANCH_HIERARCHY_ROLES,
+  DEFAULT_BRANCH_HIERARCHY_ROLE,
+  type BranchHierarchyRole,
+  isBranchHierarchyRole,
+} from "@/lib/branch-hierarchy"
 import { type ApprovalLevelBand, approvalLevelBandText } from "@/lib/order-approval-levels"
 import { findPakistanCity } from "@/lib/pakistan-cities"
 import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
@@ -60,6 +68,7 @@ type Review = {
     firstName: string
     lastName: string
     email: string
+    emailVerified?: boolean
     username: string
     usernameTaken: boolean
     phone: string | null
@@ -75,8 +84,16 @@ type Review = {
     name: string | null
     costCenterId: string | null
     requestedName: string | null
+    /** The listed city and its province the applicant gave; absent from older responses. */
+    requestedCity?: string | null
+    requestedProvince?: string | null
     /** An existing branch already carrying this CRC; Head Office must choose it or a new branch. */
     crcMatch?: { branchId: number; name: string } | null
+    /** The type the applicant proposed; absent from older responses. */
+    requestedHierarchyRole?: BranchHierarchyRole | null
+    requestedParentBranchId?: number | null
+    requestedParentBranchName?: string | null
+    requestedParentCrc?: string | null
   }>
   addresses: Array<{ requestAddressId: number; address: string; branchId: number | null }>
   approvers: Array<{
@@ -100,22 +117,54 @@ type Review = {
  * `mapToBranchId`: a branch id to use instead, `CREATE_NEW_BRANCH` to create
  * one, or `UNDECIDED` while a CRC another branch carries awaits Head Office's
  * choice (plans/OF-JOIN-crc-match-at-review.md).
+ *
+ * `hierarchyRole` and `parent` are the created branch's type and a child's
+ * parent: `branch:<id>` an existing branch, `request:<id>` another branch this
+ * approval creates as Parent, "" none yet
+ * (plans/OF-JOIN-new-branch-parent-child.md).
  */
-type NewBranchDraft = { mapToBranchId: string } & Record<NewBranchField, string>
+type NewBranchDraft = { mapToBranchId: string; hierarchyRole: BranchHierarchyRole; parent: string } & Record<NewBranchField, string>
+
+/** A problem with a new branch's draft, by field; `parent` is the child's parent. */
+type DraftErrors = Partial<Record<NewBranchField | "parent", string>>
 
 const CREATE_NEW_BRANCH = ""
 const UNDECIDED = "undecided"
+const EXISTING_PARENT = "branch:"
+const CREATED_PARENT = "request:"
 
 /** The branch a draft maps its CRC onto, or null when it creates one or has not chosen. */
 function mappedBranchIdOf(draft: NewBranchDraft): number | null {
   return draft.mapToBranchId === CREATE_NEW_BRANCH || draft.mapToBranchId === UNDECIDED ? null : Number(draft.mapToBranchId)
 }
 
-const NEW_BRANCH_FIELD_LABELS: Record<NewBranchField, string> = {
+/** The parent the applicant proposed, as the dialog's select holds it. */
+function requestedParentValue(row: Review["branches"][number], rows: Review["branches"]): string {
+  if (row.requestedHierarchyRole !== "CHILD") return ""
+  if (row.requestedParentBranchId) return `${EXISTING_PARENT}${row.requestedParentBranchId}`
+  const parentRow = rows.find((other) => other.kind === "new" && other.costCenterId === row.requestedParentCrc)
+  return parentRow ? `${CREATED_PARENT}${parentRow.requestBranchId}` : ""
+}
+
+/** The created branch's type and parent as the decision body names them. */
+function hierarchyBody(draft: NewBranchDraft): {
+  hierarchyRole: BranchHierarchyRole
+  parentBranchId?: number
+  parentRequestBranchId?: number
+} {
+  if (draft.hierarchyRole !== "CHILD") return { hierarchyRole: draft.hierarchyRole }
+  if (draft.parent.startsWith(EXISTING_PARENT)) {
+    return { hierarchyRole: "CHILD", parentBranchId: Number(draft.parent.slice(EXISTING_PARENT.length)) }
+  }
+  return { hierarchyRole: "CHILD", parentRequestBranchId: Number(draft.parent.slice(CREATED_PARENT.length)) }
+}
+
+const NEW_BRANCH_FIELD_LABELS: Record<NewBranchField | "parent", string> = {
   name: "Branch name",
   province: "Province",
   city: "City",
   address: "Branch address",
+  parent: "Parent branch",
 }
 
 /** The city before its province, which is filled in from it. */
@@ -125,10 +174,26 @@ const NEW_BRANCH_FIELD_ORDER: readonly NewBranchField[] = ["name", "city", "prov
  * The draft's errors, without a blank province while the city is missing too:
  * the province comes from the city, so the city is the one thing to fix.
  */
-function draftErrors(draft: NewBranchDraft): Partial<Record<NewBranchField, string>> {
-  const errors = newBranchDraftErrors(draft)
+function draftErrors(draft: NewBranchDraft, parentValues: ReadonlySet<string>): DraftErrors {
+  const errors: DraftErrors = newBranchDraftErrors(draft)
   if (errors.city && !draft.province.trim()) delete errors.province
+  // A child's parent must be one the select offers now: an organization's
+  // parent branch, or a branch created here as Parent. The applicant's choice
+  // may no longer be one. The server re-checks both.
+  if (draft.hierarchyRole === "CHILD" && !parentValues.has(draft.parent)) {
+    errors.parent = draft.parent ? "That branch is not a parent branch now. Choose another." : "Choose the parent branch"
+  }
   return errors
+}
+
+/**
+ * The city and province a new branch's draft starts from: the applicant's
+ * listed city and the list's own province, else blank for Head Office to
+ * choose (plans/OF-JOIN-applicant-new-branch-city.md).
+ */
+function requestedLocationDraft(city: string | null | undefined): Pick<NewBranchDraft, "city" | "province"> {
+  const listed = findPakistanCity(city)
+  return listed ? { city: listed.name, province: listed.province } : { city: "", province: "" }
 }
 
 /**
@@ -157,6 +222,68 @@ function WarehouseCoverageNote({ city, served }: Readonly<{ city: string; served
   )
 }
 
+/**
+ * A created branch's type, and a child's parent, as on Create Branch. Starts
+ * from the applicant's proposal, named under the select when it was one; a
+ * label only (plans/OF-JOIN-new-branch-parent-child.md).
+ */
+function BranchTypeChoice({
+  row,
+  draft,
+  parentOptions,
+  parentError,
+  onChange,
+}: Readonly<{
+  row: Review["branches"][number]
+  draft: NewBranchDraft
+  parentOptions: Array<{ value: string; label: string }>
+  parentError?: string
+  onChange: (patch: Partial<NewBranchDraft>) => void
+}>) {
+  const id = `review-branch-${row.requestBranchId}-type`
+  const parentErrorId = `review-branch-${row.requestBranchId}-parent-error`
+  const proposedParent = row.requestedParentBranchName
+    ?? (row.requestedParentCrc ? `the new branch for CRC ${row.requestedParentCrc}` : null)
+  let proposal: string | null = null
+  if (row.requestedHierarchyRole === "CHILD") proposal = `The applicant proposed: Child of ${proposedParent ?? "a parent branch"}.`
+  else if (row.requestedHierarchyRole) proposal = `The applicant proposed: ${BRANCH_HIERARCHY_LABELS[row.requestedHierarchyRole]}.`
+  return (
+    <>
+      <select
+        id={id}
+        aria-label={`Branch type for CRC ${row.costCenterId}`}
+        value={draft.hierarchyRole}
+        onChange={(event) => {
+          if (isBranchHierarchyRole(event.target.value)) onChange({ hierarchyRole: event.target.value, parent: "" })
+        }}
+        className="h-9 rounded-md border border-slate-300 px-2 text-sm"
+      >
+        {BRANCH_HIERARCHY_ROLES.map((role) => <option key={role} value={role}>Branch type: {BRANCH_HIERARCHY_LABELS[role]}</option>)}
+      </select>
+      {draft.hierarchyRole === "CHILD" && (
+        <div className="space-y-1">
+          <select
+            aria-label={`Parent branch for CRC ${row.costCenterId}`}
+            value={draft.parent}
+            onChange={(event) => onChange({ parent: event.target.value })}
+            aria-invalid={Boolean(parentError)}
+            aria-describedby={parentError ? parentErrorId : undefined}
+            className="h-9 w-full rounded-md border border-slate-300 px-2 text-sm"
+          >
+            <option value="">Select the parent branch</option>
+            {draft.parent && !parentOptions.some((option) => option.value === draft.parent) && (
+              <option value={draft.parent} disabled>{proposedParent ?? "The proposed parent"} (not a parent branch now)</option>
+            )}
+            {parentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          {parentError && <p id={parentErrorId} className="text-xs font-medium text-red-600">{parentError}</p>}
+        </div>
+      )}
+      {proposal && <p className="text-xs text-slate-500 sm:col-span-2">{proposal}</p>}
+    </>
+  )
+}
+
 const ROLE_LABELS = {
   ORDER_PORTAL: `${ROLE_DISPLAY_NAMES.ORDER_PORTAL} (one branch)`,
   GROUP_ORDER_PORTAL: `${ROLE_DISPLAY_NAMES.GROUP_ORDER_PORTAL} (several branches)`,
@@ -167,7 +294,8 @@ const CONVERTED_NOTE = "They become a Group Financial Approver instead of a Fina
 /**
  * What approving does with one approver. `branchCount` is the count after
  * Head Office's choices in this dialog, so a new approver's role shown here is
- * the one the approval will give (one branch: Branch Admin; more: Group User).
+ * the one the approval will give (Levels 1 and 2: Group User; other levels:
+ * Branch Admin for one branch, Group User for more).
  */
 function resolutionText(
   resolution: ApproverResolution,
@@ -179,7 +307,7 @@ function resolutionText(
   const who = existingName ?? "Existing account"
   switch (resolution.kind) {
     case "create":
-      return newApproverRole(branchCount) === "BRANCH_ADMIN"
+      return newApproverRole(level, branchCount) === "BRANCH_ADMIN"
         ? `No account yet: a Financial Approver of ${onlyBranch} is created with Level ${level}, and a temporary password is emailed.`
         : `No account yet: a Group Financial Approver is created with Level ${level} and these branches, and a temporary password is emailed.`
     case "assign":
@@ -264,7 +392,7 @@ export function DepartmentJoinReviewDialog({
     requestId ? `/api/v1/join-requests/${requestId}` : null,
     fetcher,
   )
-  const { data: branchesData } = useSWR<{ items?: JoinOption[] }>(
+  const { data: branchesData } = useSWR<{ items?: Array<JoinOption & { hierarchyRole?: string | null }> }>(
     requestId && organizationId ? `/api/v1/branches?organizationId=${organizationId}` : null,
     fetcher,
   )
@@ -297,19 +425,37 @@ export function DepartmentJoinReviewDialog({
   const blocked = review?.approvers.some((approver) => approver.resolution.kind === "blocked") ?? false
   const branchLabel = (row: Review["branches"][number]) =>
     row.name ?? row.requestedName ?? `New branch for CRC ${row.costCenterId}`
-  // A new branch starts from the name the applicant gave it, never from its CRC.
-  // A CRC another branch already carries starts undecided: neither choice is
-  // made for Head Office.
+  // A new branch starts from the name and city the applicant gave it, never
+  // from its CRC; Head Office may change either. A CRC another branch already
+  // carries starts undecided: neither choice is made for Head Office.
+  // Its type starts from the applicant's proposal too, Standalone when none.
   const draftFor = (row: Review["branches"][number]): NewBranchDraft =>
     newBranches[row.requestBranchId] ?? {
       mapToBranchId: row.crcMatch ? UNDECIDED : CREATE_NEW_BRANCH,
       name: row.requestedName ?? "",
-      province: "",
-      city: "",
+      ...requestedLocationDraft(row.requestedCity),
       address: review?.addresses[0]?.address ?? "",
+      hierarchyRole: row.requestedHierarchyRole ?? DEFAULT_BRANCH_HIERARCHY_ROLE,
+      parent: requestedParentValue(row, review?.branches ?? []),
     }
   const updateDraft = (row: Review["branches"][number], patch: Partial<NewBranchDraft>) =>
     setNewBranches((previous) => ({ ...previous, [row.requestBranchId]: { ...draftFor(row), ...patch } }))
+  /**
+   * The parents a child created here may name: the organization's parent
+   * branches, and the other branches this approval creates as Parent.
+   */
+  const parentOptionsFor = (row: Review["branches"][number]): Array<{ value: string; label: string }> => [
+    ...organizationBranches
+      .filter((branch) => branch.hierarchyRole === "PARENT")
+      .map((branch) => ({ value: `${EXISTING_PARENT}${branch.id}`, label: branch.name })),
+    ...(review?.branches ?? []).flatMap((other) => {
+      if (other.requestBranchId === row.requestBranchId || other.kind !== "new" || other.branchId !== null) return []
+      const otherDraft = draftFor(other)
+      return otherDraft.mapToBranchId === CREATE_NEW_BRANCH && otherDraft.hierarchyRole === "PARENT"
+        ? [{ value: `${CREATED_PARENT}${other.requestBranchId}`, label: `${otherDraft.name.trim() || branchLabel(other)} (created here)` }]
+        : []
+    }),
+  ]
   /**
    * The new branches Head Office still has to settle: a CRC another branch
    * carries needs a choice, and a branch to create needs its details. Mapping
@@ -318,9 +464,9 @@ export function DepartmentJoinReviewDialog({
   const incompleteNewBranches = (review?.branches ?? []).flatMap((row) => {
     if (row.kind !== "new" || row.branchId !== null) return []
     const draft = draftFor(row)
-    if (draft.mapToBranchId === UNDECIDED) return [{ row, errors: {} as Partial<Record<NewBranchField, string>>, undecided: true }]
+    if (draft.mapToBranchId === UNDECIDED) return [{ row, errors: {} as DraftErrors, undecided: true }]
     if (draft.mapToBranchId !== CREATE_NEW_BRANCH) return []
-    const errors = draftErrors(draft)
+    const errors = draftErrors(draft, new Set(parentOptionsFor(row).map((option) => option.value)))
     return Object.keys(errors).length > 0 ? [{ row, errors, undecided: false }] : []
   })
   // The count the approval will see once each CRC's choice here is applied.
@@ -350,7 +496,9 @@ export function DepartmentJoinReviewDialog({
         setFailure(`CRC ${row.costCenterId} already belongs to ${row.crcMatch.name}. Choose whether to use ${row.crcMatch.name} or create a new branch before approving.`)
         return
       }
-      const fields = NEW_BRANCH_FIELDS.filter((field) => errors[field]).map((field) => NEW_BRANCH_FIELD_LABELS[field].toLowerCase())
+      const fields = [...NEW_BRANCH_FIELDS, "parent" as const]
+        .filter((field) => errors[field])
+        .map((field) => NEW_BRANCH_FIELD_LABELS[field].toLowerCase())
       setFailure(`Complete the new branch for CRC ${row.costCenterId} before approving: ${fields.join(", ")}.`)
       return
     }
@@ -376,6 +524,7 @@ export function DepartmentJoinReviewDialog({
                       province: draft.province.trim(),
                       city: draft.city.trim(),
                       address: draft.address.trim(),
+                      ...hierarchyBody(draft),
                     }
               }),
             addressBranches: review.branches.length > 1
@@ -443,7 +592,10 @@ export function DepartmentJoinReviewDialog({
             )}
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
               <dt className="font-medium text-slate-500">Email</dt>
-              <dd className="break-all">{review.person.email}</dd>
+              <dd className="break-all">
+                {review.person.email}
+                <EmailVerifiedNote verified={review.person.emailVerified === true} />
+              </dd>
               <dt className="font-medium text-slate-500">Username</dt>
               <dd className="font-mono">{review.person.username}</dd>
               <dt className="font-medium text-slate-500">Phone / IP ext.</dt>
@@ -542,6 +694,15 @@ export function DepartmentJoinReviewDialog({
                               </div>
                             )
                           })}
+                          {draft.mapToBranchId === CREATE_NEW_BRANCH && (
+                            <BranchTypeChoice
+                              row={row}
+                              draft={draft}
+                              parentOptions={parentOptionsFor(row)}
+                              parentError={branchErrorsFor(row.requestBranchId).parent}
+                              onChange={(patch) => updateDraft(row, patch)}
+                            />
+                          )}
                           {draft.mapToBranchId === CREATE_NEW_BRANCH && draft.city && (
                             <WarehouseCoverageNote city={draft.city} served={review.warehouseCities} />
                           )}

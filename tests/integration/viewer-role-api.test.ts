@@ -52,10 +52,10 @@ if (!hasTestDatabase) console.warn(NO_DATABASE_REASON)
  * Branch A   PENDING/NOT_STARTED        1,000
  *            APPROVED/IN_PROCESS        2,000   -> Active, Unfulfilled
  *            APPROVED/DELIVERED         3,000   -> Active, Delivered, pending ack
- *            FULFILLED/DELIVERED        4,000   -> Fulfilled, Delivered
+ *            FULFILLED/DELIVERED        4,000   -> Fulfilled (paid), Delivered
  *            REJECTED/NOT_STARTED       5,000   -> no bucket
  * Branch B   APPROVED/DELIVERED         6,000   -> Active, Delivered, pending ack
- *            PARTIAL/DELIVERED          7,000   -> Fulfilled, Delivered
+ *            PARTIAL/DELIVERED          7,000   -> Fulfilled (unpaid), Delivered
  * Foreign    APPROVED/DELIVERED        99,000   -> must never appear
  * ```
  */
@@ -185,6 +185,8 @@ async function createFixtures(): Promise<Fixtures> {
       fulfillmentStatus: shape.fulfillmentStatus,
       totalCents: shape.totalCents,
       subtotalCents: shape.totalCents,
+      // Only Branch A's fulfilled order is paid, so the Fulfilled card splits 1 / 1.
+      paymentStatus: shape.branch === "A" && shape.status === "FULFILLED" ? "PAID" : "UNPAID",
       createdByUserId: headOfficeId,
     }).returning({ id: orders.id })
     orderIds.push(row.id)
@@ -354,6 +356,17 @@ describe.skipIf(!hasTestDatabase)("the read-only Viewer role through its real AP
       const counts = body.data?.statusCounts ?? body.statusCounts
 
       expect(counts.deliveredCount + counts.notDeliveredCount).toBe(counts.approvedCount)
+    })
+
+    it("splits Fulfilled into Paid and Unpaid, adding up to it", async () => {
+      signIn(actor("viewer"))
+
+      const { body } = await kpis()
+      const counts = body.data?.statusCounts ?? body.statusCounts
+
+      expect(counts.fulfilledPaidCount).toBe(1)
+      expect(counts.fulfilledUnpaidCount).toBe(1)
+      expect(counts.fulfilledPaidCount + counts.fulfilledUnpaidCount).toBe(counts.fulfilledCount)
     })
 
     it("reports only its own branch for a pinned Viewer", async () => {

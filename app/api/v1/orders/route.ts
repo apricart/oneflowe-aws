@@ -15,6 +15,9 @@ import {
   hasInvoiceSequenceTable,
 } from "@/lib/invoice-number"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
+import { orderLinePriceFailure } from "@/lib/pricing-access"
+import type { z } from "zod"
+import { enteredPriceLines, resolveOrderLinePrice } from "@/lib/order-line-price"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { isOrganizationBudgetEnabled, resolveOrderBudgetTracking } from "@/lib/server/organization-budget-policy"
@@ -50,6 +53,7 @@ import { loadGroupPriceOverrides,resolveBranchGroupId,resolveEffectivePriceCents
 import { isValidRole } from "@/lib/rbac"
 import { metricExpressions } from "@/lib/metric-utils"
 import { getOrderStatusesForFilter,getOrderStatusFilter } from "@/lib/order-status"
+import { parsePaymentStatusFilter, type PaymentStatus } from "@/lib/payment-status"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isGroupPortalOrder,type OrderCreatorRole } from "@/lib/group-order-visibility"
 import { parseOrderCreatorRoleFilter } from "@/lib/order-creator-filter"
@@ -69,6 +73,11 @@ import { isOrderDeskRole, orderIntakeError } from "@/lib/order-desk-access"
 import { isDeskEnteredOrder } from "@/lib/order-desk-approval"
 import { isOrderDeskTarget } from "@/lib/server/order-desk-scope"
 import { deskAttachmentRefusal } from "@/lib/server/order-desk-attachments"
+import {
+  hasApricartSupportOrderReadScope,
+  isApricartSupportRole,
+} from "@/lib/apricart-support-access"
+import { getRequestScope } from "@/lib/auth"
 
 /**
  * Thrown inside the creation transaction when an Order Desk user's grant to the
@@ -76,6 +85,21 @@ import { deskAttachmentRefusal } from "@/lib/server/order-desk-attachments"
  * pre-check. Answered with the same 403 as the pre-check.
  */
 const ORDER_DESK_TARGET_UNAVAILABLE = "You are not assigned to order for this branch"
+
+async function resolveOrderListReadRole(user: unknown): Promise<{
+  role: string | null
+  refusal: string
+}> {
+  const claims = user as { id?: unknown; role?: unknown }
+  if (!isApricartSupportRole(claims.role)) {
+    return { role: viewerReadRole(user as any), refusal: VIEWER_READ_REFUSED }
+  }
+
+  const requestScope = await getRequestScope()
+  return hasApricartSupportOrderReadScope(claims.role, claims.id, requestScope)
+    ? { role: claims.role, refusal: "Forbidden" }
+    : { role: null, refusal: "Forbidden" }
+}
 
 /**
  * The column each allowlisted Orders-table sort key orders by. Text compares
@@ -139,6 +163,7 @@ function parseOrderListQuery(
     deliveryFilter: OrderDeliveryFilter | null
     fulfillmentStatusFilter: FulfillmentStatus | null
     invoiceStatusFilter: InvoiceStatus | null
+    paymentStatusFilter: PaymentStatus | null
     orderBy: SQL[]
   }
   | { ok: false; error: string } {
@@ -150,6 +175,8 @@ function parseOrderListQuery(
   if (!fulfillmentStatusFilter.ok) return { ok: false, error: fulfillmentStatusFilter.message }
   const invoiceStatusFilter = parseInvoiceStatusFilter(params.invoiceStatus)
   if (!invoiceStatusFilter.ok) return { ok: false, error: invoiceStatusFilter.message }
+  const paymentStatusFilter = parsePaymentStatusFilter(params.paymentStatus)
+  if (!paymentStatusFilter.ok) return { ok: false, error: paymentStatusFilter.message }
   const listOrder = resolveOrderListOrder(params.searchParams, pricesHidden)
   if (!listOrder.ok) return listOrder
   return {
@@ -158,6 +185,7 @@ function parseOrderListQuery(
     deliveryFilter: deliveryFilter.filter,
     fulfillmentStatusFilter: fulfillmentStatusFilter.filter,
     invoiceStatusFilter: invoiceStatusFilter.filter,
+    paymentStatusFilter: paymentStatusFilter.status,
     orderBy: listOrder.orderBy,
   }
 }
@@ -198,6 +226,7 @@ function getOrderListParams(req: NextRequest) {
     delivery: searchParams.get("delivery"),
     fulfillmentStatus: searchParams.get("fulfillmentStatus"),
     invoiceStatus: searchParams.get("invoiceStatus"),
+    paymentStatus: searchParams.get("paymentStatus"),
     groupIds: parseNumberList(searchParams.get("groupIds") || undefined),
     months: parseNumberList(searchParams.get("months") || undefined, 1, 12),
     years: parseNumberList(searchParams.get("years") || undefined, 2000, 2100),
@@ -250,7 +279,7 @@ function addMultiBranchOrderScope(conditions: any[], scopedBranchIds: unknown) {
 
 function addOrderRoleConditions(conditions: any[], context: any) {
   const { role, organizationId: orgIdNum, branchId: branchIdFromUser, userId: currentUserId } = context
-  if (role === "SUPER_ADMIN") {
+  if (role === "SUPER_ADMIN" || isApricartSupportRole(role)) {
     addSuperAdminOrderScope(conditions, context.organizationIdParam)
     return
   }
@@ -451,6 +480,7 @@ function addOrderStatusConditions(
   deliveryFilter: OrderDeliveryFilter | null,
   fulfillmentStatus: FulfillmentStatus | null,
   invoiceStatus: InvoiceStatus | null = null,
+  paymentStatus: PaymentStatus | null = null,
 ) {
   const requestedStatuses = getOrderStatusesForFilter(statusFilter)
   if (requestedStatuses.length > 0) {
@@ -472,6 +502,9 @@ function addOrderStatusConditions(
   if (invoiceStatus) {
     conditions.push(sql`${invoiceStatusSql} = ${invoiceStatus}`)
   }
+  if (paymentStatus) {
+    conditions.push(sql`${orderSelectColumns.paymentStatus} = ${paymentStatus}`)
+  }
 }
 
 function getOrderListSummaryTotal(statusFilter: string, summaryRow: any, deliveryFilter: OrderDeliveryFilter | null = null) {
@@ -487,6 +520,7 @@ async function getOrderListPaginationTotal(input: {
   deliveryFilter: OrderDeliveryFilter | null
   fulfillmentStatus: FulfillmentStatus | null
   invoiceStatus: InvoiceStatus | null
+  paymentStatus: PaymentStatus | null
   conditions: any[]
 }) {
   const summaryTotal = Number(getOrderListSummaryTotal(
@@ -496,7 +530,7 @@ async function getOrderListPaginationTotal(input: {
   ))
   // The summary cards do not count by fulfilment or invoice status, so either
   // filter needs its own count.
-  if (!input.fulfillmentStatus && !input.invoiceStatus) return summaryTotal
+  if (!input.fulfillmentStatus && !input.invoiceStatus && !input.paymentStatus) return summaryTotal
 
   const { conditions } = input
   const listCondition = conditions.length ? and(...conditions) : undefined
@@ -617,17 +651,23 @@ function calculateLockedOrderItems(normalizedItems: any[], locked: any, orgTaxRa
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    const priceCents = resolveEffectivePriceCents({
-      groupPriceCents: locked.groupPriceByInventoryId?.get(inventoryItem.id),
-      organizationPriceCents: inventoryItem.customPrice,
-      basePriceCents: product.basePrice,
+    // The ladder's price, unless the Order Desk typed this line's own (refused
+    // for every other role before the transaction began).
+    const price = resolveOrderLinePrice({
+      cataloguePriceCents: resolveEffectivePriceCents({
+        groupPriceCents: locked.groupPriceByInventoryId?.get(inventoryItem.id),
+        organizationPriceCents: inventoryItem.customPrice,
+        basePriceCents: product.basePrice,
+      }),
+      enteredPriceCents: requestedItem.unitPriceCents,
     })
-    if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
+    if (!price.ok) throw new Error(`Pricing is unavailable for ${product.name}`)
     // Catalogue prices are tax-inclusive, so the line amount is the gross the
     // branch pays and the split below only records how much of it is tax. The
-    // order total stays exactly the sum of these gross amounts.
+    // order total stays exactly the sum of these gross amounts. An entered
+    // price is tax-inclusive in the same way.
     const taxRateBp = resolveTaxRateBp(product.taxRateBp, orgTaxRateBp)
-    const line = splitInclusiveCents(calculateLineCents(priceCents, validation.quantity), taxRateBp)
+    const line = splitInclusiveCents(calculateLineCents(price.priceCents, validation.quantity), taxRateBp)
     subtotal += line.netCents
     tax += line.taxCents
     total += line.grossCents
@@ -635,7 +675,9 @@ function calculateLockedOrderItems(normalizedItems: any[], locked: any, orgTaxRa
       organizationInventoryId: inventoryItem.id,
       globalProductId: product.id,
       quantity: validation.quantity,
-      priceCents,
+      priceCents: price.priceCents,
+      priceEnteredManually: price.priceEnteredManually,
+      cataloguePriceCents: price.cataloguePriceCents,
       taxRateBp,
       taxCents: line.taxCents,
       productName: product.name,
@@ -708,6 +750,11 @@ async function saveCreationLedgers(tx: any, context: any) {
   }
 }
 
+function enteredPriceAuditDetails(items: any[]) {
+  const enteredPrices = enteredPriceLines(items)
+  return enteredPrices.length === 0 ? {} : { enteredPrices }
+}
+
 async function logCreatedOrder(tx: any, context: any) {
   try {
     logOrderActivity("CREATE", { ...context.order, orderItems: context.items }, {
@@ -736,6 +783,9 @@ async function logCreatedOrder(tx: any, context: any) {
       // Why an order skipped approval when the creator, not the tenant's
       // policy, made it Active (an Order Desk entry).
       ...(context.approvalBasis ? { approvalBasis: context.approvalBasis } : {}),
+      // Lines the Order Desk priced by hand, with the catalogue price each
+      // replaced, so the trail says who charged what against what.
+      ...enteredPriceAuditDetails(context.items),
     },
     ipAddress: forwardedFor ? forwardedFor.split(",")[0] : "unknown",
     userAgent: headersList.get("user-agent"),
@@ -1072,12 +1122,16 @@ function calculateCreationItems(normalizedItems: any[], inventory: any) {
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    const priceCents = resolveEffectivePriceCents({
-      groupPriceCents: inventory.groupPriceByInventoryId?.get(inventoryItem.id),
-      organizationPriceCents: inventoryItem.customPrice,
-      basePriceCents: product.basePrice,
+    const price = resolveOrderLinePrice({
+      cataloguePriceCents: resolveEffectivePriceCents({
+        groupPriceCents: inventory.groupPriceByInventoryId?.get(inventoryItem.id),
+        organizationPriceCents: inventoryItem.customPrice,
+        basePriceCents: product.basePrice,
+      }),
+      enteredPriceCents: requestedItem.unitPriceCents,
     })
-    if (priceCents === null || priceCents === undefined) throw new Error(`Price not found for item ${requestedItem.organizationInventoryId}. Custom: ${inventoryItem.customPrice}, Base: ${product.basePrice}`)
+    if (!price.ok) throw new Error(`Price not found for item ${requestedItem.organizationInventoryId}. Custom: ${inventoryItem.customPrice}, Base: ${product.basePrice}`)
+    const priceCents = price.priceCents
     subtotal += calculateLineCents(priceCents, validation.quantity)
     return {
       organizationInventoryId: requestedItem.organizationInventoryId,
@@ -1227,8 +1281,9 @@ export async function GET(req: NextRequest) {
     // tenant's orders as Head Office does, a branch-pinned one is refused.
     // What the caller may *do* — decide, see the fulfilment token — and the
     // access audit below keep the real role.
-    const role = viewerReadRole(session.user as any)
-    if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+    const readAccess = await resolveOrderListReadRole(session.user)
+    const role = readAccess.role
+    if (!role) return NextResponse.json({ error: readAccess.refusal }, { status: 403 })
     const organizationIdRaw = (session.user as any).organizationId
     const branchIdFromUserRaw = (session.user as any).branchId
 
@@ -1279,6 +1334,7 @@ export async function GET(req: NextRequest) {
       listQuery.deliveryFilter,
       listQuery.fulfillmentStatusFilter,
       listQuery.invoiceStatusFilter,
+      listQuery.paymentStatusFilter,
     )
 
     // --- Audit Logging for Group Access ---
@@ -1414,6 +1470,7 @@ export async function GET(req: NextRequest) {
       deliveryFilter: listQuery.deliveryFilter,
       fulfillmentStatus: listQuery.fulfillmentStatusFilter,
       invoiceStatus: listQuery.invoiceStatusFilter,
+      paymentStatus: listQuery.paymentStatusFilter,
       conditions,
     })
 
@@ -1470,11 +1527,8 @@ export async function POST(req: NextRequest) {
       }, { status: 400 })
     }
 
-    const rawBody = await req.json().catch(() => null)
-    const parsedBody = orderCreateSchema.safeParse(rawBody)
-    if (!parsedBody.success) {
-      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
-    }
+    const parsedBody = parseOrderCreateBody(await req.json().catch(() => null), role)
+    if ("response" in parsedBody) return parsedBody.response
     const {
       items,
       branchId: branchIdInput,
@@ -1487,10 +1541,7 @@ export async function POST(req: NextRequest) {
       intakeAttachmentKey,
     } = parsedBody.data
 
-    const normalizedItems = items.map((item) => ({
-      organizationInventoryId: item.organizationInventoryId,
-      quantity: roundQuantity(Number(item.quantity)),
-    }))
+    const normalizedItems = normalizeOrderLines(items)
 
     // Validate quantities are positive
     if (normalizedItems.some(i => !Number.isFinite(i.quantity) || i.quantity <= 0)) {
@@ -1616,6 +1667,40 @@ export async function PUT(_: NextRequest) {
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/
 
+/** A requested line; `unitPriceCents` only on an Order Desk line the desk priced. */
+type NormalizedOrderLine = { organizationInventoryId: number; quantity: number; unitPriceCents?: number }
+
+/**
+ * The validated body, or the refusal to send. A line's own price is the Order
+ * Desk's alone (lib/pricing-access.ts): anyone else sending one is refused here,
+ * before anything is read.
+ */
+function parseOrderCreateBody(
+  rawBody: unknown,
+  role: unknown,
+): { data: z.infer<typeof orderCreateSchema> } | { response: NextResponse } {
+  const parsed = orderCreateSchema.safeParse(rawBody)
+  if (!parsed.success) {
+    return { response: NextResponse.json({ error: validationMessage(parsed.error) }, { status: 400 }) }
+  }
+  const linePriceFailure = orderLinePriceFailure(role, parsed.data.items)
+  if (linePriceFailure) {
+    return { response: NextResponse.json({ error: linePriceFailure.message }, { status: linePriceFailure.status }) }
+  }
+  return { data: parsed.data }
+}
+
+function normalizeOrderLines(
+  items: readonly { organizationInventoryId: number; quantity: number; unitPriceCents?: number }[],
+): NormalizedOrderLine[] {
+  return items.map((item) => ({
+    organizationInventoryId: item.organizationInventoryId,
+    quantity: roundQuantity(Number(item.quantity)),
+    // Present only when typed, so every other order's fingerprint is unchanged.
+    ...(item.unitPriceCents === undefined ? {} : { unitPriceCents: item.unitPriceCents }),
+  }))
+}
+
 function orderRequestFingerprint(input: {
   organizationId: number
   branchId: number
@@ -1625,7 +1710,7 @@ function orderRequestFingerprint(input: {
   intakeChannel?: string
   intakeReference?: string
   intakeAttachmentKey?: string
-  items: Array<{ organizationInventoryId: number; quantity: number }>
+  items: NormalizedOrderLine[]
 }) {
   const canonical = {
     organizationId: input.organizationId,

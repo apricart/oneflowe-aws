@@ -68,18 +68,25 @@ describe("counting the initiator's branches", () => {
     expect(approverBranchCount({ initiatorBranchIds: [10], newBranchCount: 2 })).toBe(3)
   })
 
-  it("makes a new approver a Branch Admin for exactly one branch, a Group User for more", () => {
-    expect(newApproverRole(1)).toBe("BRANCH_ADMIN")
-    expect(newApproverRole(2)).toBe("GROUP_USER")
-    expect(newApproverRole(10)).toBe("GROUP_USER")
+  it("always makes Level 1 and 2 approvers Group Users, regardless of branch count", () => {
+    expect(newApproverRole(1, 1)).toBe("GROUP_USER")
+    expect(newApproverRole(1, 10)).toBe("GROUP_USER")
+    expect(newApproverRole(2, 1)).toBe("GROUP_USER")
+    expect(newApproverRole(2, 10)).toBe("GROUP_USER")
+  })
+
+  it("uses branch count for approvers above Level 2", () => {
+    expect(newApproverRole(3, 1)).toBe("BRANCH_ADMIN")
+    expect(newApproverRole(3, 2)).toBe("GROUP_USER")
   })
 })
 
 describe("a new approver (nobody has the email)", () => {
   it.each([
-    ["one existing branch", { initiatorBranchIds: [10] }, "BRANCH_ADMIN"],
-    ["one CRC still to be created", { initiatorBranchIds: [], newBranchCount: 1 }, "BRANCH_ADMIN"],
-    ["the same branch named twice", { initiatorBranchIds: [10, 10] }, "BRANCH_ADMIN"],
+    ["one existing branch at Level 1", { level: 1, initiatorBranchIds: [10] }, "GROUP_USER"],
+    ["one existing branch", { initiatorBranchIds: [10] }, "GROUP_USER"],
+    ["one CRC still to be created", { initiatorBranchIds: [], newBranchCount: 1 }, "GROUP_USER"],
+    ["the same branch named twice", { initiatorBranchIds: [10, 10] }, "GROUP_USER"],
     ["two existing branches", { initiatorBranchIds: [10, 11] }, "GROUP_USER"],
     ["one branch and one new CRC", { initiatorBranchIds: [10], newBranchCount: 1 }, "GROUP_USER"],
     ["two new CRCs", { initiatorBranchIds: [], newBranchCount: 2 }, "GROUP_USER"],
@@ -87,8 +94,8 @@ describe("a new approver (nobody has the email)", () => {
     expect(plan(overrides)).toEqual({ kind: "create", role })
   })
 
-  it("is blocked for one branch where the approver role is Head Office, since a Branch Admin cannot hold a level there", () => {
-    expect(plan({ organization: HEAD_OFFICE_APPROVES, initiatorBranchIds: [10] }))
+  it("is blocked at Level 3 for one branch where the approver role is Head Office, since a Branch Admin cannot hold a level there", () => {
+    expect(plan({ level: 3, organization: HEAD_OFFICE_APPROVES, initiatorBranchIds: [10] }))
       .toEqual({ kind: "blocked", reason: NEW_BRANCH_ADMIN_APPROVER_REFUSAL })
   })
 
@@ -124,11 +131,16 @@ describe("an existing Group User", () => {
 })
 
 describe("an existing Branch Admin", () => {
-  it("stays a Branch Admin when its own branch is the only branch", () => {
+  it("becomes a Group User at Level 2 even when its own branch is the only branch", () => {
     expect(plan({ candidates: [branchAdmin()], initiatorBranchIds: [10] }))
-      .toEqual({ kind: "assign", userId: "user-1", addBranchIds: [], becomesGroupUser: false })
+      .toEqual({ kind: "assign", userId: "user-1", addBranchIds: [], becomesGroupUser: true })
     expect(plan({ candidates: [branchAdmin({ level: 2 })], initiatorBranchIds: [10] }))
-      .toEqual({ kind: "covered", userId: "user-1" })
+      .toEqual({ kind: "extend", userId: "user-1", addBranchIds: [], becomesGroupUser: true })
+  })
+
+  it("stays a Branch Admin at Level 3 when its own branch is the only branch", () => {
+    expect(plan({ level: 3, candidates: [branchAdmin()], initiatorBranchIds: [10] }))
+      .toEqual({ kind: "assign", userId: "user-1", addBranchIds: [], becomesGroupUser: false })
   })
 
   it("becomes a Group User when the initiator orders at another branch too, keeping its own", () => {
@@ -154,8 +166,8 @@ describe("an existing Branch Admin", () => {
       .toEqual({ kind: "assign", userId: "user-1", addBranchIds: [11], becomesGroupUser: true })
   })
 
-  it("is blocked for its own single branch where the approver role is Head Office", () => {
-    const result = plan({ organization: HEAD_OFFICE_APPROVES, candidates: [branchAdmin()], initiatorBranchIds: [10] })
+  it("is blocked at Level 3 for its own single branch where the approver role is Head Office", () => {
+    const result = plan({ level: 3, organization: HEAD_OFFICE_APPROVES, candidates: [branchAdmin()], initiatorBranchIds: [10] })
     expect(result.kind === "blocked" && result.reason).toMatch(/cannot hold an approval level/)
   })
 
@@ -164,8 +176,8 @@ describe("an existing Branch Admin", () => {
       .toEqual({ kind: "blocked", reason: BRANCH_ADMIN_ORDERS_IN_FLIGHT_REFUSAL })
   })
 
-  it("is not held up by its orders when it stays a Branch Admin", () => {
-    expect(plan({ candidates: [branchAdmin({ ordersInFlight: 2 })], initiatorBranchIds: [10] }).kind).toBe("assign")
+  it("is not held up by its orders when it stays a Branch Admin at Level 3", () => {
+    expect(plan({ level: 3, candidates: [branchAdmin({ ordersInFlight: 2 })], initiatorBranchIds: [10] }).kind).toBe("assign")
   })
 
   it("is still refused for holding a different level, whatever the branches", () => {
@@ -175,12 +187,14 @@ describe("an existing Branch Admin", () => {
 })
 
 describe("branchAdminBecomesGroupUser", () => {
-  it("is true only for a Branch Admin reaching past its own branch", () => {
-    expect(branchAdminBecomesGroupUser({ role: "BRANCH_ADMIN", branchId: 10 }, { initiatorBranchIds: [10], newBranchCount: 0 })).toBe(false)
-    expect(branchAdminBecomesGroupUser({ role: "BRANCH_ADMIN", branchId: 10 }, { initiatorBranchIds: [10, 11], newBranchCount: 0 })).toBe(true)
-    expect(branchAdminBecomesGroupUser({ role: "BRANCH_ADMIN", branchId: 10 }, { initiatorBranchIds: [10], newBranchCount: 1 })).toBe(true)
-    expect(branchAdminBecomesGroupUser({ role: "GROUP_USER", branchId: null }, { initiatorBranchIds: [10, 11], newBranchCount: 0 })).toBe(false)
-    expect(branchAdminBecomesGroupUser({ role: "HEAD_OFFICE", branchId: null }, { initiatorBranchIds: [10, 11], newBranchCount: 0 })).toBe(false)
+  it("is true for Levels 1 and 2, or for a later-level Branch Admin reaching past its own branch", () => {
+    expect(branchAdminBecomesGroupUser({ role: "BRANCH_ADMIN", branchId: 10 }, { level: 1, initiatorBranchIds: [10], newBranchCount: 0 })).toBe(true)
+    expect(branchAdminBecomesGroupUser({ role: "BRANCH_ADMIN", branchId: 10 }, { level: 2, initiatorBranchIds: [10], newBranchCount: 0 })).toBe(true)
+    expect(branchAdminBecomesGroupUser({ role: "BRANCH_ADMIN", branchId: 10 }, { level: 3, initiatorBranchIds: [10], newBranchCount: 0 })).toBe(false)
+    expect(branchAdminBecomesGroupUser({ role: "BRANCH_ADMIN", branchId: 10 }, { level: 3, initiatorBranchIds: [10, 11], newBranchCount: 0 })).toBe(true)
+    expect(branchAdminBecomesGroupUser({ role: "BRANCH_ADMIN", branchId: 10 }, { level: 3, initiatorBranchIds: [10], newBranchCount: 1 })).toBe(true)
+    expect(branchAdminBecomesGroupUser({ role: "GROUP_USER", branchId: null }, { level: 2, initiatorBranchIds: [10, 11], newBranchCount: 0 })).toBe(false)
+    expect(branchAdminBecomesGroupUser({ role: "HEAD_OFFICE", branchId: null }, { level: 2, initiatorBranchIds: [10, 11], newBranchCount: 0 })).toBe(false)
   })
 })
 

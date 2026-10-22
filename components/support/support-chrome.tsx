@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import { supportUsesPortalShell } from "@/lib/support-shell"
+import { WAREHOUSE_HOME, isWarehouseRole } from "@/lib/warehouse-access"
 import {
   SUPPORT_CATEGORY_LABELS,
   SUPPORT_PRIORITY_LABELS,
@@ -155,6 +156,7 @@ export function SupportHeader({
  */
 export function homeHrefForRole(role: string | undefined): { href: string; label: string } | null {
   if (isApricartSupportRole(role)) return null
+  if (isWarehouseRole(role)) return { href: WAREHOUSE_HOME, label: "Back to warehouse" }
   if (role === "ORDER_PORTAL") return { href: "/shop", label: "Back to store" }
   if (role === "GROUP_ORDER_PORTAL") return { href: "/group-portal", label: "Back to portal" }
   return { href: "/dashboard", label: "Back to dashboard" }

@@ -49,35 +49,85 @@ export function toggleAllBranches(selected: readonly number[], organizationBranc
 }
 
 // ---------------------------------------------------------------------------
-// Whole cities. See plans/OF-WAREHOUSE-city-assignments.md.
+// Whole cities of chosen organizations. See plans/OF-WAREHOUSE-city-assignments.md
+// and plans/OF-WAREHOUSE-city-assignments-by-organization.md.
 // ---------------------------------------------------------------------------
 
 type CityBranch = Branch & { cityKey: string | null }
 type City = { key: string; label: string }
-type Reach = { branchIds: readonly number[]; cityKeys: readonly string[] }
+type CityCounts = City & { organizations: ReadonlyArray<{ organizationId: number; branchCount: number }> }
+type Reach = { branchIds: readonly number[]; cityKeys: readonly string[]; cityOrganizationIds: readonly number[] }
 
 /**
- * The assigned city a branch is served through, or null. Keys come from the
- * server, already normalised in SQL — never normalised here.
+ * The assigned city a branch is served through, or null: its city is assigned
+ * and its organization is chosen for the cities. Keys come from the server,
+ * already normalised in SQL — never normalised here.
  */
-export function cityCoveringBranch(branch: { cityKey: string | null }, cityKeys: readonly string[]): string | null {
-  return branch.cityKey !== null && cityKeys.includes(branch.cityKey) ? branch.cityKey : null
+export function cityCoveringBranch(
+  branch: { organizationId: number; cityKey: string | null },
+  reach: Pick<Reach, "cityKeys" | "cityOrganizationIds">,
+): string | null {
+  return branch.cityKey !== null
+    && reach.cityKeys.includes(branch.cityKey)
+    && reach.cityOrganizationIds.includes(branch.organizationId)
+    ? branch.cityKey
+    : null
 }
 
 /** Every branch a warehouse user serves: assigned one by one, or through a city. */
 export function effectiveWarehouseBranchIds(reach: Reach, branches: readonly CityBranch[]): number[] {
   const ids = new Set(reach.branchIds)
   for (const branch of branches) {
-    if (cityCoveringBranch(branch, reach.cityKeys)) ids.add(branch.id)
+    if (cityCoveringBranch(branch, reach)) ids.add(branch.id)
   }
   return [...ids].sort((a, b) => a - b)
+}
+
+/** A city as the second step offers it: counted within the chosen organizations. */
+export type CityChoice = {
+  key: string
+  label: string
+  branchCount: number
+  organizationCount: number
+  /** Assigned, but no chosen organization has a branch there now. Offered only to withdraw it. */
+  outside: boolean
+}
+
+/**
+ * The cities the chosen organizations have branches in, with their counts
+ * narrowed to those organizations, followed by any assigned city none of them
+ * has (so it can still be withdrawn). Built from the server's per-organization
+ * counts, never from the capped branch list.
+ */
+export function citiesForOrganizations(
+  cities: readonly CityCounts[],
+  organizationIds: readonly number[],
+  assignedKeys: readonly string[],
+): CityChoice[] {
+  const chosen = new Set(organizationIds)
+  const offered: CityChoice[] = []
+  const outside: CityChoice[] = []
+  for (const city of cities) {
+    const counts = city.organizations.filter((count) => chosen.has(count.organizationId))
+    const branchCount = counts.reduce((sum, count) => sum + count.branchCount, 0)
+    if (branchCount > 0) {
+      offered.push({ key: city.key, label: city.label, branchCount, organizationCount: counts.length, outside: false })
+    } else if (assignedKeys.includes(city.key)) {
+      outside.push({ key: city.key, label: city.label, branchCount: 0, organizationCount: 0, outside: true })
+    }
+  }
+  return [...offered, ...outside]
 }
 
 export function cityLabel(key: string, cities: readonly City[]): string {
   return cities.find((city) => city.key === key)?.label ?? key
 }
 
-/** The cities, named when few, then the branches they and the single assignments reach. */
+/**
+ * The cities, named when few, then the branches they and the single
+ * assignments reach. Cities with no organization chosen reach nothing, and
+ * say so.
+ */
 export function describeWarehouseReach(
   reach: Reach,
   branches: readonly CityBranch[],
@@ -89,5 +139,6 @@ export function describeWarehouseReach(
   const cityText = reach.cityKeys.length <= 3
     ? reach.cityKeys.map((key) => cityLabel(key, cities)).join(", ")
     : `${reach.cityKeys.length} cities`
-  return `${cityText} · ${branchText === "None" ? "no branches yet" : branchText}`
+  const empty = reach.cityOrganizationIds.length === 0 ? "no organization chosen" : "no branches yet"
+  return `${cityText} · ${branchText === "None" ? empty : branchText}`
 }

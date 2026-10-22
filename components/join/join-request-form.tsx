@@ -40,7 +40,10 @@ import { cn } from "@/lib/utils"
  *
  * The email is locked to the organization's domain: the applicant types only
  * the part before the `@`, and the domain is shown as a fixed suffix. The
- * server refuses any other domain whatever this page sends.
+ * server refuses any other domain whatever this page sends. On the join page
+ * the address has already been proven by an emailed code, so it arrives as
+ * `lockedEmailLocalPart` and is shown read-only
+ * (plans/OF-JOIN-email-otp-verification.md).
  *
  * The validation here is a courtesy so the applicant is not made to wait on a
  * round trip. The server re-validates everything.
@@ -160,14 +163,18 @@ export function Field({
 
 export function JoinRequestForm({
   options,
+  lockedEmailLocalPart,
   onSubmit,
   onBack,
 }: Readonly<{
   options: JoinFormOptions
+  /** The verified address's part before the `@`; the field is read-only when set. */
+  lockedEmailLocalPart?: string
   onSubmit: (payload: Record<string, unknown>) => Promise<void>
   onBack: () => void
 }>) {
-  const [form, setForm] = useState<FormState>(EMPTY_FORM)
+  const [form, setForm] = useState<FormState>(() => ({ ...EMPTY_FORM, emailLocalPart: lockedEmailLocalPart ?? "" }))
+  const emailLocked = lockedEmailLocalPart !== undefined
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -256,12 +263,13 @@ export function JoinRequestForm({
             aria-describedby={errors.lastName ? "join-last-name-error" : undefined}
           />
         </Field>
-        <Field id="join-email" label="Work email" required error={errors.email}>
+        <Field id="join-email" label={emailLocked ? "Work email (verified)" : "Work email"} required error={errors.email}>
           <div className="flex">
             <Input
               id="join-email"
               value={form.emailLocalPart}
               onChange={(event) => set("emailLocalPart", event.target.value)}
+              readOnly={emailLocked}
               placeholder="your.name"
               autoComplete="off"
               autoCapitalize="none"

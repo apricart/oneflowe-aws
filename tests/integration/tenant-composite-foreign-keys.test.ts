@@ -143,7 +143,10 @@ describe.skipIf(!hasTestDatabase)("tenant composite foreign keys", () => {
     // composite keys (plans/OF-INVOICE-invoice-ledger.md). 39 with the
     // department sign-up's three (plans/OF-JOIN-department-signup-multi-user.md).
     // 40 with branch_head_count_requests_branch_org_fk (plans/OF-BRANCH-head-count.md).
-    expect(declared.size).toBe(40)
+    // 41 with branches_parent_org_fk (plans/OF-BRANCH-parent-child-label.md).
+    // 42 with organization_join_request_branches_parent_org_fk
+    // (plans/OF-JOIN-new-branch-parent-child.md).
+    expect(declared.size).toBe(42)
   })
 
   describe("refuse another organization's branch", () => {
@@ -183,6 +186,9 @@ describe.skipIf(!hasTestDatabase)("tenant composite foreign keys", () => {
         expect(await failureOf(db.insert(organizationJoinRequestBranches).values({
           requestId: request.id, organizationId: f.home, costCenterId: "ITK-1", resolvedBranchId: f.foreignBranch,
         }))).toEqual(refusedBy("organization_join_request_branches_resolved_org_fk"))
+        expect(await failureOf(db.insert(organizationJoinRequestBranches).values({
+          requestId: request.id, organizationId: f.home, costCenterId: "ITK-2", requestedHierarchyRole: "CHILD", requestedParentBranchId: f.foreignBranch,
+        }))).toEqual(refusedBy("organization_join_request_branches_parent_org_fk"))
         expect(await failureOf(db.insert(organizationJoinRequestAddresses).values({
           requestId: request.id, organizationId: f.home, address: "Plot 1", branchId: f.foreignBranch,
         }))).toEqual(refusedBy("organization_join_request_addresses_branch_org_fk"))
@@ -204,6 +210,22 @@ describe.skipIf(!hasTestDatabase)("tenant composite foreign keys", () => {
       expect(await failureOf(
         db.update(branches).set({ organizationId: f.foreign }).where(eq(branches.id, f.homeBranch)),
       )).toEqual(refusedBy("users_branch_org_fk"))
+    })
+  })
+
+  describe("refuse another organization's parent branch", () => {
+    it("on a child, when its parent would leave the child's organization", async () => {
+      const tag = randomUUID().slice(0, 8)
+      const [parent] = await db.insert(branches)
+        .values({ organizationId: f.home, name: `ITK Parent ${tag}`, status: "active", hierarchyRole: "PARENT" })
+        .returning({ id: branches.id })
+      await db.insert(branches).values({
+        organizationId: f.home, name: `ITK Child ${tag}`, status: "active", hierarchyRole: "CHILD", parentBranchId: parent.id,
+      })
+
+      expect(await failureOf(
+        db.update(branches).set({ organizationId: f.foreign }).where(eq(branches.id, parent.id)),
+      )).toEqual(refusedBy("branches_parent_org_fk"))
     })
   })
 

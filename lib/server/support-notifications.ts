@@ -2,7 +2,19 @@ import "server-only"
 
 import { and, eq, inArray, isNull, ne } from "drizzle-orm"
 
-import { emailOutbox, notifications, organizations, roles, supportThreads, users } from "@/db/schema"
+import {
+  branches,
+  emailOutbox,
+  notifications,
+  orders,
+  organizations,
+  roles,
+  supportThreads,
+  users,
+  warehouseAssignments,
+  warehouseCityAssignments,
+  warehouseCityOrganizations,
+} from "@/db/schema"
 import { db } from "@/lib/db"
 import {
   parseSupportEmailPayload,
@@ -14,7 +26,7 @@ import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import { isValidEmailAddress } from "@/lib/validation/email"
 import { canReadSupportThread } from "@/lib/support-access"
 import {
-  SUPPORT_APRICART_ROLES,
+  SUPPORT_WHOLE_QUEUE_ROLES,
   isSupportApricartRole,
   supportThreadReference,
   type SupportSide,
@@ -26,6 +38,9 @@ import {
   type ClaimedOutboxRow,
   type DeliveryOutcome,
 } from "@/lib/server/email-outbox-runtime"
+import { warehouseCityBranchOn, warehouseCityOrganizationOn } from "@/lib/server/warehouse-city-rule"
+import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
+import { WAREHOUSE_ROLE, isWarehouseRole } from "@/lib/warehouse-access"
 
 export { isSupportEmailTemplate } from "@/lib/email/support"
 
@@ -40,7 +55,9 @@ export { isSupportEmailTemplate } from "@/lib/email/support"
  * **Who is told.** The people on the other side of the conversation, plus the
  * person who raised the thread when somebody else answers on their behalf:
  *
- * - a customer wrote → every active Apricart administrator, and the raiser
+ * - a customer wrote → every active account on Apricart's whole queue, every
+ *   active warehouse serving the thread's branch or its cited order's branch,
+ *   and the raiser
  * - Apricart wrote  → the raiser
  *
  * A branch administrator and a head office reading their organization's queue
@@ -88,10 +105,81 @@ export function supportNotificationEventKey(
 }
 
 /**
- * Every active Apricart account on the support queue — Super Admin and the
- * support agents. Apricart is a party to every thread.
+ * The Apricart side of one thread: every active account on the whole queue —
+ * Super Admin and the support agents, a party to every thread — and every
+ * active warehouse whose reach covers it (plans/OF-WAREHOUSE-support-queue.md).
  */
-async function apricartRecipients(tx: any): Promise<SupportNotificationRecipient[]> {
+async function apricartRecipients(tx: any, threadId: number): Promise<SupportNotificationRecipient[]> {
+  const wholeQueue: SupportNotificationRecipient[] = await tx
+    .select({
+      id: users.id,
+      email: users.email,
+      role: roles.name,
+      organizationId: users.organizationId,
+      branchId: users.branchId,
+    })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(and(
+      inArray(roles.name, [...SUPPORT_WHOLE_QUEUE_ROLES]),
+      eq(users.isActive, true),
+      isNull(users.deletedAt),
+    ))
+
+  return [...wholeQueue, ...await warehouseRecipients(tx, threadId)]
+}
+
+/**
+ * The branches a thread is at, for the warehouse fence: its own branch and its
+ * cited order's branch, each only when it belongs to the thread's organization
+ * — the same two halves `supportBranchReachCondition` reads.
+ */
+async function supportThreadBranchIds(tx: any, threadId: number): Promise<number[]> {
+  const [row] = await tx
+    .select({
+      organizationId: supportThreads.organizationId,
+      branchId: supportThreads.branchId,
+      branchOrganizationId: branches.organizationId,
+      orderBranchId: orders.branchId,
+      orderOrganizationId: orders.organizationId,
+    })
+    .from(supportThreads)
+    .leftJoin(branches, eq(branches.id, supportThreads.branchId))
+    .leftJoin(orders, eq(orders.id, supportThreads.orderId))
+    .where(eq(supportThreads.id, threadId))
+    .limit(1)
+  if (!row) return []
+
+  const ids: number[] = []
+  if (row.branchId !== null && row.branchOrganizationId === row.organizationId) ids.push(row.branchId)
+  if (row.orderBranchId !== null && row.orderOrganizationId === row.organizationId) ids.push(row.orderBranchId)
+  return [...new Set(ids)]
+}
+
+/**
+ * Every active warehouse account serving one of the thread's branches — by a
+ * single-branch assignment or by the branch's city in a chosen organization — matched exactly as
+ * `loadWarehouseReach` matches, so the people mailed are the people whose
+ * queue lists the thread.
+ */
+async function warehouseRecipients(tx: any, threadId: number): Promise<SupportNotificationRecipient[]> {
+  const branchIds = await supportThreadBranchIds(tx, threadId)
+  if (branchIds.length === 0) return []
+
+  const byBranch: Array<{ userId: string }> = await tx
+    .select({ userId: warehouseAssignments.userId })
+    .from(warehouseAssignments)
+    .where(inArray(warehouseAssignments.branchId, branchIds))
+  const byCity: Array<{ userId: string }> = await tx
+    .select({ userId: warehouseCityAssignments.userId })
+    .from(warehouseCityAssignments)
+    .innerJoin(branches, warehouseCityBranchOn())
+    .innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())
+    .where(inArray(branches.id, branchIds))
+
+  const userIds = [...new Set([...byBranch, ...byCity].map((row) => row.userId))]
+  if (userIds.length === 0) return []
+
   return tx
     .select({
       id: users.id,
@@ -103,10 +191,22 @@ async function apricartRecipients(tx: any): Promise<SupportNotificationRecipient
     .from(users)
     .innerJoin(roles, eq(users.roleId, roles.id))
     .where(and(
-      inArray(roles.name, [...SUPPORT_APRICART_ROLES]),
+      inArray(users.id, userIds),
+      eq(roles.name, WAREHOUSE_ROLE),
       eq(users.isActive, true),
       isNull(users.deletedAt),
     ))
+}
+
+/**
+ * Whether a recipient reads support movement in an in-app bell. The support
+ * agent has none (no topbar, the notifications API is outside its allowlist);
+ * the warehouse's bell lists its order-stage notices alone
+ * (`/api/v1/warehouse/notifications`). Both are mailed, and see movement in
+ * the thread list's unread marker.
+ */
+function hasSupportBell(role: string): boolean {
+  return !isApricartSupportRole(role) && !isWarehouseRole(role)
 }
 
 async function threadRaiser(
@@ -160,10 +260,9 @@ async function insertSupportEvents(tx: any, input: {
   // recipient's scope rather than the thread's. A row stamped with the thread's
   // branch would simply never be shown to a reader on another branch.
   //
-  // A support agent has no bell — no topbar, and the notifications API is
-  // outside its allowlist — so it is mailed but given no row it could never
-  // read. The thread list's unread marker is where it sees movement.
-  const bellRows = rows.filter(({ recipient }) => !isApricartSupportRole(recipient.role))
+  // A support agent and a warehouse are mailed but given no row their bell
+  // would never show (`hasSupportBell`).
+  const bellRows = rows.filter(({ recipient }) => hasSupportBell(recipient.role))
   if (bellRows.length > 0) {
     await tx.insert(notifications).values(bellRows.map(({ recipient, eventKey }) => ({
       userId: recipient.id,
@@ -219,7 +318,7 @@ export async function queueSupportMessageNotifications(tx: any, input: {
 
   const recipients: SupportNotificationRecipient[] = []
   if (input.authorSide === "CUSTOMER") {
-    recipients.push(...await apricartRecipients(tx))
+    recipients.push(...await apricartRecipients(tx, input.thread.id))
   }
   // The raiser is told whenever somebody else moves their thread — Apricart
   // answering, or a colleague on their branch answering for them.
@@ -251,7 +350,7 @@ export async function queueSupportStatusNotifications(tx: any, input: {
 }): Promise<QueuedSupportNotifications> {
   const recipients: SupportNotificationRecipient[] = []
   if (input.actorSide === "CUSTOMER") {
-    recipients.push(...await apricartRecipients(tx))
+    recipients.push(...await apricartRecipients(tx, input.thread.id))
   }
   recipients.push(...await threadRaiser(tx, input.thread.id, input.actorUserId))
 
@@ -309,6 +408,8 @@ export async function deliverClaimedSupportEmail(
       threadOrganizationId: supportThreads.organizationId,
       threadBranchId: supportThreads.branchId,
       threadCreatedByUserId: supportThreads.createdByUserId,
+      orderBranchId: orders.branchId,
+      orderOrganizationId: orders.organizationId,
       threadSubject: supportThreads.subject,
       threadCategory: supportThreads.category,
       organizationName: organizations.name,
@@ -317,6 +418,7 @@ export async function deliverClaimedSupportEmail(
     .innerJoin(roles, eq(users.roleId, roles.id))
     .innerJoin(supportThreads, eq(supportThreads.id, row.supportThreadId))
     .innerJoin(organizations, eq(organizations.id, supportThreads.organizationId))
+    .leftJoin(orders, eq(orders.id, supportThreads.orderId))
     .where(and(
       eq(users.id, row.recipientUserId),
       eq(users.isActive, true),
@@ -325,6 +427,12 @@ export async function deliverClaimedSupportEmail(
     ))
     .limit(1)
 
+  // A warehouse's reach is re-read now, so a branch or city withdrawn since the
+  // message was queued is not mailed.
+  const reachBranchIds = context && isWarehouseRole(context.role)
+    ? await loadWarehouseReach(db, row.recipientUserId)
+    : undefined
+
   const stillAuthorized = context
     ? canReadSupportThread({
         viewer: {
@@ -332,11 +440,13 @@ export async function deliverClaimedSupportEmail(
           role: context.role,
           organizationId: context.userOrganizationId,
           branchId: context.userBranchId,
+          reachBranchIds,
         },
         thread: {
           organizationId: context.threadOrganizationId,
           branchId: context.threadBranchId,
           createdByUserId: context.threadCreatedByUserId,
+          orderBranchId: context.orderOrganizationId === context.threadOrganizationId ? context.orderBranchId : null,
         },
       })
     : false

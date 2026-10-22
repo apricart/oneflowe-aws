@@ -5,9 +5,12 @@
  *
  * Presentation only. The server re-validates every field, re-checks the desk's
  * reach, and re-prices every line through the price ladder; the estimate here
- * uses the catalogue's prices, which come from that same ladder.
+ * uses the catalogue's prices, which come from that same ladder — or the price
+ * the desk typed for a line, which the server then charges instead
+ * (plans/OF-ORDER-DESK-line-price-entry.md).
  */
 
+import { parsePriceInput } from "@/lib/group-price-input"
 import { INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH, type IntakeChannel } from "@/lib/order-desk-access"
 import { calculateLineCents, parseQuantity, validateProductQuantity } from "@/lib/quantity"
 
@@ -24,6 +27,8 @@ export type DeskDraft = {
   branchId: number | null
   /** Typed quantities keyed by organization inventory id; blank means not ordered. */
   quantities: Readonly<Record<number, string>>
+  /** Typed unit prices in rupees, keyed the same way; blank means the catalogue price. */
+  prices: Readonly<Record<number, string>>
   intakeChannel: IntakeChannel | ""
   intakeReference: string
   poNumber: string
@@ -32,10 +37,13 @@ export type DeskDraft = {
   intakeAttachmentKey: string | null
 }
 
+/** One line of a desk request; `unitPriceCents` only when the desk typed a price. */
+export type DeskOrderLine = { organizationInventoryId: number; quantity: number; unitPriceCents?: number }
+
 export type DeskOrderRequest = {
   organizationId: number
   branchId: number
-  items: { organizationInventoryId: number; quantity: number }[]
+  items: DeskOrderLine[]
   intakeChannel: IntakeChannel
   intakeReference: string
   poNumber?: string
@@ -83,13 +91,55 @@ export function unavailableDraftLines(
     .filter((id) => !offered.has(id))
 }
 
+export type DeskPriceInput =
+  /** Nothing typed: the line is charged the catalogue price. */
+  | { kind: "catalogue" }
+  | { kind: "entered"; cents: number }
+  | { kind: "invalid"; error: string }
+
+/**
+ * What the desk typed in a line's price box: rupees with at most two decimals,
+ * more than zero; blank means the catalogue price. The server holds the same
+ * bounds (`MIN_ENTERED_UNIT_PRICE_CENTS`, `MAX_PRICE_CENTS`).
+ */
+export function parseDeskPriceInput(raw: string | undefined, productName: string): DeskPriceInput {
+  const parsed = parsePriceInput(raw ?? "")
+  if (!parsed.ok) {
+    return {
+      kind: "invalid",
+      error: parsed.error === "too-large"
+        ? `The price for ${productName} is too large`
+        : `Enter the price for ${productName} in rupees, e.g. 250 or 250.50`,
+    }
+  }
+  if (parsed.cents === null) return { kind: "catalogue" }
+  if (parsed.cents <= 0) return { kind: "invalid", error: `The price for ${productName} must be more than zero` }
+  return { kind: "entered", cents: parsed.cents }
+}
+
+/**
+ * The unit price a line will be charged: the typed one when it is a valid
+ * price, else the catalogue's (null when the catalogue has none).
+ */
+export function deskLineUnitPriceCents(item: Pick<DeskCatalogueItem, "name" | "priceCents">, rawPrice: string | undefined): number | null {
+  const price = parseDeskPriceInput(rawPrice, item.name)
+  return price.kind === "entered" ? price.cents : item.priceCents
+}
+
+/** True when the typed price is valid and differs from the catalogue's. */
+export function isDeskPriceChanged(item: Pick<DeskCatalogueItem, "name" | "priceCents">, rawPrice: string | undefined): boolean {
+  const price = parseDeskPriceInput(rawPrice, item.name)
+  return price.kind === "entered" && price.cents !== item.priceCents
+}
+
 /** The filled-in lines, validated against the branch catalogue, or why not. */
 export function buildDeskOrderLines(
   quantities: Readonly<Record<number, string>>,
   catalogue: readonly DeskCatalogueItem[],
-): { ok: true; items: DeskOrderRequest["items"] } | { ok: false; error: string } {
+  prices: Readonly<Record<number, string>> = {},
+): { ok: true; items: DeskOrderLine[] } | { ok: false; error: string } {
   const byId = new Map(catalogue.map((item) => [item.organizationInventoryId, item]))
-  const items: DeskOrderRequest["items"] = []
+  const items: DeskOrderLine[] = []
   for (const line of filledLines({ quantities })) {
     const product = byId.get(line.organizationInventoryId)
     if (!product) return { ok: false, error: "A product in this order is no longer available for this branch" }
@@ -99,7 +149,16 @@ export function buildDeskOrderLines(
       label: `Quantity for ${product.name}`,
     })
     if (!check.ok) return { ok: false, error: check.error }
-    items.push({ organizationInventoryId: product.organizationInventoryId, quantity: check.quantity })
+    const price = parseDeskPriceInput(prices[product.organizationInventoryId], product.name)
+    if (price.kind === "invalid") return { ok: false, error: price.error }
+    if (price.kind === "catalogue" && product.priceCents === null) {
+      return { ok: false, error: `${product.name} has no catalogue price; enter its price` }
+    }
+    items.push({
+      organizationInventoryId: product.organizationInventoryId,
+      quantity: check.quantity,
+      ...(price.kind === "entered" ? { unitPriceCents: price.cents } : {}),
+    })
   }
   return items.length === 0 ? { ok: false, error: "Add at least one product" } : { ok: true, items }
 }
@@ -108,7 +167,7 @@ export function buildDeskOrderRequest(draft: DeskDraft, catalogue: readonly Desk
   if (!draft.organizationId) return { ok: false, error: "Choose an organization" }
   if (!draft.branchId) return { ok: false, error: "Choose a branch" }
 
-  const lines = buildDeskOrderLines(draft.quantities, catalogue)
+  const lines = buildDeskOrderLines(draft.quantities, catalogue, draft.prices)
   if (!lines.ok) return lines
   const items = lines.items
 
@@ -141,23 +200,29 @@ export function buildDeskOrderRequest(draft: DeskDraft, catalogue: readonly Desk
 }
 
 /**
- * The estimated total of the filled-in lines, in cents. Lines whose quantity
- * is not yet a number, or whose product has no price, contribute nothing.
+ * The estimated total of the filled-in lines, in cents, at the price each will
+ * be charged — the typed one, else the catalogue's. Lines whose quantity is not
+ * yet a number, or that have no price either way, contribute nothing.
  */
-export function estimateDraftTotalCents(draft: Pick<DeskDraft, "quantities">, catalogue: readonly DeskCatalogueItem[]): number {
+export function estimateDraftTotalCents(
+  draft: Pick<DeskDraft, "quantities"> & Partial<Pick<DeskDraft, "prices">>,
+  catalogue: readonly DeskCatalogueItem[],
+): number {
   const byId = new Map(catalogue.map((item) => [item.organizationInventoryId, item]))
   let total = 0
   for (const line of filledLines(draft)) {
     const product = byId.get(line.organizationInventoryId)
     const quantity = parseQuantity(line.raw)
-    if (!product || product.priceCents === null || !Number.isFinite(quantity) || quantity <= 0) continue
-    total += calculateLineCents(product.priceCents, quantity)
+    if (!product || !Number.isFinite(quantity) || quantity <= 0) continue
+    const unitPriceCents = deskLineUnitPriceCents(product, draft.prices?.[line.organizationInventoryId])
+    if (unitPriceCents === null) continue
+    total += calculateLineCents(unitPriceCents, quantity)
   }
   return total
 }
 
 export type DeskEditRequest = {
-  items: { organizationInventoryId: number; quantity: number }[]
+  items: DeskOrderLine[]
   notes: string
   poNumber: string | null
 }
@@ -167,10 +232,15 @@ export type DeskEditRequest = {
  * plus notes and PO number (an empty PO number clears it).
  */
 export function buildDeskEditRequest(
-  input: { quantities: Readonly<Record<number, string>>; notes: string; poNumber: string },
+  input: {
+    quantities: Readonly<Record<number, string>>
+    prices?: Readonly<Record<number, string>>
+    notes: string
+    poNumber: string
+  },
   catalogue: readonly DeskCatalogueItem[],
 ): { ok: true; body: DeskEditRequest } | { ok: false; error: string } {
-  const lines = buildDeskOrderLines(input.quantities, catalogue)
+  const lines = buildDeskOrderLines(input.quantities, catalogue, input.prices)
   if (!lines.ok) return lines
   const notes = input.notes.trim()
   if (notes.length > NOTES_MAX_LENGTH) return { ok: false, error: `Notes must be at most ${NOTES_MAX_LENGTH} characters` }

@@ -7,7 +7,10 @@ import {
   buildDeskOrderRequest,
   buildDeskRefundRequest,
   deskDraftChecklist,
+  deskLineUnitPriceCents,
   estimateDraftTotalCents,
+  isDeskPriceChanged,
+  parseDeskPriceInput,
   SCREENSHOT_MAX_BYTES,
   screenshotFileError,
   unavailableDraftLines,
@@ -27,6 +30,7 @@ const draft = (overrides: Partial<DeskDraft> = {}): DeskDraft => ({
   organizationId: 7,
   branchId: 70,
   quantities: { 1: "1.5", 2: "4", 3: "" },
+  prices: {},
   intakeChannel: "WHATSAPP",
   intakeReference: "  Sana, 09:40  ",
   poNumber: "",
@@ -91,7 +95,70 @@ describe("turning the desk's draft into an order", () => {
   })
 })
 
+describe("a price the desk types for a line", () => {
+  it("is sent in cents on that line only, beside the catalogue-priced ones", () => {
+    const result = buildDeskOrderRequest(draft({ prices: { 1: "199.50", 2: "" } }), catalogue)
+    expect(result.ok && result.body.items).toEqual([
+      { organizationInventoryId: 1, quantity: 1.5, unitPriceCents: 19_950 },
+      { organizationInventoryId: 2, quantity: 4 },
+    ])
+  })
+
+  it("is ignored for a product that is not being ordered", () => {
+    const result = buildDeskOrderRequest(draft({ prices: { 3: "50" } }), catalogue)
+    expect(result.ok && result.body.items.some((item) => item.organizationInventoryId === 3)).toBe(false)
+  })
+
+  it("lets an unpriced product be ordered, and only once a price is typed", () => {
+    const withoutPrice = buildDeskOrderRequest(draft({ quantities: { 3: "2" } }), catalogue)
+    expect(withoutPrice).toEqual({ ok: false, error: "Unpriced has no catalogue price; enter its price" })
+    const priced = buildDeskOrderRequest(draft({ quantities: { 3: "2" }, prices: { 3: "75" } }), catalogue)
+    expect(priced.ok && priced.body.items).toEqual([{ organizationInventoryId: 3, quantity: 2, unitPriceCents: 7_500 }])
+  })
+
+  it.each([
+    ["zero", "0", /more than zero/],
+    ["zero with decimals", "0.00", /more than zero/],
+    ["a negative price", "-5", /in rupees/],
+    ["three decimals", "1.005", /in rupees/],
+    ["words", "fifty", /in rupees/],
+    ["a price over the ladder's ceiling", "20000001", /too large/],
+  ])("refuses %s", (_label, raw, message) => {
+    const result = buildDeskOrderRequest(draft({ prices: { 2: raw } }), catalogue)
+    expect(!result.ok && result.error).toMatch(message)
+  })
+
+  it("estimates at the typed price, falling back to the catalogue's while the box is blank or invalid", () => {
+    expect(estimateDraftTotalCents(draft({ prices: { 2: "12.50" } }), catalogue)).toBe(37_500 + 5_000)
+    expect(estimateDraftTotalCents(draft({ prices: { 2: "abc" } }), catalogue)).toBe(37_500 + 4_000)
+    expect(estimateDraftTotalCents(draft({ quantities: { 3: "2" }, prices: { 3: "75" } }), catalogue)).toBe(15_000)
+  })
+
+  it("is a change only when it is valid and differs from the catalogue price", () => {
+    const boxes = catalogue[1]
+    expect(isDeskPriceChanged(boxes, "12")).toBe(true)
+    expect(isDeskPriceChanged(boxes, "10.00")).toBe(false)
+    expect(isDeskPriceChanged(boxes, "")).toBe(false)
+    expect(isDeskPriceChanged(boxes, "x")).toBe(false)
+    expect(deskLineUnitPriceCents(boxes, "12")).toBe(1_200)
+    expect(deskLineUnitPriceCents(boxes, undefined)).toBe(1_000)
+  })
+
+  it("reads a blank box as the catalogue price", () => {
+    expect(parseDeskPriceInput("  ", "Rice")).toEqual({ kind: "catalogue" })
+    expect(parseDeskPriceInput(undefined, "Rice")).toEqual({ kind: "catalogue" })
+    expect(parseDeskPriceInput("0.01", "Rice")).toEqual({ kind: "entered", cents: 1 })
+  })
+})
+
 describe("editing a desk order", () => {
+  it("keeps a typed price on the line it was typed for", () => {
+    expect(buildDeskEditRequest({ quantities: { 2: "3" }, prices: { 2: "11" }, notes: "", poNumber: "" }, catalogue)).toEqual({
+      ok: true,
+      body: { items: [{ organizationInventoryId: 2, quantity: 3, unitPriceCents: 1_100 }], notes: "", poNumber: null },
+    })
+  })
+
   it("sends the full set of lines, notes, and a PO number that an empty field clears", () => {
     expect(buildDeskEditRequest({ quantities: { 2: "3", 1: "" }, notes: " later ", poNumber: "  " }, catalogue)).toEqual({
       ok: true,

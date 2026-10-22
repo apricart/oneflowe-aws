@@ -22,8 +22,13 @@ import {
   isDepartment,
   normalizeBranchName,
   normalizeCrc,
+  type RequestedBranchEntry,
+  requestedBranchCityError,
+  requestedBranchHierarchyError,
   requestedBranchNameError,
+  requestedNewBranches,
 } from "@/lib/join-department-signup"
+import type { BranchHierarchyRole } from "@/lib/branch-hierarchy"
 import { composeDomainEmail, emailLocalPartError } from "@/lib/organization-email-domain"
 
 /** The four rules the server's password policy holds an applicant to. */
@@ -37,10 +42,85 @@ export function joinPasswordError(password: string): string | undefined {
   return complete ? undefined : "Include an uppercase letter, a lowercase letter, a number and a symbol"
 }
 
-/** One branch chip: an existing branch picked by name, or a new branch named with its CRC number. */
+/**
+ * One branch chip: an existing branch picked by name, or a new branch named
+ * with its CRC number, the listed city it is in with that city's province, and
+ * its type — a child names an existing parent branch or another new branch on
+ * this form marked Parent (plans/OF-JOIN-new-branch-parent-child.md).
+ */
 export type BranchChip =
   | { key: string; kind: "existing"; branchId: number; label: string; checked: boolean }
-  | { key: string; kind: "crc"; crc: string; name: string; label: string; checked: boolean }
+  | {
+      key: string
+      kind: "crc"
+      crc: string
+      name: string
+      city: string
+      province: string
+      hierarchyRole: BranchHierarchyRole
+      parentBranchId: number | null
+      parentCrc: string | null
+      label: string
+      checked: boolean
+    }
+
+/*
+ * A child's parent as the form's select holds it: an existing branch
+ * (`branch:<id>`) or a new branch on this form (`crc:<CRC>`). Never sent.
+ */
+const EXISTING_PARENT_PREFIX = "branch:"
+const NEW_PARENT_PREFIX = "crc:"
+
+export type ParentChoice = { parentBranchId: number | null; parentCrc: string | null }
+
+export function parentChoiceValue(choice: ParentChoice): string {
+  if (choice.parentBranchId !== null) return `${EXISTING_PARENT_PREFIX}${choice.parentBranchId}`
+  if (choice.parentCrc !== null) return `${NEW_PARENT_PREFIX}${choice.parentCrc}`
+  return ""
+}
+
+export function parseParentChoice(value: string): ParentChoice {
+  if (value.startsWith(EXISTING_PARENT_PREFIX)) {
+    const id = Number(value.slice(EXISTING_PARENT_PREFIX.length))
+    return { parentBranchId: Number.isInteger(id) && id > 0 ? id : null, parentCrc: null }
+  }
+  if (value.startsWith(NEW_PARENT_PREFIX)) return { parentBranchId: null, parentCrc: normalizeCrc(value.slice(NEW_PARENT_PREFIX.length)) || null }
+  return { parentBranchId: null, parentCrc: null }
+}
+
+/**
+ * The parents a new branch on this form may name: the organization's parent
+ * branches (`parentBranchIds`, from the lookup) and the new branches already
+ * added here as Parent, by name.
+ */
+export function parentChoiceOptions(
+  branches: ReadonlyArray<{ id: number; name: string }>,
+  parentBranchIds: readonly number[],
+  chips: readonly BranchChip[],
+): Array<{ value: string; label: string }> {
+  const parents = new Set(parentBranchIds)
+  const existing = branches
+    .filter((branch) => parents.has(branch.id))
+    .map((branch) => ({ value: parentChoiceValue({ parentBranchId: branch.id, parentCrc: null }), label: branch.name }))
+  const added = chips.flatMap((chip) => (chip.kind === "crc" && chip.hierarchyRole === "PARENT"
+    ? [{ value: parentChoiceValue({ parentBranchId: null, parentCrc: chip.crc }), label: `${chip.name} (new)` }]
+    : []))
+  return [...existing, ...added]
+}
+
+/** How a new branch chip's type reads: "Parent branch", "Child of …", or null for Standalone. */
+export function chipHierarchyText(
+  chip: BranchChip,
+  chips: readonly BranchChip[],
+  branches: ReadonlyArray<{ id: number; name: string }>,
+): string | null {
+  if (chip.kind !== "crc" || chip.hierarchyRole === "STANDALONE") return null
+  if (chip.hierarchyRole === "PARENT") return "Parent branch"
+  const parent = chip.parentCrc !== null
+    ? chips.find((other) => other.kind === "crc" && other.crc === chip.parentCrc)?.label
+    : branches.find((branch) => branch.id === chip.parentBranchId)?.name
+  return `Child of ${parent ?? "a branch not on this form"}`
+}
 
 export type AddressChip = { key: string; address: string; checked: boolean }
 
@@ -112,8 +192,12 @@ export function departmentSignupErrors(draft: DepartmentSignupDraft): Record<str
   approverErrors(draft, errors)
 
   const branches = draft.branches.filter((chip) => chip.checked)
+  const hierarchyProblem = requestedBranchHierarchyError(requestedNewBranches(branchEntries(branches)))
   if (branches.length === 0) errors.branches = "Add at least one branch and keep it checked"
   else if (branches.length > SIGNUP_MAX_BRANCHES) errors.branches = `At most ${SIGNUP_MAX_BRANCHES} branches`
+  // A child whose parent on this form was removed or unchecked: the server
+  // would refuse it, so say which before sending.
+  else if (hierarchyProblem) errors.branches = `${hierarchyProblem}. Add its parent again, or remove it and add it with another type.`
 
   const addresses = draft.addresses.filter((chip) => chip.checked)
   if (addresses.length === 0) errors.addresses = "Add at least one delivery address and keep it checked"
@@ -153,12 +237,15 @@ export function newBranchNameChipError(
   return null
 }
 
-/** Why a new branch (its name and its CRC) cannot be added as typed, or null. */
+/**
+ * Why a new branch (its name, its CRC, its city and its type) cannot be added
+ * as typed, or null. A child must name its parent.
+ */
 export function newBranchChipError(
   chips: readonly BranchChip[],
   knownBranchNames: readonly string[],
-  entry: Readonly<{ name: string; crc: string }>,
-): { field: "name" | "crc"; message: string } | null {
+  entry: Readonly<{ name: string; crc: string; city: string; hierarchyRole?: BranchHierarchyRole; parent?: ParentChoice }>,
+): { field: "name" | "crc" | "city" | "parent"; message: string } | null {
   const nameProblem = newBranchNameChipError(chips, knownBranchNames, entry.name)
   if (nameProblem) return { field: "name", message: nameProblem }
   const crcProblem = crcError(entry.crc)
@@ -166,7 +253,27 @@ export function newBranchChipError(
   if (chips.some((chip) => chip.kind === "crc" && chip.crc === normalizeCrc(entry.crc))) {
     return { field: "crc", message: "This CRC is already added" }
   }
+  const cityProblem = requestedBranchCityError(entry.city)
+  if (cityProblem) return { field: "city", message: cityProblem }
+  if (entry.hierarchyRole === "CHILD" && entry.parent?.parentBranchId == null && entry.parent?.parentCrc == null) {
+    return { field: "parent", message: "Choose the parent branch" }
+  }
   return null
+}
+
+/** The chips as the body names them: an existing branch by id, a new one with its details and type. */
+function branchEntries(chips: readonly BranchChip[]): RequestedBranchEntry[] {
+  return chips.map((chip) => (chip.kind === "existing"
+    ? { branchId: chip.branchId }
+    : {
+        name: chip.name,
+        crc: chip.crc,
+        city: chip.city,
+        province: chip.province,
+        hierarchyRole: chip.hierarchyRole,
+        ...(chip.hierarchyRole === "CHILD" && chip.parentBranchId !== null ? { parentBranchId: chip.parentBranchId } : {}),
+        ...(chip.hierarchyRole === "CHILD" && chip.parentCrc !== null ? { parentCrc: chip.parentCrc } : {}),
+      }))
 }
 
 /** Why an address cannot be added as typed, or null. */
@@ -191,9 +298,7 @@ export function toDepartmentSignupPayload(draft: DepartmentSignupDraft, emailDom
     ipExtension: draft.ipExtension.trim(),
     employeeId: draft.employeeId.trim(),
     department: draft.department,
-    branches: draft.branches
-      .filter((chip) => chip.checked)
-      .map((chip) => (chip.kind === "existing" ? { branchId: chip.branchId } : { name: chip.name, crc: chip.crc })),
+    branches: branchEntries(draft.branches.filter((chip) => chip.checked)),
     addresses: draft.addresses.filter((chip) => chip.checked).map((chip) => chip.address.trim()),
     approvers: draft.approvers.map((approver) => ({
       level: approver.level,

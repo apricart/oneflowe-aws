@@ -7,10 +7,12 @@
  * `APRICART_EXECUTIVE` (`lib/apricart-executive-access.ts`), the other two
  * roles that are Apricart's own staff rather than a tenant's:
  *
- *   * **No organization and no branch on the user row.** The reach is two
- *     tables of its own — `warehouse_assignments`, one row per branch, and
- *     `warehouse_city_assignments`, one row per city — never a whole
- *     organization, re-read from the database on every request.
+ *   * **No organization and no branch on the user row.** The reach is tables
+ *     of its own — `warehouse_assignments`, one row per branch, and
+ *     `warehouse_city_assignments`, one row per city, intersected with
+ *     `warehouse_city_organizations`, the organizations those cities apply to
+ *     — never a whole organization, re-read from the database on every
+ *     request.
  *   * **Only Super Admin creates or manages one.** `ROLE_LEVEL` puts it above
  *     Head Office for that reason alone (`lib/server/user-access-policy.ts`).
  *   * **Confined to one page area and a short API allowlist.** `proxy.ts`
@@ -26,9 +28,12 @@
  * prices, refunds or marks an order paid. It does see prices and invoice
  * figures on its own orders. It also reads the whole product catalogue —
  * every menu Super Admin has, prices included — strictly read-only, the
- * tenant-owned menus fenced to the organizations it serves. See
- * plans/OF-WAREHOUSE-warehouse-fulfilment-role.md and
- * plans/OF-WAREHOUSE-full-read-only-catalog.md.
+ * tenant-owned menus fenced to the organizations it serves. And it answers, on
+ * Apricart's side, the support threads of the branches it serves — never the
+ * whole queue (`lib/support-access.ts`). See
+ * plans/OF-WAREHOUSE-warehouse-fulfilment-role.md,
+ * plans/OF-WAREHOUSE-full-read-only-catalog.md and
+ * plans/OF-WAREHOUSE-support-queue.md.
  */
 
 export const WAREHOUSE_ROLE = "WAREHOUSE" as const
@@ -36,7 +41,10 @@ export const WAREHOUSE_LABEL = "Warehouse (Apricart)"
 
 /** The warehouse's workspace, outside the admin shell. */
 export const WAREHOUSE_HOME = "/warehouse"
-export const WAREHOUSE_AREAS: readonly string[] = [WAREHOUSE_HOME]
+
+/** The shared support pages, where it answers its branches' threads. */
+export const WAREHOUSE_SUPPORT_AREA = "/support"
+export const WAREHOUSE_AREAS: readonly string[] = [WAREHOUSE_HOME, WAREHOUSE_SUPPORT_AREA]
 
 /** Super Admin's page for assigning warehouse accounts their branches. */
 export const WAREHOUSE_TEAM_AREA = "/warehouse-team"
@@ -49,6 +57,15 @@ export const WAREHOUSE_ASSIGNMENT_AUDIT_ACTION = "UPDATE_WAREHOUSE_ASSIGNMENTS"
 
 /** Audit action for assigning or withdrawing one whole city. */
 export const WAREHOUSE_CITY_ASSIGNMENT_AUDIT_ACTION = "UPDATE_WAREHOUSE_CITY_ASSIGNMENTS"
+
+/**
+ * Audit action for choosing or withdrawing one organization a warehouse user's
+ * cities apply to. See plans/OF-WAREHOUSE-city-assignments-by-organization.md.
+ */
+export const WAREHOUSE_CITY_ORGANIZATION_AUDIT_ACTION = "UPDATE_WAREHOUSE_CITY_ORGANIZATIONS"
+
+/** Most organizations one warehouse user's cities may apply to; one per request. */
+export const WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER = 200
 
 /**
  * Most cities one warehouse user may be assigned. A city is changed one per
@@ -87,12 +104,14 @@ type WarehouseApiRule = {
 }
 
 const ORDERS_ROUTE = "app/api/v1/warehouse/orders"
+const SUPPORT_ROUTE = "app/api/v1/support"
 
 /**
  * Every API request a warehouse session may make: its own reads and the
  * progress write, the read-only catalogue and its product pictures, the challan
- * upload (the one upload path the WAF allows), and the three calls every
- * account needs to finish a forced password change.
+ * upload (the one upload path the WAF allows), the Apricart side of the support
+ * pages, and the three calls every account needs to finish a forced password
+ * change.
  */
 export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
   { route: `${ORDERS_ROUTE}/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/orders$/ },
@@ -183,6 +202,28 @@ export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
     methods: ["GET"],
     pattern: /^\/api\/v1\/images\/products\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|gif|webp)$/,
   },
+  // The support queue of the branches it serves (plans/OF-WAREHOUSE-support-queue.md):
+  // exactly the calls the Apricart side of the support pages makes. Not raising
+  // a thread (it has no tenant) and not the product picker that belongs to it.
+  // Each handler checks the support participant rule and loads the reach.
+  { route: `${SUPPORT_ROUTE}/threads/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/support\/threads$/ },
+  {
+    route: `${SUPPORT_ROUTE}/threads/[id]/route.ts`,
+    methods: ["GET", "PATCH"],
+    pattern: /^\/api\/v1\/support\/threads\/\d+$/,
+  },
+  {
+    route: `${SUPPORT_ROUTE}/threads/[id]/messages/route.ts`,
+    methods: ["POST"],
+    pattern: /^\/api\/v1\/support\/threads\/\d+\/messages$/,
+  },
+  { route: `${SUPPORT_ROUTE}/stats/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/support\/stats$/ },
+  { route: `${SUPPORT_ROUTE}/attachments/route.ts`, methods: ["POST"], pattern: /^\/api\/v1\/support\/attachments$/ },
+  {
+    route: `${SUPPORT_ROUTE}/attachments/[id]/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/support\/attachments\/\d+$/,
+  },
   // The delivery challan only; the handler refuses every other purpose for this role.
   { route: "app/api/v1/upload/image/route.ts", methods: ["POST"], pattern: /^\/api\/v1\/upload\/image$/ },
   { route: "app/api/v1/users/me/change-password/route.ts", methods: ["POST"], pattern: /^\/api\/v1\/users\/me\/change-password$/ },
@@ -256,7 +297,8 @@ export type WarehouseAccount = {
 
 /**
  * The branches a warehouse user serves: the ones Super Admin assigned — one by
- * one, or as every branch now in an assigned city — while the account is an
+ * one, or as every branch now in an assigned city of a chosen organization —
+ * while the account is an
  * active, undeleted warehouse account. An empty result means
  * no reach and must never be widened to an organization or to every tenant.
  *

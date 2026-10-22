@@ -35,6 +35,7 @@ import {
 } from "@/components/orders/order-correction"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { renamedRoleName, ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
+import { isApricartSupportRole } from "@/lib/apricart-support-access"
 
 // ... (existing imports)
 
@@ -273,7 +274,7 @@ export default function SuperAdminOrderDetailsPage() {
     if (isHeadOffice) {
       return "HEAD OFFICE"
     }
-    if (isReadOnlyRole(userRole)) {
+    if (isReadOnlyRole(userRole) || isApricartSupportRole(userRole)) {
       return "VIEW ONLY"
     }
     return (renamedRoleName(userRole) ?? ROLE_DISPLAY_NAMES.BRANCH_ADMIN).toUpperCase()

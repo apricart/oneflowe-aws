@@ -57,7 +57,17 @@ export type ExecutiveApprovalItem = ExecutiveApprovalActions & {
   rejectionReason: string | null
   returnedForCorrectionAt: Date | null
   correctionRequestNote: string | null
-  items: { id: number; productName: string; productCode: string | null; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    productName: string
+    productCode: string | null
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually: boolean
+    cataloguePriceCents: number | null
+  }[]
 }
 
 export type ExecutiveApprovalPage = {
@@ -194,6 +204,8 @@ export async function listExecutiveApprovals(
         quantity: orderItems.quantity,
         unit: orderItems.unit,
         priceCents: orderItems.priceCents,
+        priceEnteredManually: orderItems.priceEnteredManually,
+        cataloguePriceCents: orderItems.cataloguePriceCents,
       })
       .from(orderItems)
       .where(inArray(orderItems.orderId, orderIds))
@@ -215,10 +227,11 @@ export async function listExecutiveApprovals(
       hasAttachment: intakeAttachmentKey !== null,
       items: lineRows
         .filter((line) => line.orderId === row.id)
-        .map(({ orderId: _orderId, quantity, priceCents, ...line }) => ({
+        .map(({ orderId: _orderId, quantity, priceCents, cataloguePriceCents, ...line }) => ({
           ...line,
           quantity: Number(quantity),
           priceCents: Number(priceCents),
+          cataloguePriceCents: cataloguePriceCents === null ? null : Number(cataloguePriceCents),
         })),
     })),
     pagination: {

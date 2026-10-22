@@ -86,6 +86,36 @@ describe("Branch report", () => {
     expect(screen.queryAllByText("North Branch")).toHaveLength(0)
   })
 
+  it("labels each branch's type and rolls children up under their parent", async () => {
+    routes([
+      { id: 21, name: "Head Branch", status: "active", hierarchyRole: "PARENT", parentBranchId: null, parentBranchName: null, organizationName: "Acme", groupName: null, totalOrders: 2, fulfilledOrders: 2, revenue: 10_000, refunds: 0 },
+      { id: 22, name: "Kid Branch", status: "active", hierarchyRole: "CHILD", parentBranchId: 21, parentBranchName: "Head Branch", organizationName: "Acme", groupName: null, totalOrders: 3, fulfilledOrders: 1, revenue: 5_000, refunds: 0 },
+      { id: 23, name: "Lone Branch", status: "active", hierarchyRole: "STANDALONE", parentBranchId: null, parentBranchName: null, organizationName: "Acme", groupName: null, totalOrders: 1, fulfilledOrders: 1, revenue: 1_000, refunds: 0 },
+    ] as any)
+    renderWithApp(<BranchReportsPage />)
+    await openTab(/Reports?/i)
+
+    await waitFor(() => expect(screen.getAllByText("Kid Branch").length).toBeGreaterThan(0))
+    expect(screen.getAllByText("Child of Head Branch").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Parent branch").length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByRole("switch", { name: "Roll up by parent" }))
+    await waitFor(() => expect(screen.queryAllByText("Kid Branch")).toHaveLength(0))
+    expect(screen.getAllByText("Parent + 1 child branch").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("Lone Branch").length).toBeGreaterThan(0)
+    // Head Branch's own 2 orders plus its child's 3.
+    expect(screen.getByText("2 rows listed")).toBeTruthy()
+    expect(screen.getAllByText("3 / 5").length).toBeGreaterThan(0)
+  })
+
+  it("narrows by branch type or parent only once one is chosen", async () => {
+    routes()
+    renderWithApp(<BranchReportsPage />)
+    await openTab(/Reports?/i)
+    await waitFor(() => expect(screen.getAllByText("North Branch").length).toBeGreaterThan(0))
+    expect(callsTo("/api/v1/analytics/branches/performance").some((call) => /hierarchyRoles|parentBranchIds/.test(call.url))).toBe(false)
+  })
+
   it("keeps a Branch Admin to its own branch", async () => {
     resetUi({ id: "ba", role: "BRANCH_ADMIN", organizationId: 5, branchId: 11 })
     routes()
