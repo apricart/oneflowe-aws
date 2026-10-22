@@ -110,7 +110,7 @@ const TAB_LABELS: Record<ExecutiveApprovalTab, string> = {
 }
 
 const TAB_HINTS: Record<ExecutiveApprovalTab, string> = {
-  awaiting_approval: "Orders the Order Desk entered, oldest first. Approve, reject, or send one back for correction.",
+  awaiting_approval: "Orders the Order Desk entered, newest first. Approve, reject, or send one back for correction.",
   returned: "Sent back for correction. They return to Awaiting approval when the desk resubmits them.",
   approved: "Approved orders, whatever happened to them after.",
   rejected: "Rejected orders. Their stock and budget were released.",

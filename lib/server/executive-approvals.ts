@@ -149,9 +149,6 @@ export async function listExecutiveApprovals(
 
   const enteredBy = alias(users, "desk_entered_by")
   const approvedBy = alias(users, "desk_approved_by")
-  // Waiting work oldest first, so nothing sits at the bottom of the queue;
-  // decided work newest first.
-  const oldestFirst = executiveApprovalSelection(query.tab).kind === "pending"
   const rows = await db
     .select({
       id: orders.id,
@@ -187,10 +184,8 @@ export async function listExecutiveApprovals(
     .leftJoin(enteredBy, eq(enteredBy.id, orders.createdByUserId))
     .leftJoin(approvedBy, eq(approvedBy.id, orders.approvedByUserId))
     .where(where)
-    .orderBy(
-      oldestFirst ? asc(orders.createdAt) : desc(orders.createdAt),
-      oldestFirst ? asc(orders.id) : desc(orders.id),
-    )
+    // Every tab lists the latest orders first.
+    .orderBy(desc(orders.createdAt), desc(orders.id))
     .limit(query.limit)
     .offset((query.page - 1) * query.limit)
 
