@@ -33,7 +33,9 @@ export async function GET(req: Request) {
   if (!parsed.ok) return error(parsed.message, 400)
 
   try {
-    const dashboard = await loadDeliveryDashboard(parsed.filters, now)
+    // Latest orders first, as on the warehouse dashboard; the overdue and
+    // due-soon cards still narrow the list to the orders needing attention.
+    const dashboard = await loadDeliveryDashboard(parsed.filters, now, null, "newest")
     return NextResponse.json(dashboard, { headers: { "Cache-Control": "private, no-store" } })
   } catch (loadError) {
     const handled = handleError(loadError, "GET /api/v1/delivery-dashboard")
