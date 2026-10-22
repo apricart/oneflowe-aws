@@ -11,6 +11,7 @@ import {
   approveOrder,
   expectStatus,
   fulfilOrder,
+  getReconnecting,
   markDelivered,
   placeOrder,
   sessionRole,
@@ -81,7 +82,7 @@ test.describe("changing a user's role", () => {
     let inFlight: { id: number; token: string } | null = null
     try {
       const inventory = await expectStatus(
-        await requester.page.request.get(`/api/v1/branch/inventory?limit=10&search=${SMOKE_PRODUCT_CODE}`),
+        await getReconnecting(requester.page, `/api/v1/branch/inventory?limit=10&search=${SMOKE_PRODUCT_CODE}`),
       )
       const product = inventory.items.find((item: { productCode: string }) => item.productCode === SMOKE_PRODUCT_CODE)
       const order = await placeOrder(requester.page, [{ organizationInventoryId: product.organizationInventoryId, quantity: 1 }])
