@@ -33,6 +33,8 @@ which every spec's header names.
 | `budget-allocation.spec.ts` | `OF-BUDGET-addon-validity`, `OF-GROUP-USER-budget-allocation`, `-per-user` |
 | `group-orders.spec.ts` | `OF-GROUP-ORDER-CROSS-ROLE-VISIBILITY`, `OF-GROUP-branch-owns-order-writes`, `OF-GROUP-PORTAL-other-orders-tab`, `OF-GROUP-USER-other-orders-tab` |
 | `invoice-ledger.spec.ts` | `OF-INVOICE-invoice-ledger` (approve → proforma, deliver → numbered tax invoice, partial refund → credit note, reprint unchanged) |
+| `order-desk.spec.ts` | `OF-ORDER-DESK-internal-order-entry`, `OF-EXEC-APPROVAL-executive-approves-desk-orders` (desk user created and granted → order keyed in → edited / cancelled → executive approves → desk fulfils and requests a refund → switching the customer off withdraws the desk) |
+| `order-desk-pricing.spec.ts` | `OF-ORDER-DESK-line-price-entry`, `OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption` (desk types a required price for a carried and an uncarried product, over a tiny budget → executive sees both prices and sends one back → desk corrects and resubmits → executive approves the corrected total) |
 | `executive-analytics.spec.ts` | `OF-EXEC-ANALYTICS-*`, `OF-REPORTS-*`, `OF-GROUP-USER-graphical-reports`, `OF-BUDGET-BURN-*`, `OF-PRODUCT-monthly-consumption-trend` |
 
 Plans with no screen of their own are deliberately not here: the K-Electric

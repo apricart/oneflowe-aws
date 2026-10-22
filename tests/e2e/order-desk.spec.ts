@@ -331,8 +331,10 @@ test.describe.serial("the Order Desk", () => {
     const editDialog = page.getByRole("dialog", { name: /^Edit / })
     // Opens on the order's own lines, its price kept.
     await expect(editDialog.getByLabel(PRICE_LABEL)).toHaveValue("15.00")
-    await editDialog.getByLabel(`Quantity of ${PRODUCT}`).fill("3")
-    await editDialog.getByLabel(`Quantity of ${PRODUCT}`).press("Enter")
+    // Exact: the stepper's buttons are labelled "Increase/Decrease Quantity of …".
+    const quantity = editDialog.getByLabel(`Quantity of ${PRODUCT}`, { exact: true })
+    await quantity.fill("3")
+    await quantity.press("Enter")
     await editDialog.getByRole("button", { name: "Save changes" }).click()
     await expect(editDialog).toBeHidden({ timeout: 150_000 })
     await expect.poll(async () => (await deskOrders())[0].total_cents, { timeout: 60_000 }).toBe("4500")
@@ -363,7 +365,12 @@ test.describe.serial("the Order Desk", () => {
     const [order] = await deskOrders()
     expect((await post(page, `/api/v1/orders/${order.id}/approve`, {})).status()).toBe(403)
 
-    await page.getByRole("tab", { name: /Approvals/ }).click()
+    // A cold dev server can drop the first click before the page hydrates, so
+    // the tab is clicked until its list shows.
+    await expect(async () => {
+      await page.getByRole("tab", { name: /Approvals/ }).click()
+      await expect(page.getByRole("tablist", { name: "Approval status" })).toBeVisible({ timeout: 10_000 })
+    }).toPass({ timeout: 150_000 })
     const card = page.getByRole("article").filter({ hasText: "E2E customer, WhatsApp 10:14" })
     await expect(card).toBeVisible({ timeout: 150_000 })
     // The executive sees what it approves: the edited quantity and its amount.

@@ -91,7 +91,7 @@ export async function signIn(page: Page, username: string, landing?: RegExp): Pr
  * is exactly that shape. Only idempotent GETs come through here, only a reset
  * is retried, and only once; every other failure still fails the test.
  */
-async function getReconnecting(page: Page, url: string): Promise<APIResponse> {
+export async function getReconnecting(page: Page, url: string): Promise<APIResponse> {
   try {
     return await page.request.get(url)
   } catch (error) {
