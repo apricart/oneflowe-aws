@@ -1,8 +1,30 @@
 # OF-ORDER-DESK — assigned reach, global catalogue and budget exemption
 
-Status: **planned**
+Status: **implemented** (2026-10-22, uncommitted)
 
 Date: 2026-10-22
+
+Implementation notes:
+
+- The price box starts **empty on every line**, including products the branch
+  carries — never pre-filled with the catalogue price — and the order cannot be
+  sent until every ordered product has a price above zero (product owner,
+  2026-10-22). An edit opens on the order's own lines with the prices they are
+  charged.
+- Pure line rules: `lib/order-desk-lines.ts` (`priceDeskOrderLines`), shared by
+  creation (`lockAndPriceDeskLines` in `app/api/v1/orders/route.ts`) and the
+  desk edit. Branch lineage and reference price: `loadDeskBranchLineage` in
+  `lib/server/order-desk-catalogue.ts`, shared by the picker, creation and edit.
+- The exemption is `resolveCreationBudgetTracking` in the order route; the
+  desk's pre-flight reads no product and no budget (`preflightCreation`).
+- Picker query: `lib/order-desk-catalogue-query.ts` (25 per page, max 100,
+  search ≤ 100 characters, unknown parameters 400). Component:
+  `components/order-desk/desk-product-picker.tsx`.
+- The executive's list carries `inBranchCatalogue` per line and the card
+  labels a product the branch does not carry.
+- Not covered by an integration test: quantity-allocation mode (the mode is read
+  through a cache); the contract test pins that a desk order never reaches the
+  quantity-budget lock.
 
 Depends on: `plans/OF-ORDER-DESK-line-price-entry.md` and its additive
 `20261031120000_order_item_entered_price.sql` migration.

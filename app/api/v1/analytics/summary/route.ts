@@ -61,6 +61,7 @@ const ORDER_REPORT_SORT_SQL: Record<OrderReportSortKey, SQL | AnyColumn> = {
     deliveryStatus: orderSelectColumns.fulfillmentStatus,
     paymentStatus: orderSelectColumns.paymentStatus,
     approvalLevel: orders.approvalLevel,
+    financialApproverLevel: approverUsers.orderApprovalLevel,
     approver: sql`LOWER(${approverUsers.fullName})`,
     quantityOrdered: quantityOrderedSql,
     quantityDelivered: sql`(${quantityOrderedSql} - ${quantityRefundedSql})`,

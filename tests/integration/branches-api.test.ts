@@ -221,7 +221,7 @@ describe.skipIf(!hasTestDatabase)("branches API", () => {
       // that silently hid the oldest tenants' branches after the 2026-10-22 import.
       const tag = randomUUID().slice(0, 6)
       const filler = await db.insert(branches).values(
-        Array.from({ length: 400 }, (_, i) => ({
+        Array.from({ length: 501 }, (_, i) => ({
           organizationId: f.foreign, name: `Filler ${tag} ${i}`, code: `FIL-${tag}-${i}`, status: "active",
         })),
       ).returning({ id: branches.id })

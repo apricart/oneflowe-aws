@@ -1,29 +1,32 @@
 import "server-only"
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 
 import {
-  branchInventory,
   budgets,
   globalProducts,
   orderItems,
   orders,
-  organizationInventory,
   productQuantityBudgets,
 } from "@/db/schema"
 import { db } from "@/lib/db"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isOrderDelivered } from "@/lib/fulfillment-status"
-import { enteredPriceLines, resolveOrderLinePrice } from "@/lib/order-line-price"
+import {
+  DeskLineRefusal,
+  priceDeskOrderLines,
+  type DeskOrderLineRequest,
+  type PricedDeskLine,
+} from "@/lib/order-desk-lines"
+import { enteredPriceLines } from "@/lib/order-line-price"
 import { orderSelectColumns } from "@/lib/order-select"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
-import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
+import { formatQuantity, roundQuantity } from "@/lib/quantity"
 import { generateReceiptData } from "@/lib/receipt-generator"
-import { resolveTaxRateBp, splitInclusiveCents } from "@/lib/tax"
 import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { settleDueAddonsOnBudget } from "@/lib/server/budget-addon-expiry"
-import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
+import { loadDeskBranchLineage } from "@/lib/server/order-desk-catalogue"
 import { isOrderDeskTarget, loadOrderDeskReach, orderDeskOrderCondition } from "@/lib/server/order-desk-scope"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
@@ -38,12 +41,13 @@ import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-n
  * desk corrects its own entries, never the branch — so the desk has this path
  * instead. It follows the same ledger rules, all inside one transaction:
  *
- *   * the order, its lines, the branch and organization catalogue rows and every
- *     product touched are locked before anything is read for a decision;
- *   * every line is re-priced through the price ladder and re-taxed, exactly as
- *     creation does — an edited order is charged at today's prices — unless
- *     the desk sends that line's own price, which it charges instead
- *     (plans/OF-ORDER-DESK-line-price-entry.md);
+ *   * the order, its lines and every product touched are locked before
+ *     anything is read for a decision;
+ *   * every line names an active global product and carries the price the
+ *     desk entered, tax-inclusive, and is priced and taxed by the same rules
+ *     as creation (`priceDeskOrderLines`) — the branch's catalogue entry is
+ *     read only for the line's lineage and reference price
+ *     (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md);
  *   * stock moves by the difference only, and never below zero;
  *   * only an order that took a budget hold moves one (`orderTakesBudget`), on
  *     the row its own period names (`budgetPeriodOf`), after expired add-ons on
@@ -65,8 +69,7 @@ export type DeskEditOutcome =
 
 type EditInput = {
   orderId: number
-  /** `unitPriceCents` only on a line the desk priced itself. */
-  items: { organizationInventoryId: number; quantity: number; unitPriceCents?: number }[]
+  items: DeskOrderLineRequest[]
   notes?: string
   /** `undefined` leaves it, `null` clears it. */
   poNumber?: string | null
@@ -77,7 +80,7 @@ export async function editDeskOrder(input: EditInput): Promise<DeskEditOutcome> 
   try {
     return await db.transaction((tx) => editInTransaction(tx, input))
   } catch (error) {
-    if (error instanceof DeskEditRefusal) return { kind: "invalid", message: error.message }
+    if (error instanceof DeskEditRefusal || error instanceof DeskLineRefusal) return { kind: "invalid", message: error.message }
     if (error instanceof Error && error.message === "ORDER_EDIT_CONFLICT") return { kind: "conflict" }
     throw error
   }
@@ -110,7 +113,7 @@ async function editInTransaction(tx: any, input: EditInput): Promise<DeskEditOut
 
   const organizationId: number = order.organizationId
   const branchId: number = order.branchId
-  const inventory = await lockEditInventory(tx, { orderId: order.id, organizationId, branchId, items: input.items })
+  const inventory = await lockEditProducts(tx, { orderId: order.id, organizationId, branchId, items: input.items })
   const orgTaxRateBp = await getOrganizationTaxRateBp(organizationId)
   const priced = priceEditedLines(input.items, inventory, orgTaxRateBp)
 
@@ -195,54 +198,31 @@ function enteredPriceDetails(items: any[]) {
   return enteredPrices.length === 0 ? {} : { enteredPrices }
 }
 
-type EditInventory = Awaited<ReturnType<typeof lockEditInventory>>
+type EditInventory = Awaited<ReturnType<typeof lockEditProducts>>
 
-async function lockEditInventory(
+async function lockEditProducts(
   tx: any,
   scope: { orderId: number; organizationId: number; branchId: number; items: EditInput["items"] },
 ) {
   const existingItems = await tx.select().from(orderItems).where(eq(orderItems.orderId, scope.orderId)).for("update")
-  const requestedIds = scope.items.map((item) => item.organizationInventoryId)
+  const requestedIds = scope.items.map((item) => item.globalProductId)
 
-  // The same availability rule as creation: on the branch, visible and active;
-  // active in the organization; the global product active.
-  const assigned = await tx
-    .select({ organizationInventoryId: branchInventory.organizationInventoryId })
-    .from(branchInventory)
-    .where(and(
-      eq(branchInventory.branchId, scope.branchId),
-      eq(branchInventory.organizationId, scope.organizationId),
-      eq(branchInventory.isActive, true),
-      eq(branchInventory.isVisible, true),
-      isNull(branchInventory.deletedAt),
-      inArray(branchInventory.organizationInventoryId, requestedIds),
-    ))
-    .for("update")
-  if (assigned.length !== requestedIds.length) throw new DeskEditRefusal("Some items are no longer available for this branch")
-
-  const inventoryRows = await tx
-    .select()
-    .from(organizationInventory)
-    .where(and(
-      eq(organizationInventory.organizationId, scope.organizationId),
-      eq(organizationInventory.isActive, true),
-      isNull(organizationInventory.deletedAt),
-      inArray(organizationInventory.id, requestedIds),
-    ))
-    .for("update")
-  if (inventoryRows.length !== requestedIds.length) throw new DeskEditRefusal("Some items are no longer active for this organization")
-
+  // Every product the edit touches — kept, added or removed — so the stock
+  // moves below are made against rows nobody else can move meanwhile.
   const productIds = [...new Set<number>([
-    ...inventoryRows.map((row: any) => row.globalProductId),
+    ...requestedIds,
     ...existingItems.map((row: any) => row.globalProductId),
   ])]
-  const productRows = await tx.select().from(globalProducts).where(inArray(globalProducts.id, productIds)).for("update")
+  const productRows = await tx.select().from(globalProducts)
+    .where(inArray(globalProducts.id, productIds))
+    .orderBy(globalProducts.id)
+    .for("update")
 
-  const groupId = await resolveBranchGroupId(tx, { branchId: scope.branchId, organizationId: scope.organizationId })
-  const groupPriceByInventoryId = await loadGroupPriceOverrides(tx, {
+  // Lineage and reference price only; never what makes a product orderable.
+  const lineageByProductId = await loadDeskBranchLineage(tx, {
     organizationId: scope.organizationId,
-    groupId,
-    organizationInventoryIds: requestedIds,
+    branchId: scope.branchId,
+    globalProductIds: requestedIds,
   })
 
   const oldByProduct = new Map<number, number>()
@@ -257,80 +237,30 @@ async function lockEditInventory(
   return {
     existingItems,
     productIds,
-    inventoryById: new Map<number, any>(inventoryRows.map((row: any) => [row.id, row])),
     productById: new Map<number, any>(productRows.map((row: any) => [row.id, row])),
-    groupPriceByInventoryId,
+    lineageByProductId,
     oldByProduct,
     oldByInventory,
   }
 }
 
-type PricedLine = {
-  organizationInventoryId: number
-  globalProductId: number
-  quantity: number
-  priceCents: number
-  priceEnteredManually: boolean
-  cataloguePriceCents: number | null
-  taxRateBp: number
-  taxCents: number
-  productName: string
-  productCode: string
-  unit: string
-}
+type PricedLine = PricedDeskLine
 
 function priceEditedLines(items: EditInput["items"], inventory: EditInventory, orgTaxRateBp: number) {
-  let subtotalCents = 0
-  let taxCents = 0
-  let totalCents = 0
-  const lines: PricedLine[] = items.map((requested) => {
-    const inventoryRow = inventory.inventoryById.get(requested.organizationInventoryId)
-    const product = inventoryRow ? inventory.productById.get(inventoryRow.globalProductId) : undefined
-    if (!inventoryRow || product?.status !== "active" || product.deletedAt) {
-      throw new DeskEditRefusal("A product is no longer available")
-    }
-    const quantity = validateProductQuantity(requested.quantity, {
-      allowDecimalQuantity: product.allowDecimalQuantity,
-      quantityStep: product.quantityStep,
-      label: `Quantity for ${product.name}`,
-    })
-    if (!quantity.ok) throw new DeskEditRefusal(quantity.error)
-    const price = resolveOrderLinePrice({
-      cataloguePriceCents: resolveEffectivePriceCents({
-        groupPriceCents: inventory.groupPriceByInventoryId.get(inventoryRow.id),
-        organizationPriceCents: inventoryRow.customPrice,
-        basePriceCents: product.basePrice,
-      }),
-      enteredPriceCents: requested.unitPriceCents,
-    })
-    if (!price.ok) throw new DeskEditRefusal(`Pricing is unavailable for ${product.name}`)
-    const priceCents = price.priceCents
-    // Stock this order already holds counts as available to it.
-    const available = Number(product.stockQuantity) + (inventory.oldByProduct.get(product.id) ?? 0)
-    if (quantity.quantity > available) {
-      throw new DeskEditRefusal(`Insufficient stock for ${product.name}. Available: ${formatQuantity(available)}, Requested: ${formatQuantity(quantity.quantity)}`)
-    }
-    const taxRateBp = resolveTaxRateBp(product.taxRateBp, orgTaxRateBp)
-    const line = splitInclusiveCents(calculateLineCents(priceCents, quantity.quantity), taxRateBp)
-    subtotalCents += line.netCents
-    taxCents += line.taxCents
-    totalCents += line.grossCents
-    return {
-      organizationInventoryId: inventoryRow.id,
-      globalProductId: product.id,
-      quantity: quantity.quantity,
-      priceCents,
-      priceEnteredManually: price.priceEnteredManually,
-      cataloguePriceCents: price.cataloguePriceCents,
-      taxRateBp,
-      taxCents: line.taxCents,
-      productName: product.name,
-      productCode: product.productCode,
-      unit: product.unit,
-    }
+  const priced = priceDeskOrderLines(items, {
+    productById: inventory.productById,
+    lineageByProductId: inventory.lineageByProductId,
+    organizationTaxRateBp: orgTaxRateBp,
   })
-  if (!Number.isSafeInteger(totalCents) || totalCents < 0) throw new DeskEditRefusal("Calculated order total is invalid")
-  return { items: lines, subtotalCents, taxCents, totalCents }
+  for (const line of priced.items) {
+    const product = inventory.productById.get(line.globalProductId)
+    // Stock this order already holds counts as available to it.
+    const available = Number(product.stockQuantity) + (inventory.oldByProduct.get(line.globalProductId) ?? 0)
+    if (line.quantity > available) {
+      throw new DeskEditRefusal(`Insufficient stock for ${line.productName}. Available: ${formatQuantity(available)}, Requested: ${formatQuantity(line.quantity)}`)
+    }
+  }
+  return priced
 }
 
 async function lockAndCheckBudget(
@@ -372,7 +302,14 @@ async function lockAndCheckQuantityBudgets(
     items: PricedLine[]
   },
 ) {
-  const nextByInventory = new Map(input.items.map((item) => [item.organizationInventoryId, item.quantity]))
+  // Only an order placed before the exemption still takes a budget. In quantity
+  // mode every line it holds needs an allocation, which a product outside the
+  // branch catalogue cannot have.
+  const uncatalogued = input.items.find((item) => item.organizationInventoryId === null)
+  if (uncatalogued && input.mode === "quantity") {
+    throw new DeskEditRefusal(`Quantity budget is not allocated for ${uncatalogued.productName}`)
+  }
+  const nextByInventory = quantitiesByInventory(input.items)
   const inventoryIds = [...new Set<number>([...input.oldByInventory.keys(), ...nextByInventory.keys()])]
   if (inventoryIds.length === 0) return []
   const rows = await tx
@@ -408,7 +345,7 @@ async function moveQuantityHolds(
   tx: any,
   input: { rows: any[]; oldByInventory: Map<number, number>; items: PricedLine[]; actorId: string },
 ) {
-  const nextByInventory = new Map(input.items.map((item) => [item.organizationInventoryId, item.quantity]))
+  const nextByInventory = quantitiesByInventory(input.items)
   for (const row of input.rows) {
     const previous = input.oldByInventory.get(row.organizationInventoryId) ?? 0
     const next = nextByInventory.get(row.organizationInventoryId) ?? 0
@@ -418,6 +355,14 @@ async function moveQuantityHolds(
       .set({ heldQuantity: roundQuantity(row.heldQuantity - previous + next), updatedByUserId: input.actorId, updatedAt: new Date() })
       .where(eq(productQuantityBudgets.id, row.id))
   }
+}
+
+function quantitiesByInventory(items: readonly PricedLine[]): Map<number, number> {
+  const byInventory = new Map<number, number>()
+  for (const item of items) {
+    if (item.organizationInventoryId !== null) byInventory.set(item.organizationInventoryId, item.quantity)
+  }
+  return byInventory
 }
 
 async function moveStock(tx: any, input: { inventory: EditInventory; items: PricedLine[] }) {

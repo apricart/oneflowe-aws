@@ -638,7 +638,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
   })
 
-  /* ── The approvers' roles: one branch is a Branch Admin, more a Group User ── */
+  /* ── Approver roles: Levels 1 and 2 are Group Users; later levels follow branch count ── */
 
   describe("approver roles", () => {
     async function accountAt(email: string) {
@@ -691,27 +691,29 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       return { item, response }
     }
 
-    it("creates a new approver for one branch as a Branch Admin of that branch", async () => {
+    it("creates a new Level 2 approver for one branch as a Group User assigned to that branch", async () => {
       const body = signup()
       const stored = await submitAccepted(body)
       const { item, response } = await approveAsReviewed(stored)
-      expect(item.approvers[1].resolution).toEqual({ kind: "create", role: "BRANCH_ADMIN" })
+      expect(item.approvers[1].resolution).toEqual({ kind: "create", role: "GROUP_USER" })
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
 
       const created = await accountAt(body.approvers[1].email)
-      expect(created).toMatchObject({ role: "BRANCH_ADMIN", branchId: fixtures.northBranchId, level: 2, mustChange: true })
-      expect(await assignedBranches(created.id)).toEqual([])
+      expect(created).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2, mustChange: true })
+      expect(await assignedBranches(created.id)).toEqual([fixtures.northBranchId])
       expect(mocks.sendWelcomeEmail).toHaveBeenCalledWith(body.approvers[1].email, expect.any(String), expect.any(String), TEMPORARY_PASSWORD, expect.any(String))
     })
 
-    it("creates a new approver for one CRC still to be created as a Branch Admin of the new branch", async () => {
+    it("creates a new Level 2 approver for one CRC as a Group User assigned to the new branch", async () => {
       const crc = `IT-ROLE-${unique()}`.toUpperCase()
       const body = signup({ branches: [{ crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { response } = await approveAsReviewed(stored)
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
       const [created] = await db.select({ id: branches.id }).from(branches).where(eq(branches.costCenterId, crc))
-      expect(await accountAt(body.approvers[1].email)).toMatchObject({ role: "BRANCH_ADMIN", branchId: created.id, level: 2 })
+      const approver = await accountAt(body.approvers[1].email)
+      expect(approver).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2 })
+      expect(await assignedBranches(approver.id)).toEqual([created.id])
     })
 
     it("creates a new approver for several branches as a Group User assigned to all of them", async () => {
@@ -735,23 +737,26 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       const fresh = before.branches.find((row: any) => row.kind === "new")
       const { response } = await approveAsReviewed(stored, { [fresh.requestBranchId]: fixtures.northBranchId })
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
-      // One branch after all: the initiator orders through the shop, and the approver is its Branch Admin.
+      // One branch after all: the initiator orders through the shop, while a
+      // Level 2 Financial Approver remains an organization-scoped Group User.
       expect(await accountAt(body.email)).toMatchObject({ role: "ORDER_PORTAL", branchId: fixtures.northBranchId })
-      expect(await accountAt(body.approvers[1].email)).toMatchObject({ role: "BRANCH_ADMIN", branchId: fixtures.northBranchId })
+      const approver = await accountAt(body.approvers[1].email)
+      expect(approver).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2 })
+      expect(await assignedBranches(approver.id)).toEqual([fixtures.northBranchId])
     })
 
-    it("blocks a new one-branch approver where the approver role is Head Office, and creates nothing", async () => {
+    it("creates a new one-branch Level 2 approver as a Group User when the approver role is Head Office", async () => {
       const body = signup()
       const stored = await submitAccepted(body)
       await db.update(organizations).set({ orderApproverRole: "HEAD_OFFICE" }).where(eq(organizations.id, fixtures.organizationId))
       try {
         const { item } = await review(stored.id)
-        expect(item.approvers[1].resolution.kind).toBe("blocked")
-        expect(item.approvers[1].resolution.reason).toMatch(/created as a Financial Approver/)
+        expect(item.approvers[1].resolution).toEqual({ kind: "create", role: "GROUP_USER" })
         const response = await patch(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
-        expect(response.status).toBe(409)
-        expect(await accountsAt(body.email)).toHaveLength(0)
-        expect(await accountsAt(body.approvers[1].email)).toHaveLength(0)
+        expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
+        const approver = await accountAt(body.approvers[1].email)
+        expect(approver).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2 })
+        expect(await assignedBranches(approver.id)).toEqual([fixtures.northBranchId])
       } finally {
         await db.update(organizations).set({ orderApproverRole: "BRANCH_ADMIN" }).where(eq(organizations.id, fixtures.organizationId))
       }
@@ -809,18 +814,19 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       expect(await assignedBranches(admin.id)).toEqual([fixtures.northBranchId, created.id].sort((a, b) => a - b))
     })
 
-    it("leaves a Branch Admin of the only branch a Branch Admin, giving it the level", async () => {
+    it("converts a Branch Admin of the only branch into a Group User for Level 2", async () => {
       const admin = await branchAdminAt(fixtures.northBranchId)
       const before = await accountAt(admin.email)
       const body = signup({ approvers: [signup().approvers[0], { level: 2, email: admin.email, designation: "Manager" }] })
       const stored = await submitAccepted(body)
       const { item, response } = await approveAsReviewed(stored)
-      expect(item.approvers[1].resolution).toEqual({ kind: "assign", userId: admin.id, addBranchIds: [], becomesGroupUser: false })
+      expect(item.approvers[1].resolution).toEqual({ kind: "assign", userId: admin.id, addBranchIds: [], becomesGroupUser: true })
       expect(response.status).toBe(200)
       const after = await accountAt(admin.email)
-      expect(after).toMatchObject({ role: "BRANCH_ADMIN", branchId: fixtures.northBranchId, level: 2 })
-      expect(after.sessionVersion).toBe(before.sessionVersion)
-      expect(mocks.sendJoinApproverNoticeEmail).toHaveBeenCalledWith(expect.objectContaining({ to: admin.email, becameGroupUser: false }))
+      expect(after).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2 })
+      expect(after.sessionVersion).toBe(before.sessionVersion + 1)
+      expect(await assignedBranches(admin.id)).toEqual([fixtures.northBranchId])
+      expect(mocks.sendJoinApproverNoticeEmail).toHaveBeenCalledWith(expect.objectContaining({ to: admin.email, becameGroupUser: true }))
     })
 
     it("refuses to convert a Branch Admin with orders of its own still in flight, and changes nothing", async () => {

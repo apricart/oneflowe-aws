@@ -52,6 +52,10 @@ export { NO_DATABASE_REASON, hasTestDatabase } from "./pricing-fixtures"
  * ```
  *
  * One product, base price 10.00, priced 15.00 by tenant A, stock 1000.
+ *
+ * Two more Apricart products no tenant carries, for the desk's global
+ * catalogue (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md):
+ * an active one taxed at 18% (stock 200), and an inactive one.
  */
 export type OrderDeskFixtures = {
   suffix: string
@@ -74,13 +78,17 @@ export type OrderDeskFixtures = {
   executiveCId: string
   executiveOffId: string
   productId: number
+  /** Active, in no tenant's catalogue. */
+  unassignedProductId: number
+  /** Inactive, in no tenant's catalogue. */
+  inactiveProductId: number
   inventoryA: number
   inventoryB: number
   inventoryC: number
   budgetB1: number
 }
 
-export const ORDER_DESK_FIXTURE_PRICE_CENTS = { base: 1_000, organizationA: 1_500 } as const
+export const ORDER_DESK_FIXTURE_PRICE_CENTS = { base: 1_000, organizationA: 1_500, unassignedBase: 4_200 } as const
 
 async function resolveRoleId(name: string): Promise<number> {
   const [existing] = await db.select({ id: roles.id }).from(roles).where(eq(roles.name, name)).limit(1)
@@ -187,6 +195,29 @@ export async function createOrderDeskFixtures(): Promise<OrderDeskFixtures> {
     })
     .returning({ id: globalProducts.id })
 
+  const [unassignedProduct, inactiveProduct] = await db
+    .insert(globalProducts)
+    .values([
+      {
+        productCode: `ITD-U-${suffix}`,
+        name: `ITD Uncatalogued ${suffix}`,
+        basePrice: ORDER_DESK_FIXTURE_PRICE_CENTS.unassignedBase,
+        status: "active",
+        unit: "roll",
+        taxRateBp: 1_800,
+        stockQuantity: 200,
+      },
+      {
+        productCode: `ITD-X-${suffix}`,
+        name: `ITD Retired ${suffix}`,
+        basePrice: ORDER_DESK_FIXTURE_PRICE_CENTS.base,
+        status: "inactive",
+        unit: "box",
+        stockQuantity: 1_000,
+      },
+    ])
+    .returning({ id: globalProducts.id })
+
   const [inventoryA, inventoryB, inventoryC] = await db
     .insert(organizationInventory)
     .values([
@@ -235,6 +266,8 @@ export async function createOrderDeskFixtures(): Promise<OrderDeskFixtures> {
     executiveCId,
     executiveOffId,
     productId: product.id,
+    unassignedProductId: unassignedProduct.id,
+    inactiveProductId: inactiveProduct.id,
     inventoryA: inventoryA.id,
     inventoryB: inventoryB.id,
     inventoryC: inventoryC.id,
@@ -303,6 +336,6 @@ export async function destroyOrderDeskFixtures(f: OrderDeskFixtures, extraUserId
   await db.delete(sessions).where(inArray(sessions.userId, userIds))
   await db.delete(users).where(inArray(users.id, userIds))
   await db.delete(branches).where(inArray(branches.organizationId, organizationIds))
-  await db.delete(globalProducts).where(eq(globalProducts.id, f.productId))
+  await db.delete(globalProducts).where(inArray(globalProducts.id, [f.productId, f.unassignedProductId, f.inactiveProductId]))
   await db.delete(organizations).where(inArray(organizations.id, organizationIds))
 }

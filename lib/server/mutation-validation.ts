@@ -534,24 +534,27 @@ const orderMutationItemsSchema = z.array(z.object({
   )
 
 /**
- * The same lines, each optionally carrying the price the Order Desk typed for
- * it (plans/OF-ORDER-DESK-line-price-entry.md). Only `POST /api/v1/orders` and
- * the desk's own edit accept it; who may send it is `orderLinePriceFailure` in
- * `lib/pricing-access.ts`, checked by the route, because the shape cannot know
- * the caller. Every other order write keeps `orderMutationItemsSchema`, whose
- * strict lines refuse the field outright.
+ * An Order Desk line: any active Apricart global product, a quantity, and the
+ * price the customer agreed — required, more than zero, tax-inclusive
+ * (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md).
+ * Only `POST /api/v1/orders` for an `ORDER_DESK` caller and the desk's own edit
+ * accept it; every other order write keeps `orderMutationItemsSchema`, whose
+ * strict lines refuse a price and a global product id outright.
  */
-const pricedOrderMutationItemsSchema = z.array(z.object({
-    organizationInventoryId: positiveId,
+const deskOrderItemsSchema = z.array(z.object({
+    globalProductId: positiveId,
     quantity: z.coerce.number().positive().max(MAX_BUSINESS_QUANTITY),
-    unitPriceCents: z.number().int().min(MIN_ENTERED_UNIT_PRICE_CENTS, "A price must be more than zero").max(MAX_PRICE_CENTS).optional(),
+    unitPriceCents: z
+      .number({ error: (issue) => (issue.input === undefined ? "Enter a price for every product" : "A price must be a number of paisa") })
+      .int("A price must be a whole number of paisa")
+      .min(MIN_ENTERED_UNIT_PRICE_CENTS, "A price must be more than zero")
+      .max(MAX_PRICE_CENTS, "A price is too large"),
   }).strict()).min(1).max(500).refine(
-    (items) => isUniquePositiveIdList(items.map((item) => item.organizationInventoryId)),
+    (items) => isUniquePositiveIdList(items.map((item) => item.globalProductId)),
     "Each product can only appear once in an order",
   )
 
-export const orderCreateSchema = z.object({
-  items: pricedOrderMutationItemsSchema,
+const orderCreateFields = {
   organizationId: positiveId.optional(),
   branchId: positiveId.optional(),
   notes: z.string().trim().max(2_000).optional(),
@@ -576,11 +579,23 @@ export const orderCreateSchema = z.object({
   intakeReference: z.string().trim().min(1).max(INTAKE_REFERENCE_MAX_LENGTH).optional(),
   /** The key the upload route returned for the customer's screenshot. Optional. */
   intakeAttachmentKey: z.string().max(128).optional(),
+}
+
+/** Every role but the Order Desk: lines from the branch's own catalogue, priced by the ladder. */
+export const orderCreateSchema = z.object({
+  items: orderMutationItemsSchema,
+  ...orderCreateFields,
 }).strict()
 
-/** An Order Desk edit of an Active order before delivery: its lines, notes and PO number. */
+/** The Order Desk: lines by global product, each with its agreed tax-inclusive price. */
+export const deskOrderCreateSchema = z.object({
+  items: deskOrderItemsSchema,
+  ...orderCreateFields,
+}).strict()
+
+/** An Order Desk edit of a pending order: its lines, notes and PO number. */
 export const orderDeskEditSchema = z.object({
-  items: pricedOrderMutationItemsSchema,
+  items: deskOrderItemsSchema,
   notes: z.string().trim().max(2_000).optional(),
   poNumber: clearablePurchaseOrderNumber.optional(),
 }).strict()

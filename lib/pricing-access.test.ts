@@ -95,30 +95,51 @@ describe("who may set the price of one order line", () => {
     expect(ORDER_LINE_PRICE_ROLES).not.toBe(PRICE_MUTATION_ROLES)
   })
 
-  it("is enforced by both routes that accept a line price", () => {
+  it("is enforced by both routes that accept a line price, before the body's shape is judged", () => {
     const create = source("app/api/v1/orders/route.ts")
-    expect(create).toContain("const linePriceFailure = orderLinePriceFailure(role, parsed.data.items)")
     expect(create).toContain("const parsedBody = parseOrderCreateBody(await req.json().catch(() => null), role)")
+    // A price from anyone else is a 403, not a 400 about an unknown field.
+    const parse = create.slice(create.indexOf("function parseOrderCreateBody("))
+    expect(parse.indexOf("orderLinePriceFailure(role, rawLines)")).toBeGreaterThan(-1)
+    expect(parse.indexOf("orderLinePriceFailure(role, rawLines)"))
+      .toBeLessThan(parse.indexOf("(isOrderDeskRole(role) ? deskOrderCreateSchema : orderCreateSchema).safeParse(rawBody)"))
     const deskEdit = source("app/api/v1/order-desk/orders/[id]/route.ts")
     expect(deskEdit).toContain('requireApiRole(["ORDER_DESK"])')
     expect(deskEdit).toContain("const linePriceFailure = orderLinePriceFailure(user.role, parsed.data.items)")
   })
 
   it("is accepted by no other order write", () => {
-    // The requester edit and the group portal keep the strict lines that
+    // plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md:
+    // the desk's lines carry a required price; the requester edit, the group
+    // portal and every other role's creation keep the strict lines that
     // refuse the field outright.
     const schemas = source("lib/server/mutation-validation.ts")
-    const pricedUses = schemas.match(/items: pricedOrderMutationItemsSchema/g) ?? []
-    expect(pricedUses).toHaveLength(2)
-    expect(schemas).toMatch(/export const orderCreateSchema = z\.object\(\{\s*items: pricedOrderMutationItemsSchema/)
-    expect(schemas).toMatch(/export const orderDeskEditSchema = z\.object\(\{\s*items: pricedOrderMutationItemsSchema/)
+    expect(schemas.match(/items: deskOrderItemsSchema/g) ?? []).toHaveLength(2)
+    expect(schemas).toMatch(/export const deskOrderCreateSchema = z\.object\(\{\s*items: deskOrderItemsSchema/)
+    expect(schemas).toMatch(/export const orderDeskEditSchema = z\.object\(\{\s*items: deskOrderItemsSchema/)
+    expect(schemas).toMatch(/export const orderCreateSchema = z\.object\(\{\s*items: orderMutationItemsSchema/)
+    expect(schemas).not.toContain("pricedOrderMutationItemsSchema")
   })
 
-  it("resolves the catalogue price through the ladder before the entered one is weighed", () => {
+  it("weighs the entered price against the ladder's, never a hand-written fallback", () => {
+    // The branch's reference price comes through the ladder, for a product the
+    // branch carries only — an uncarried product never shows the global base
+    // price as the customer's.
+    const lineage = source("lib/server/order-desk-catalogue.ts")
+    expect(lineage).toMatch(/cataloguePriceCents: resolveEffectivePriceCents\(\{/)
+    expect(lineage).toContain("cataloguePriceCents: carried?.cataloguePriceCents ?? null")
+    // The page of products itself never reads the base price.
+    expect(lineage.slice(lineage.indexOf("export async function loadOrderDeskCatalogue"))).not.toContain("basePrice")
+    const lines = source("lib/order-desk-lines.ts")
+    expect(lines).toMatch(/resolveOrderLinePrice\(\{\s*cataloguePriceCents: lineage\?\.cataloguePriceCents \?\? null,\s*enteredPriceCents: line\.unitPriceCents,/)
+    // Creation and the desk's edit price desk lines one way.
     for (const path of ["app/api/v1/orders/route.ts", "lib/server/order-desk-edit.ts"]) {
-      const route = source(path)
-      expect(route).toMatch(/resolveOrderLinePrice\(\{\s*cataloguePriceCents: resolveEffectivePriceCents\(\{/)
+      const text = source(path)
+      expect(text).toContain("priceDeskOrderLines(")
+      expect(text).toContain("loadDeskBranchLineage(tx, {")
     }
+    // Every other role's lines are priced by the ladder alone.
+    expect(source("app/api/v1/orders/route.ts")).not.toContain("resolveOrderLinePrice(")
   })
 })
 

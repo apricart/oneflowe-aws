@@ -17,7 +17,9 @@ import {
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { orderLinePriceFailure } from "@/lib/pricing-access"
 import type { z } from "zod"
-import { enteredPriceLines, resolveOrderLinePrice } from "@/lib/order-line-price"
+import { enteredPriceLines } from "@/lib/order-line-price"
+import { DeskLineRefusal, priceDeskOrderLines, type DeskOrderLineRequest } from "@/lib/order-desk-lines"
+import { loadDeskBranchLineage } from "@/lib/server/order-desk-catalogue"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { isOrganizationBudgetEnabled, resolveOrderBudgetTracking } from "@/lib/server/organization-budget-policy"
@@ -31,7 +33,7 @@ import { orderSelectColumns } from "@/lib/order-select"
 import { calculateLineCents,formatQuantity,roundQuantity,validateProductQuantity } from "@/lib/quantity"
 import { resolveTaxRateBp,splitInclusiveCents } from "@/lib/tax"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
-import { orderCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
+import { deskOrderCreateSchema,orderCreateSchema,validationMessage } from "@/lib/server/mutation-validation"
 import { withRateLimit } from "@/lib/rate-limiter"
 import {
   attemptImmediateOrderEmailDelivery,
@@ -651,23 +653,17 @@ function calculateLockedOrderItems(normalizedItems: any[], locked: any, orgTaxRa
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    // The ladder's price, unless the Order Desk typed this line's own (refused
-    // for every other role before the transaction began).
-    const price = resolveOrderLinePrice({
-      cataloguePriceCents: resolveEffectivePriceCents({
-        groupPriceCents: locked.groupPriceByInventoryId?.get(inventoryItem.id),
-        organizationPriceCents: inventoryItem.customPrice,
-        basePriceCents: product.basePrice,
-      }),
-      enteredPriceCents: requestedItem.unitPriceCents,
+    const priceCents = resolveEffectivePriceCents({
+      groupPriceCents: locked.groupPriceByInventoryId?.get(inventoryItem.id),
+      organizationPriceCents: inventoryItem.customPrice,
+      basePriceCents: product.basePrice,
     })
-    if (!price.ok) throw new Error(`Pricing is unavailable for ${product.name}`)
+    if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
     // Catalogue prices are tax-inclusive, so the line amount is the gross the
     // branch pays and the split below only records how much of it is tax. The
-    // order total stays exactly the sum of these gross amounts. An entered
-    // price is tax-inclusive in the same way.
+    // order total stays exactly the sum of these gross amounts.
     const taxRateBp = resolveTaxRateBp(product.taxRateBp, orgTaxRateBp)
-    const line = splitInclusiveCents(calculateLineCents(price.priceCents, validation.quantity), taxRateBp)
+    const line = splitInclusiveCents(calculateLineCents(priceCents, validation.quantity), taxRateBp)
     subtotal += line.netCents
     tax += line.taxCents
     total += line.grossCents
@@ -675,9 +671,7 @@ function calculateLockedOrderItems(normalizedItems: any[], locked: any, orgTaxRa
       organizationInventoryId: inventoryItem.id,
       globalProductId: product.id,
       quantity: validation.quantity,
-      priceCents: price.priceCents,
-      priceEnteredManually: price.priceEnteredManually,
-      cataloguePriceCents: price.cataloguePriceCents,
+      priceCents,
       taxRateBp,
       taxCents: line.taxCents,
       productName: product.name,
@@ -786,6 +780,8 @@ async function logCreatedOrder(tx: any, context: any) {
       // Lines the Order Desk priced by hand, with the catalogue price each
       // replaced, so the trail says who charged what against what.
       ...enteredPriceAuditDetails(context.items),
+      // Why a desk order moved no budget: it never takes one.
+      ...(isOrderDeskRole(context.role) ? { budgetExemptionBasis: "ORDER_DESK" } : {}),
     },
     ipAddress: forwardedFor ? forwardedFor.split(",")[0] : "unknown",
     userAgent: headersList.get("user-agent"),
@@ -903,6 +899,60 @@ async function resolveCreationDeliveryAddress(tx: any, context: any) {
   return address
 }
 
+/**
+ * Whether the order takes a budget, fixed now for its whole life.
+ *
+ * An Order Desk order never does
+ * (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md):
+ * the exemption follows the authenticated creator, whose live reach the caller
+ * has just re-checked under lock — never a request field. Every other order
+ * reads the tenant's setting under a shared lock on the organization row,
+ * which the organization PATCH holds FOR UPDATE, so it commits wholly under
+ * one setting.
+ */
+async function resolveCreationBudgetTracking(tx: any, context: { role: unknown; organizationId: number }) {
+  if (isOrderDeskRole(context.role)) return false
+  return await resolveOrderBudgetTracking(tx, context.organizationId)
+}
+
+/** Every role but the desk: lines from the branch's catalogue, locked and priced by the ladder. */
+async function lockAndPriceCatalogueLines(tx: any, context: any, orgTaxRateBp: number) {
+  const lockedInventory = await lockCreationInventory(tx, context)
+  return {
+    calculated: calculateLockedOrderItems(context.normalizedItems, lockedInventory, orgTaxRateBp),
+    productById: lockedInventory.productById,
+  }
+}
+
+/**
+ * The desk: any active global product, locked, at the price the desk entered.
+ * The branch's own catalogue entry is read only to record the line's lineage
+ * and reference price; nothing in the customer's catalogue is created or
+ * changed. The caller has re-checked the desk's reach to this branch under lock.
+ */
+async function lockAndPriceDeskLines(tx: any, context: any, orgTaxRateBp: number) {
+  const globalProductIds = context.deskLines.map((line: DeskOrderLineRequest) => line.globalProductId)
+  const products = await tx.select().from(globalProducts)
+    .where(inArray(globalProducts.id, globalProductIds))
+    .orderBy(globalProducts.id)
+    .for('update')
+  const productById = new Map<number, any>(products.map((product: any) => [product.id, product]))
+  const lineageByProductId = await loadDeskBranchLineage(tx, {
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    globalProductIds,
+  })
+  const priced = priceDeskOrderLines(context.deskLines, {
+    productById,
+    lineageByProductId,
+    organizationTaxRateBp: orgTaxRateBp,
+  })
+  return {
+    calculated: { items: priced.items, subtotal: priced.subtotalCents, tax: priced.taxCents, total: priced.totalCents },
+    productById,
+  }
+}
+
 async function processOrderCreationTransaction(tx: any, context: any) {
   // An Order Desk user's grant is re-read under FOR SHARE on the assignment
   // and organization rows, so withdrawing it (or the managed flag) waits for
@@ -923,22 +973,21 @@ async function processOrderCreationTransaction(tx: any, context: any) {
   // any lock or write.
   await assertBranchDeliveriesAcknowledged(tx, { organizationId: context.organizationId, branchId: context.branchId })
   const deliveryAddress = await resolveCreationDeliveryAddress(tx, context)
-  // Read under a shared lock on the organization row, which the organization
-  // PATCH holds FOR UPDATE: the order commits wholly under one setting.
-  const budgetTracked = await resolveOrderBudgetTracking(tx, context.organizationId)
+  const budgetTracked = await resolveCreationBudgetTracking(tx, context)
   // The pre-flight saw budgets off and opened no budget row; the tenant has
   // switched them on since. Refuse rather than hold against nothing.
   if (budgetTracked && !context.budgetId) throw new Error(BUDGET_POLICY_CHANGED_MESSAGE)
   const money = budgetTracked ? await lockCreationMoneyBudget(tx, context) : null
   const quantityBudgets = budgetTracked ? await lockCreationQuantityBudgets(tx, context) : new Map()
-  const lockedInventory = await lockCreationInventory(tx, context)
   const orgTaxRateBp = await getOrganizationTaxRateBp(context.organizationId)
-  const calculated = calculateLockedOrderItems(context.normalizedItems, lockedInventory, orgTaxRateBp)
+  const { calculated, productById } = isOrderDeskRole(context.role)
+    ? await lockAndPriceDeskLines(tx, context, orgTaxRateBp)
+    : await lockAndPriceCatalogueLines(tx, context, orgTaxRateBp)
   if (money) {
     const budgetError = getBudgetError(calculated.total, money.available, context.pricesHidden)
     if (budgetError) throw new Error(budgetError)
   }
-  validateCreationStock(calculated.items, lockedInventory.productById)
+  validateCreationStock(calculated.items, productById)
   return persistCreatedOrder(tx, {
     ...context,
     budgetTracked,
@@ -1122,16 +1171,12 @@ function calculateCreationItems(normalizedItems: any[], inventory: any) {
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    const price = resolveOrderLinePrice({
-      cataloguePriceCents: resolveEffectivePriceCents({
-        groupPriceCents: inventory.groupPriceByInventoryId?.get(inventoryItem.id),
-        organizationPriceCents: inventoryItem.customPrice,
-        basePriceCents: product.basePrice,
-      }),
-      enteredPriceCents: requestedItem.unitPriceCents,
+    const priceCents = resolveEffectivePriceCents({
+      groupPriceCents: inventory.groupPriceByInventoryId?.get(inventoryItem.id),
+      organizationPriceCents: inventoryItem.customPrice,
+      basePriceCents: product.basePrice,
     })
-    if (!price.ok) throw new Error(`Price not found for item ${requestedItem.organizationInventoryId}. Custom: ${inventoryItem.customPrice}, Base: ${product.basePrice}`)
-    const priceCents = price.priceCents
+    if (priceCents === null || priceCents === undefined) throw new Error(`Price not found for item ${requestedItem.organizationInventoryId}. Custom: ${inventoryItem.customPrice}, Base: ${product.basePrice}`)
     subtotal += calculateLineCents(priceCents, validation.quantity)
     return {
       organizationInventoryId: requestedItem.organizationInventoryId,
@@ -1238,6 +1283,9 @@ async function getOrderCreationErrorResponse(caughtError: any, replayContext: an
       { error: caughtError.message, code: caughtError.code, deliveryAcknowledgement: caughtError.details },
       { status: 409 },
     )
+  }
+  if (caughtError instanceof DeskLineRefusal) {
+    return NextResponse.json({ error: caughtError.message }, { status: 400 })
   }
   if (isInvoiceCodeMissingError(caughtError)) {
     return NextResponse.json({ error: caughtError.message, code: caughtError.code }, { status: 409 })
@@ -1541,10 +1589,10 @@ export async function POST(req: NextRequest) {
       intakeAttachmentKey,
     } = parsedBody.data
 
-    const normalizedItems = normalizeOrderLines(items)
+    const { normalizedItems, deskLines } = normalizeOrderLines(items)
 
     // Validate quantities are positive
-    if (normalizedItems.some(i => !Number.isFinite(i.quantity) || i.quantity <= 0)) {
+    if ([...normalizedItems, ...deskLines].some(i => !Number.isFinite(i.quantity) || i.quantity <= 0)) {
       return NextResponse.json({ error: "Quantities must be greater than zero" }, { status: 400 })
     }
 
@@ -1578,7 +1626,7 @@ export async function POST(req: NextRequest) {
       intakeChannel,
       intakeReference,
       intakeAttachmentKey,
-      items: normalizedItems,
+      items: [...normalizedItems, ...deskLines],
     })
     replayContext = { userId, idempotencyKey, requestFingerprint, pricesHidden }
 
@@ -1594,25 +1642,19 @@ export async function POST(req: NextRequest) {
     const replayResponse = getOrderReplayResponse(existingOrder, requestFingerprint, pricesHidden)
     if (replayResponse) return replayResponse
 
-    // Fetch inventory details and prices
-    const orgInvIds = normalizedItems.map(i => i.organizationInventoryId)
-    const creationInventory = await loadCreationInventory({ organizationId, branchId, inventoryIds: orgInvIds })
-    if (!creationInventory) return NextResponse.json({ error: "Some items invalid" }, { status: 400 })
-    const calculated = calculateCreationItems(normalizedItems, creationInventory)
-    const calculatedItems = calculated.items
-    const total = calculated.total
-
     // budget check and hold - must be for current month period
     const currentMonth = budgetPeriodOf(new Date())
-    const preflight = await preflightCreationBudget({
+    const orgInvIds = normalizedItems.map(i => i.organizationInventoryId)
+    const preflight = await preflightCreation({
+      role,
       organizationId: Number(organizationId),
       branchId,
       period: currentMonth,
-      total,
+      normalizedItems,
       pricesHidden,
     })
     if ("response" in preflight) return preflight.response
-    const currentBudgetId = preflight.budgetId
+    const { calculatedItems, total, budgetId: currentBudgetId } = preflight
 
     const tid = generateTid()
     const invoiceSequenceReady = await hasInvoiceSequenceTable(db)
@@ -1627,6 +1669,7 @@ export async function POST(req: NextRequest) {
       branchId,
       inventoryIds: orgInvIds,
       normalizedItems,
+      deskLines,
       items: calculatedItems,
       tid,
       idempotencyKey,
@@ -1667,38 +1710,90 @@ export async function PUT(_: NextRequest) {
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/
 
-/** A requested line; `unitPriceCents` only on an Order Desk line the desk priced. */
-type NormalizedOrderLine = { organizationInventoryId: number; quantity: number; unitPriceCents?: number }
+/** A line from the branch's own catalogue: every role but the Order Desk. */
+type CatalogueOrderLine = { organizationInventoryId: number; quantity: number }
+
+type OrderCreateBody = z.infer<typeof orderCreateSchema> | z.infer<typeof deskOrderCreateSchema>
+
+function rawItemsOf(rawBody: unknown): unknown[] {
+  const items = (rawBody as { items?: unknown } | null)?.items
+  return Array.isArray(items) ? items : []
+}
 
 /**
  * The validated body, or the refusal to send. A line's own price is the Order
- * Desk's alone (lib/pricing-access.ts): anyone else sending one is refused here,
- * before anything is read.
+ * Desk's alone (lib/pricing-access.ts): anyone else sending one is refused here
+ * with 403, before anything is read. The desk's lines name global products and
+ * carry their agreed price; everyone else's name the branch's own catalogue
+ * entries, so each role is held to its own strict shape.
  */
 function parseOrderCreateBody(
   rawBody: unknown,
   role: unknown,
-): { data: z.infer<typeof orderCreateSchema> } | { response: NextResponse } {
-  const parsed = orderCreateSchema.safeParse(rawBody)
-  if (!parsed.success) {
-    return { response: NextResponse.json({ error: validationMessage(parsed.error) }, { status: 400 }) }
-  }
-  const linePriceFailure = orderLinePriceFailure(role, parsed.data.items)
+): { data: OrderCreateBody } | { response: NextResponse } {
+  const rawLines = rawItemsOf(rawBody).filter((line): line is { unitPriceCents?: number | null } => Boolean(line) && typeof line === "object")
+  const linePriceFailure = orderLinePriceFailure(role, rawLines)
   if (linePriceFailure) {
     return { response: NextResponse.json({ error: linePriceFailure.message }, { status: linePriceFailure.status }) }
+  }
+  const parsed = (isOrderDeskRole(role) ? deskOrderCreateSchema : orderCreateSchema).safeParse(rawBody)
+  if (!parsed.success) {
+    return { response: NextResponse.json({ error: validationMessage(parsed.error) }, { status: 400 }) }
   }
   return { data: parsed.data }
 }
 
-function normalizeOrderLines(
-  items: readonly { organizationInventoryId: number; quantity: number; unitPriceCents?: number }[],
-): NormalizedOrderLine[] {
-  return items.map((item) => ({
-    organizationInventoryId: item.organizationInventoryId,
-    quantity: roundQuantity(Number(item.quantity)),
-    // Present only when typed, so every other order's fingerprint is unchanged.
-    ...(item.unitPriceCents === undefined ? {} : { unitPriceCents: item.unitPriceCents }),
-  }))
+/** Each role's lines, normalized; exactly one of the two lists is ever non-empty. */
+function normalizeOrderLines(items: OrderCreateBody["items"]): {
+  normalizedItems: CatalogueOrderLine[]
+  deskLines: DeskOrderLineRequest[]
+} {
+  const normalizedItems: CatalogueOrderLine[] = []
+  const deskLines: DeskOrderLineRequest[] = []
+  for (const item of items) {
+    const quantity = roundQuantity(Number(item.quantity))
+    if ("globalProductId" in item) {
+      deskLines.push({ globalProductId: item.globalProductId, quantity, unitPriceCents: item.unitPriceCents })
+    } else {
+      normalizedItems.push({ organizationInventoryId: item.organizationInventoryId, quantity })
+    }
+  }
+  return { normalizedItems, deskLines }
+}
+
+/**
+ * Everything read before the creation transaction, or the refusal to send.
+ *
+ * An Order Desk order reads nothing here: its lines are priced from what the
+ * desk entered, under lock, and it takes no budget, so there is no estimate to
+ * check against one and no budget row to open. Every other role's lines are
+ * priced through the ladder and checked against the current month's budget.
+ */
+async function preflightCreation(context: {
+  role: unknown
+  organizationId: number
+  branchId: number
+  period: string
+  normalizedItems: CatalogueOrderLine[]
+  pricesHidden: boolean
+}): Promise<{ calculatedItems: any[]; total: number; budgetId: number | null } | { response: NextResponse }> {
+  if (isOrderDeskRole(context.role)) return { calculatedItems: [], total: 0, budgetId: null }
+  const creationInventory = await loadCreationInventory({
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    inventoryIds: context.normalizedItems.map((item) => item.organizationInventoryId),
+  })
+  if (!creationInventory) return { response: NextResponse.json({ error: "Some items invalid" }, { status: 400 }) }
+  const calculated = calculateCreationItems(context.normalizedItems, creationInventory)
+  const budget = await preflightCreationBudget({
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    period: context.period,
+    total: calculated.total,
+    pricesHidden: context.pricesHidden,
+  })
+  if ("response" in budget) return budget
+  return { calculatedItems: calculated.items, total: calculated.total, budgetId: budget.budgetId }
 }
 
 function orderRequestFingerprint(input: {
@@ -1710,7 +1805,7 @@ function orderRequestFingerprint(input: {
   intakeChannel?: string
   intakeReference?: string
   intakeAttachmentKey?: string
-  items: NormalizedOrderLine[]
+  items: (CatalogueOrderLine | DeskOrderLineRequest)[]
 }) {
   const canonical = {
     organizationId: input.organizationId,
@@ -1728,7 +1823,14 @@ function orderRequestFingerprint(input: {
     ...(input.intakeChannel ? { intakeChannel: input.intakeChannel } : {}),
     ...(input.intakeReference ? { intakeReference: input.intakeReference } : {}),
     ...(input.intakeAttachmentKey ? { intakeAttachmentKey: input.intakeAttachmentKey } : {}),
-    items: input.items.slice().sort((a, b) => a.organizationInventoryId - b.organizationInventoryId),
+    // A desk line is keyed by its global product and carries its entered
+    // price, so a retry at another product, quantity or price is a different
+    // order. Every other line hashes exactly as it always has.
+    items: input.items.slice().sort((a, b) => fingerprintLineKey(a) - fingerprintLineKey(b)),
   }
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex")
+}
+
+function fingerprintLineKey(line: CatalogueOrderLine | DeskOrderLineRequest): number {
+  return "globalProductId" in line ? line.globalProductId : line.organizationInventoryId
 }

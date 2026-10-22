@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
  * The grant handler: a branch id and an optional reason in, the branch's
@@ -92,6 +92,8 @@ function post(body: unknown): NextRequest {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(NOW)
   mocks.getRequestScope.mockReset()
   mocks.withRateLimit.mockReset().mockResolvedValue(null)
   mocks.grantPaymentControlException.mockReset().mockResolvedValue({
@@ -103,6 +105,10 @@ beforeEach(() => {
   mocks.logError.mockReset()
   mocks.branchRows = [{ id: 5, organizationId: 10, name: "North" }]
   signIn("HEAD_OFFICE")
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe("POST /api/v1/payment-control/exceptions — guards", () => {

@@ -87,6 +87,8 @@ export type ExecutiveApprovalOrder = {
     /** The Order Desk typed this line's price; `cataloguePriceCents` is what it replaced. */
     priceEnteredManually?: boolean
     cataloguePriceCents?: number | null
+    /** False when the branch did not carry the product when it was ordered. */
+    inBranchCatalogue?: boolean
   }[]
 }
 
@@ -215,7 +217,14 @@ function ApprovalCard({
             <tbody className="divide-y">
               {order.items.map((item) => (
                 <tr key={item.id}>
-                  <td className="py-1.5 pr-3">{item.productName}</td>
+                  <td className="py-1.5 pr-3">
+                    {item.productName}
+                    {item.inBranchCatalogue === false && (
+                      <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                        Not in branch catalogue
+                      </span>
+                    )}
+                  </td>
                   <td className="whitespace-nowrap py-1.5 pr-3 text-right tabular-nums">{formatQuantity(item.quantity)} {item.unit ?? ""}</td>
                   <td className="whitespace-nowrap py-1.5 pr-3 text-right tabular-nums">
                     {formatPKR(item.priceCents / 100)}

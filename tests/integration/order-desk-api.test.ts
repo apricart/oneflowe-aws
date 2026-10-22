@@ -24,6 +24,7 @@ import * as organizationRoute from "@/app/api/v1/organizations/[id]/route"
 import * as executiveApproveRoute from "@/app/api/v1/executive/approvals/[id]/approve/route"
 import {
   auditLogs,
+  branchInventory,
   branches,
   budgets,
   globalProducts,
@@ -32,12 +33,14 @@ import {
   orderDeskAssignments,
   orderItems,
   orders,
+  organizationInventory,
   organizations,
   refunds,
   systemLogs,
   users,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
+import { splitInclusiveCents } from "@/lib/tax"
 import { getImage, putImage } from "@/lib/server/image-storage"
 
 import {
@@ -161,6 +164,35 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
    * as uploaded by whoever is signed in — what the upload route would have
    * done — once, so a retry or a race on the same body sends the same key.
    */
+  /**
+   * A desk line: a global product, a quantity and the price the customer
+   * agreed, tax-inclusive — required on every line
+   * (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md).
+   * At A the fixture product's catalogue price is 15.00, at B 10.00, so these
+   * defaults charge exactly what the branch's catalogue would.
+   */
+  const deskLine = (quantity: unknown, overrides: Record<string, unknown> = {}) => ({
+    globalProductId: f.productId,
+    quantity,
+    unitPriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA,
+    ...overrides,
+  })
+  const bLine = (quantity: unknown, overrides: Record<string, unknown> = {}) =>
+    deskLine(quantity, { unitPriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base, ...overrides })
+
+  /**
+   * Turn a desk order into one placed before the budget exemption: tracked,
+   * with its hold on B1. No desk order is created tracked any more, but those
+   * placed earlier still move the ledger through their lives, and these tests
+   * keep that path honest.
+   */
+  const asLegacyTrackedOrder = async (orderId: number) => {
+    await db.transaction(async (tx) => {
+      const [order] = await tx.update(orders).set({ budgetTracked: true }).where(eq(orders.id, orderId)).returning({ total: orders.totalCents })
+      await tx.update(budgets).set({ amountHeldCents: sql`${budgets.amountHeldCents} + ${order.total}` }).where(eq(budgets.id, f.budgetB1))
+    })
+  }
+
   const generatedIntakeKeys = new Set<string>()
   const stagedIntakeKeys = new Map<string, Promise<unknown>>()
   const deskOrderBody = (overrides: Record<string, unknown> = {}) => {
@@ -169,7 +201,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
     return {
       organizationId: f.organizationA,
       branchId: f.branchA1,
-      items: [{ organizationInventoryId: f.inventoryA, quantity: 2 }],
+      items: [deskLine(2)],
       intakeChannel: "WHATSAPP",
       intakeReference: "Ali, 05 Oct 10:14",
       intakeAttachmentKey,
@@ -185,7 +217,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
   const bOrderBody = (quantity: number, overrides: Record<string, unknown> = {}) => deskOrderBody({
     organizationId: f.organizationB,
     branchId: f.branchB1,
-    items: [{ organizationInventoryId: f.inventoryB, quantity }],
+    items: [bLine(quantity)],
     ...overrides,
   })
 
@@ -364,10 +396,12 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
 
     it("prices the catalogue through the ladder and refuses branches outside the reach", async () => {
       signIn(actor("desk"))
-      const ok = await catalogue(f.organizationA, f.branchA1)
-      expect(ok.status).toBe(200)
-      expect(ok.body.items).toHaveLength(1)
-      expect(ok.body.items[0].priceCents).toBe(ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA)
+      const page = await read(await catalogueRoute.GET(get(
+        `http://localhost/api/v1/order-desk/catalogue?organizationId=${f.organizationA}&branchId=${f.branchA1}&q=ITD-P-${f.suffix}`,
+      )))
+      expect(page.status).toBe(200)
+      expect(page.body.items).toHaveLength(1)
+      expect(page.body.items[0].cataloguePriceCents).toBe(ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA)
 
       expect((await catalogue(f.organizationC, f.branchC1)).status).toBe(403)
       expect((await catalogue(f.organizationA, f.branchA3)).status).toBe(403)
@@ -422,13 +456,18 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect(second.body.order.id).toBe(first.body.order.id)
     })
 
-    it("holds budget at a budgeted tenant, exactly like any other order", async () => {
+    it("takes no budget at a budget-enabled tenant, and says why in the trail", async () => {
       signIn(actor("desk"))
       const before = await budgetB1()
       const { status, body } = await createOrder(bOrderBody(3))
       expect(status).toBe(200)
-      expect((await storedOrder(body.order.id)).budgetTracked).toBe(true)
-      expect((await budgetB1()).held).toBe(before.held + 3 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+      expect((await storedOrder(body.order.id)).budgetTracked).toBe(false)
+      expect(await budgetB1()).toEqual(before)
+      const [log] = await db.select().from(systemLogs).where(and(
+        eq(systemLogs.action, "ORDER_CREATE"),
+        eq(systemLogs.resourceId, String(body.order.id)),
+      ))
+      expect(log.details).toMatchObject({ budgetExemptionBasis: "ORDER_DESK" })
     })
 
     it("requires the intake details, and refuses them from anyone else", async () => {
@@ -456,7 +495,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       const unmanaged = await createOrder(deskOrderBody({
         organizationId: f.organizationC,
         branchId: f.branchC1,
-        items: [{ organizationInventoryId: f.inventoryC, quantity: 1 }],
+        items: [deskLine(1)],
       }))
       expect(unmanaged.status).toBe(403)
       expect((await createOrder(deskOrderBody({ branchId: f.branchA3 }))).status).toBe(403)
@@ -487,30 +526,160 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
     })
   })
 
-  // plans/OF-ORDER-DESK-line-price-entry.md
-  describe("a price the desk types for a line", () => {
-    // Below the catalogue price by an amount that does not divide evenly, so a
-    // total computed from the catalogue price could not pass by accident.
+  // plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md
+  describe("the desk's global catalogue", () => {
+    const search = async (organizationId: number, branchId: number, query = "") => read(await catalogueRoute.GET(
+      get(`http://localhost/api/v1/order-desk/catalogue?organizationId=${organizationId}&branchId=${branchId}${query}`),
+    ))
+    const inventoryRowsFor = async (globalProductId: number) => ({
+      organization: await db.select({ id: organizationInventory.id }).from(organizationInventory).where(eq(organizationInventory.globalProductId, globalProductId)),
+      branch: await db.select({ id: branchInventory.id }).from(branchInventory)
+        .innerJoin(organizationInventory, eq(organizationInventory.id, branchInventory.organizationInventoryId))
+        .where(eq(organizationInventory.globalProductId, globalProductId)),
+    })
+
+    it("lists every active Apricart product for a branch it reaches, carried or not, and no inactive one", async () => {
+      signIn(actor("desk"))
+      const { status, body } = await search(f.organizationA, f.branchA1, `&q=${f.suffix}`)
+      expect(status).toBe(200)
+      const byId = new Map<number, any>(body.items.map((item: any) => [item.globalProductId, item]))
+      expect([...byId.keys()].sort((a, b) => a - b)).toEqual([f.productId, f.unassignedProductId].sort((a, b) => a - b))
+      expect(byId.has(f.inactiveProductId)).toBe(false)
+      expect(body.pagination).toMatchObject({ page: 1, total: 2, totalPages: 1 })
+
+      // Carried at A1: its entry and the price the ladder gives the branch.
+      expect(byId.get(f.productId)).toMatchObject({
+        organizationInventoryId: f.inventoryA,
+        assignedToBranch: true,
+        cataloguePriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA,
+      })
+      // Not carried: no entry, no reference price, and never the base price.
+      expect(byId.get(f.unassignedProductId)).toMatchObject({
+        organizationInventoryId: null,
+        assignedToBranch: false,
+        cataloguePriceCents: null,
+        stockQuantity: 200,
+      })
+      expect(JSON.stringify(body)).not.toContain(String(ORDER_DESK_FIXTURE_PRICE_CENTS.unassignedBase))
+      expect(JSON.stringify(body)).not.toContain("basePrice")
+    })
+
+    it("pages and searches the whole catalogue on the server", async () => {
+      signIn(actor("desk"))
+      const first = await search(f.organizationA, f.branchA1, `&q=${f.suffix}&limit=1`)
+      const second = await search(f.organizationA, f.branchA1, `&q=${f.suffix}&limit=1&page=2`)
+      expect(first.body.pagination).toMatchObject({ page: 1, limit: 1, total: 2, totalPages: 2 })
+      expect(first.body.items).toHaveLength(1)
+      expect(second.body.items).toHaveLength(1)
+      expect(first.body.items[0].globalProductId).not.toBe(second.body.items[0].globalProductId)
+
+      const byCode = await search(f.organizationA, f.branchA1, `&q=ITD-U-${f.suffix}`)
+      expect(byCode.body.items.map((item: any) => item.globalProductId)).toEqual([f.unassignedProductId])
+      // LIKE wildcards are searched for literally.
+      expect((await search(f.organizationA, f.branchA1, `&q=${f.suffix}%25`)).body.items).toEqual([])
+      expect((await search(f.organizationA, f.branchA1, "&limit=0")).status).toBe(400)
+      expect((await search(f.organizationA, f.branchA1, "&page=abc")).status).toBe(400)
+    })
+
+    it("labels a product by the branch asked about, not by the organization", async () => {
+      signIn(actor("desk"))
+      // B1 carries the product at the base price; the uncatalogued one nowhere.
+      const { body } = await search(f.organizationB, f.branchB1, `&q=${f.suffix}`)
+      const byId = new Map<number, any>(body.items.map((item: any) => [item.globalProductId, item]))
+      expect(byId.get(f.productId)).toMatchObject({ assignedToBranch: true, cataloguePriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base })
+      expect(byId.get(f.unassignedProductId)).toMatchObject({ assignedToBranch: false })
+    })
+
+    it("is fenced to the desk's reach whatever the query names", async () => {
+      signIn(actor("desk2"))
+      expect((await search(f.organizationA, f.branchA1)).status).toBe(403)
+      expect((await search(f.organizationA, f.branchA2)).status).toBe(200)
+      expect((await search(f.organizationB, f.branchA2)).status).toBe(403)
+      signIn(actor("desk"))
+      expect((await search(f.organizationC, f.branchC1)).status).toBe(403)
+    })
+
+    it("orders a product the branch does not carry, at the desk's price, without adding it to any catalogue", async () => {
+      signIn(actor("desk"))
+      const before = await inventoryRowsFor(f.unassignedProductId)
+      const [{ stock: stockBefore }] = await db.select({ stock: globalProducts.stockQuantity }).from(globalProducts).where(eq(globalProducts.id, f.unassignedProductId))
+      const created = await createOrder(deskOrderBody({
+        items: [deskLine(3, { globalProductId: f.unassignedProductId, unitPriceCents: 4_567 })],
+      }))
+      expect(created.status).toBe(200)
+      const orderId = created.body.order.id
+
+      const [line] = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId))
+      expect(line).toMatchObject({
+        globalProductId: f.unassignedProductId,
+        organizationInventoryId: null,
+        productName: `ITD Uncatalogued ${f.suffix}`,
+        productCode: `ITD-U-${f.suffix}`,
+        unit: "roll",
+        priceEnteredManually: true,
+        cataloguePriceCents: null,
+        taxRateBp: 1_800,
+      })
+      expect(Number(line.priceCents)).toBe(4_567)
+
+      // 3 × 45.67 = 137.01 gross, the product's 18% inside it, nothing added.
+      const row = await storedOrder(orderId)
+      expect(Number(row.totalCents)).toBe(13_701)
+      const split = splitInclusiveCents(13_701, 1_800)
+      expect(Number(row.taxCents)).toBe(split.taxCents)
+      expect(Number(row.subtotalCents)).toBe(split.netCents)
+      expect(Number(line.taxCents)).toBe(split.taxCents)
+      expect(row.budgetTracked).toBe(false)
+
+      const [{ stock: stockAfter }] = await db.select({ stock: globalProducts.stockQuantity }).from(globalProducts).where(eq(globalProducts.id, f.unassignedProductId))
+      expect(Number(stockAfter)).toBe(Number(stockBefore) - 3)
+      expect(await inventoryRowsFor(f.unassignedProductId)).toEqual(before)
+      expect(before).toEqual({ organization: [], branch: [] })
+
+      // Cancelling puts the stock back on the global product.
+      expect((await cancel(orderId)).status).toBe(200)
+      const [{ stock: restored }] = await db.select({ stock: globalProducts.stockQuantity }).from(globalProducts).where(eq(globalProducts.id, f.unassignedProductId))
+      expect(Number(restored)).toBe(Number(stockBefore))
+    })
+
+    it("keeps the branch's own catalogue entry as lineage for a product it carries", async () => {
+      signIn(actor("desk"))
+      const created = await createOrder(deskOrderBody({ items: [deskLine(1, { unitPriceCents: 1_234 })] }))
+      const [line] = await db.select().from(orderItems).where(eq(orderItems.orderId, created.body.order.id))
+      expect(line).toMatchObject({ organizationInventoryId: f.inventoryA, priceEnteredManually: true })
+      expect(Number(line.priceCents)).toBe(1_234)
+      expect(Number(line.cataloguePriceCents)).toBe(ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA)
+    })
+
+    it("refuses an inactive product, and more than the global stock", async () => {
+      signIn(actor("desk"))
+      const inactive = await createOrder(deskOrderBody({ items: [deskLine(1, { globalProductId: f.inactiveProductId })] }))
+      expect(inactive.status).toBe(400)
+      expect(inactive.body.error).toBe("A product in this order is no longer available")
+      const missing = await createOrder(deskOrderBody({ items: [deskLine(1, { globalProductId: 2_000_000_000 })] }))
+      expect(missing.status).toBe(400)
+      const tooMany = await createOrder(deskOrderBody({ items: [deskLine(201, { globalProductId: f.unassignedProductId })] }))
+      expect(tooMany.status).toBe(400)
+      expect(tooMany.body.error).toMatch(/^Insufficient stock/)
+    })
+  })
+
+  describe("the price the desk types", () => {
     const enteredPrice = ORDER_DESK_FIXTURE_PRICE_CENTS.base - 123
 
     const linesOf = async (orderId: number) => db.select().from(orderItems).where(eq(orderItems.orderId, orderId))
 
-    it("is what the order, its hold and its approval charge, beside the catalogue price it replaced", async () => {
+    it("is what the order and its approval charge, beside the catalogue price it replaced", async () => {
       signIn(actor("desk"))
-      const heldBefore = (await budgetB1()).held
-      const created = await createOrder(bOrderBody(3, {
-        items: [{ organizationInventoryId: f.inventoryB, quantity: 3, unitPriceCents: enteredPrice }],
-      }))
+      const created = await createOrder(bOrderBody(3, { items: [bLine(3, { unitPriceCents: enteredPrice })] }))
       expect(created.status).toBe(200)
       const orderId = created.body.order.id
 
       const row = await storedOrder(orderId)
       expect(Number(row.totalCents)).toBe(3 * enteredPrice)
-      // Tax-inclusive, like a catalogue price: the split adds back to the total.
       expect(Number(row.subtotalCents) + Number(row.taxCents)).toBe(3 * enteredPrice)
       // The proforma receipt prints the entered price's total.
       expect(row.receiptData?.totalAmount).toBe((3 * enteredPrice) / 100)
-      expect((await budgetB1()).held).toBe(heldBefore + 3 * enteredPrice)
 
       const [line] = await linesOf(orderId)
       expect(Number(line.priceCents)).toBe(enteredPrice)
@@ -525,22 +694,27 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
         enteredPrices: [{ organizationInventoryId: f.inventoryB, priceCents: enteredPrice, cataloguePriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base }],
       })
 
-      // The desk's list carries both figures, for its own edit form.
+      // The desk's list carries what its edit form needs to rebuild the line.
       const listed = (await listDeskOrders()).body.items.find((item: any) => item.id === orderId)
-      expect(listed.items[0]).toMatchObject({ priceCents: enteredPrice, priceEnteredManually: true, cataloguePriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base })
+      expect(listed.items[0]).toMatchObject({
+        globalProductId: f.productId,
+        productCode: `ITD-P-${f.suffix}`,
+        allowDecimalQuantity: false,
+        quantityStep: 1,
+        priceCents: enteredPrice,
+        priceEnteredManually: true,
+        cataloguePriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base,
+      })
 
-      // The executive approves the total it was shown, at the entered price.
       await approveAsExecutive(orderId)
       const approved = await storedOrder(orderId)
       expect(approved.status).toBe("APPROVED")
       expect(Number(approved.totalCents)).toBe(3 * enteredPrice)
     })
 
-    it("is not flagged when it equals the catalogue price", async () => {
+    it("is not flagged when it equals the branch's catalogue price", async () => {
       signIn(actor("desk"))
-      const created = await createOrder(bOrderBody(1, {
-        items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base }],
-      }))
+      const created = await createOrder(bOrderBody(1))
       expect(created.status).toBe(200)
       const [line] = await linesOf(created.body.order.id)
       expect(line.priceEnteredManually).toBe(false)
@@ -552,16 +726,19 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect(log.details).not.toHaveProperty("enteredPrices")
     })
 
-    it("refuses a price that is zero, negative, fractional or not a number, and creates nothing", async () => {
+    it("is required, above zero, and in whole paisa — and a refusal writes nothing", async () => {
       signIn(actor("desk"))
-      const heldBefore = (await budgetB1()).held
-      for (const unitPriceCents of [0, -500, 99.5, "5000"]) {
-        const refused = await createOrder(bOrderBody(1, {
-          items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents }],
-        }))
+      const stockBefore = await stock()
+      const missing = await createOrder(bOrderBody(1, { items: [{ globalProductId: f.productId, quantity: 1 }] }))
+      expect(missing.status).toBe(400)
+      expect(missing.body.error).toBe("Enter a price for every product")
+      for (const unitPriceCents of [0, -500, 99.5, "5000", null]) {
+        const refused = await createOrder(bOrderBody(1, { items: [bLine(1, { unitPriceCents })] }))
         expect(refused.status, String(unitPriceCents)).toBe(400)
       }
-      expect((await budgetB1()).held).toBe(heldBefore)
+      // A catalogue-entry line is not a desk line.
+      expect((await createOrder(bOrderBody(1, { items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: 1_000 }] }))).status).toBe(400)
+      expect(await stock()).toBe(stockBefore)
     })
 
     it("is refused from every other role that can place an order, before anything is written", async () => {
@@ -575,6 +752,9 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
         })
         expect(refused.status, kind).toBe(403)
         expect(refused.body.error, kind).toBe("Forbidden: only the Order Desk may set the price of an order line")
+        // Nor may another role order a product by global id, outside its catalogue.
+        const global = await createOrder({ organizationId: f.organizationA, branchId: f.branchA1, items: [{ globalProductId: f.unassignedProductId, quantity: 1 }] })
+        expect(global.status, kind).toBe(400)
       }
       expect(await stock()).toBe(stockBefore)
     })
@@ -582,44 +762,111 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
     it("changes the idempotency fingerprint, so a retry at another price is a different order", async () => {
       signIn(actor("desk"))
       const key = idempotencyKey()
-      const body = bOrderBody(1, { items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: enteredPrice }] })
+      const body = bOrderBody(1, { items: [bLine(1, { unitPriceCents: enteredPrice })] })
       expect((await createOrder(body, key)).status).toBe(200)
-      const repriced = await createOrder({ ...body, items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: enteredPrice + 1 }] }, key)
+      expect((await createOrder(body, key)).body.replayed).toBe(true)
+      const repriced = await createOrder({ ...body, items: [bLine(1, { unitPriceCents: enteredPrice + 1 })] }, key)
       expect(repriced.status).toBe(409)
+      const otherProduct = await createOrder({ ...body, items: [bLine(1, { globalProductId: f.unassignedProductId, unitPriceCents: enteredPrice })] }, key)
+      expect(otherProduct.status).toBe(409)
     })
 
-    it("survives an edit that sends it again, and gives way to the catalogue when it is left out", async () => {
+    it("is kept, changed or required again by an edit, which can add a product the branch does not carry", async () => {
       signIn(actor("desk"))
-      const created = await createOrder(bOrderBody(2, {
-        items: [{ organizationInventoryId: f.inventoryB, quantity: 2, unitPriceCents: enteredPrice }],
-      }))
+      const created = await createOrder(bOrderBody(2, { items: [bLine(2, { unitPriceCents: enteredPrice })] }))
       const orderId = created.body.order.id
-      const heldAfterCreate = (await budgetB1()).held
+      const heldBefore = (await budgetB1()).held
 
-      const kept = await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 4, unitPriceCents: enteredPrice }] })
+      const kept = await editOrder(orderId, {
+        items: [
+          bLine(4, { unitPriceCents: enteredPrice }),
+          bLine(1, { globalProductId: f.unassignedProductId, unitPriceCents: 9_999 }),
+        ],
+      })
       expect(kept.status).toBe(200)
-      expect(kept.body.totalCents).toBe(4 * enteredPrice)
-      expect((await budgetB1()).held).toBe(heldAfterCreate + 2 * enteredPrice)
-      let [line] = await linesOf(orderId)
-      expect(line.priceEnteredManually).toBe(true)
-      expect(Number(line.cataloguePriceCents)).toBe(ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+      expect(kept.body.totalCents).toBe(4 * enteredPrice + 9_999)
+      const lines = await linesOf(orderId)
+      const byProduct = new Map(lines.map((line) => [line.globalProductId, line]))
+      expect(byProduct.get(f.productId)).toMatchObject({ organizationInventoryId: f.inventoryB, priceEnteredManually: true })
+      expect(byProduct.get(f.unassignedProductId)).toMatchObject({ organizationInventoryId: null, cataloguePriceCents: null })
+      // A desk order takes no budget, so an edit moves none.
+      expect((await budgetB1()).held).toBe(heldBefore)
 
       const [audit] = await db.select().from(auditLogs).where(and(
         eq(auditLogs.action, "ORDER_EDITED"),
         eq(auditLogs.entityId, String(orderId)),
       ))
       expect(JSON.stringify(audit)).toContain(String(enteredPrice))
+      expect(JSON.stringify(audit)).toContain("9999")
 
-      const reverted = await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 4 }] })
-      expect(reverted.status).toBe(200)
-      expect(reverted.body.totalCents).toBe(4 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
-      expect((await budgetB1()).held).toBe(heldAfterCreate - 2 * enteredPrice + 4 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
-      ;[line] = await linesOf(orderId)
+      const repriced = await editOrder(orderId, { items: [bLine(4)] })
+      expect(repriced.status).toBe(200)
+      expect(repriced.body.totalCents).toBe(4 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+      const [line] = await linesOf(orderId)
       expect(line.priceEnteredManually).toBe(false)
-      expect(line.cataloguePriceCents).toBeNull()
-      expect(Number(line.priceCents)).toBe(ORDER_DESK_FIXTURE_PRICE_CENTS.base)
 
-      expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: 0 }] })).status).toBe(400)
+      expect((await editOrder(orderId, { items: [{ globalProductId: f.productId, quantity: 1 }] })).status).toBe(400)
+      expect((await editOrder(orderId, { items: [bLine(1, { unitPriceCents: 0 })] })).status).toBe(400)
+      expect(Number((await storedOrder(orderId)).totalCents)).toBe(4 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+    })
+  })
+
+  describe("budgets", () => {
+    const setB1 = async (values: Partial<{ amountAllocatedCents: number; period: string }>) => {
+      await db.update(budgets).set(values).where(eq(budgets.id, f.budgetB1))
+    }
+
+    it("never refuses a desk order for want of money, and never opens a budget row", async () => {
+      signIn(actor("desk"))
+      const [original] = await db.select().from(budgets).where(eq(budgets.id, f.budgetB1))
+      try {
+        // Nothing left to order against.
+        await setB1({ amountAllocatedCents: Number(original.amountHeldCents) + Number(original.amountSpentCents) })
+        const broke = await createOrder(bOrderBody(5))
+        expect(broke.status).toBe(200)
+
+        // No row for this month at all.
+        await setB1({ period: "2001-01" })
+        const before = await db.select({ id: budgets.id }).from(budgets).where(eq(budgets.branchId, f.branchB1))
+        const unbudgeted = await createOrder(bOrderBody(1))
+        expect(unbudgeted.status).toBe(200)
+        expect(await db.select({ id: budgets.id }).from(budgets).where(eq(budgets.branchId, f.branchB1))).toEqual(before)
+      } finally {
+        await setB1({ amountAllocatedCents: Number(original.amountAllocatedCents), period: original.period })
+      }
+      const [after] = await db.select().from(budgets).where(eq(budgets.id, f.budgetB1))
+      expect(Number(after.amountHeldCents)).toBe(Number(original.amountHeldCents))
+    })
+
+    it("still holds every other role's orders to the same budget", async () => {
+      // The exemption is the desk's alone: Super Admin ordering at B1 with no
+      // money left is refused exactly as before.
+      const [original] = await db.select().from(budgets).where(eq(budgets.id, f.budgetB1))
+      try {
+        await setB1({ amountAllocatedCents: Number(original.amountHeldCents) + Number(original.amountSpentCents) })
+        signIn(actor("super"))
+        const refused = await createOrder({
+          organizationId: f.organizationB,
+          branchId: f.branchB1,
+          items: [{ organizationInventoryId: f.inventoryB, quantity: 1 }],
+        })
+        expect(refused.status).toBe(400)
+        expect(refused.body.error).toMatch(/Insufficient budget/)
+      } finally {
+        await setB1({ amountAllocatedCents: Number(original.amountAllocatedCents) })
+      }
+    })
+
+    it("moves no budget through approval, delivery, fulfilment and a refund", async () => {
+      signIn(actor("desk"))
+      const before = await budgetB1()
+      const orderId = (await createActiveOrder(bOrderBody(2))).body.order.id
+      await superDeliver(orderId)
+      signIn(actor("desk"))
+      expect((await fulfil(orderId)).status).toBe(200)
+      const [line] = await db.select({ id: orderItems.id }).from(orderItems).where(eq(orderItems.orderId, orderId))
+      expect((await requestRefund(orderId, { items: [{ id: line.id, quantity: 1 }], reason: "Damaged" })).status).toBe(200)
+      expect(await budgetB1()).toEqual(before)
     })
   })
 
@@ -765,6 +1012,8 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       signIn(actor("desk"))
       const created = await createOrder(bOrderBody(1))
       const orderId = created.body.order.id
+      // Placed before the exemption, so fulfilment still moves its hold to spent.
+      await asLegacyTrackedOrder(orderId)
       const before = await budgetB1()
 
       // Pending: the desk may edit or cancel it, and cannot fulfil it.
@@ -814,24 +1063,26 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
 
       expect((await fulfil(portalOrder.id)).status).toBe(404)
       expect((await cancel(portalOrder.id)).status).toBe(404)
-      expect((await editOrder(portalOrder.id, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })).status).toBe(404)
+      expect((await editOrder(portalOrder.id, { items: [deskLine(1)] })).status).toBe(404)
 
       signIn(actor("desk2"))
       expect((await fulfil(a1.body.order.id)).status).toBe(404)
       expect((await cancel(a1.body.order.id)).status).toBe(404)
-      expect((await editOrder(a1.body.order.id, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })).status).toBe(404)
+      expect((await editOrder(a1.body.order.id, { items: [deskLine(1)] })).status).toBe(404)
       expect((await fulfil(999_999_999)).status).toBe(404)
     })
   })
 
   describe("cancelling", () => {
-    it("withdraws an undelivered order and releases its stock and budget hold", async () => {
+    it("withdraws an undelivered order and releases its stock and the hold of one placed before the exemption", async () => {
       signIn(actor("desk"))
       const stockBefore = await stock()
       const heldBefore = (await budgetB1()).held
       const created = await createOrder(bOrderBody(4))
       const orderId = created.body.order.id
       expect(await stock()).toBe(stockBefore - 4)
+      expect((await budgetB1()).held).toBe(heldBefore)
+      await asLegacyTrackedOrder(orderId)
       expect((await budgetB1()).held).toBe(heldBefore + 4 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
 
       expect((await cancel(orderId, { reason: "  " })).status).toBe(400)
@@ -857,7 +1108,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       // Once cancelled it stays cancelled, and nothing more can be done with it.
       expect((await cancel(orderId)).status).toBe(409)
       expect((await fulfil(orderId)).status).toBe(409)
-      expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 1 }] })).status).toBe(409)
+      expect((await editOrder(orderId, { items: [bLine(1)] })).status).toBe(409)
       const listed = (await listDeskOrders("status=cancelled&limit=50")).body.items.find((item: any) => item.id === orderId)
       expect(listed).toMatchObject({ status: "CANCELLED", canEdit: false, canCancel: false, canFulfil: false })
     })
@@ -902,16 +1153,17 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
   })
 
   describe("editing", () => {
-    it("re-prices the lines and moves stock and the budget hold by the difference", async () => {
+    it("re-prices the lines and moves stock and, for an order placed before the exemption, the hold by the difference", async () => {
       signIn(actor("desk"))
       const created = await createOrder(bOrderBody(2, { poNumber: "PO-1" }))
       const orderId = created.body.order.id
+      await asLegacyTrackedOrder(orderId)
       const invoiceNumber = (await storedOrder(orderId)).receiptData?.invoiceNumber
       const stockBefore = await stock()
       const heldBefore = (await budgetB1()).held
 
       const edited = await editOrder(orderId, {
-        items: [{ organizationInventoryId: f.inventoryB, quantity: 5 }],
+        items: [bLine(5)],
         notes: "Customer added three more",
         poNumber: "PO-2",
       })
@@ -940,7 +1192,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect(audit.userId).toBe(f.deskId)
 
       // Shrinking gives stock and budget back.
-      expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 1 }] })).status).toBe(200)
+      expect((await editOrder(orderId, { items: [bLine(1)] })).status).toBe(200)
       expect(await stock()).toBe(stockBefore + 1)
       expect((await budgetB1()).held).toBe(heldBefore - ORDER_DESK_FIXTURE_PRICE_CENTS.base)
     })
@@ -952,22 +1204,22 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       const totalBefore = Number((await storedOrder(orderId)).totalCents)
 
       expect((await editOrder(orderId, { items: [] })).status).toBe(400)
-      expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1_000_000 }] })).status).toBe(400)
-      // A product of another tenant is never available on this branch.
-      expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 1 }] })).status).toBe(400)
-      expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }], status: "FULFILLED" })).status).toBe(400)
+      expect((await editOrder(orderId, { items: [deskLine(1_000_000)] })).status).toBe(400)
+      // An inactive product is never available, wherever it is asked for.
+      expect((await editOrder(orderId, { items: [deskLine(1, { globalProductId: f.inactiveProductId })] })).status).toBe(400)
+      expect((await editOrder(orderId, { items: [deskLine(1)], status: "FULFILLED" })).status).toBe(400)
       expect(Number((await storedOrder(orderId)).totalCents)).toBe(totalBefore)
 
       // Once an executive approves it, the lines are fixed: an edit would
       // change what was approved.
       await approveAsExecutive(orderId)
-      const approved = await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })
+      const approved = await editOrder(orderId, { items: [deskLine(1)] })
       expect(approved.status).toBe(409)
       expect(approved.body.error).toMatch(/approved order cannot be edited/)
 
       await superDeliver(orderId)
       signIn(actor("desk"))
-      expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })).status).toBe(409)
+      expect((await editOrder(orderId, { items: [deskLine(1)] })).status).toBe(409)
       expect(Number((await storedOrder(orderId)).totalCents)).toBe(totalBefore)
     })
 
@@ -976,7 +1228,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       const created = await createOrder(deskOrderBody({ branchId: f.branchA2 }))
       await db.update(branches).set({ status: "inactive" }).where(eq(branches.id, f.branchA2))
       try {
-        const refused = await editOrder(created.body.order.id, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })
+        const refused = await editOrder(created.body.order.id, { items: [deskLine(1)] })
         expect(refused.status).toBe(403)
       } finally {
         await db.update(branches).set({ status: "active" }).where(eq(branches.id, f.branchA2))
@@ -1225,9 +1477,10 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect(trail).toHaveLength(1)
     })
 
-    it("fulfils once when two fulfils race, moving the hold to spent once", async () => {
+    it("fulfils once when two fulfils race, moving the hold of a pre-exemption order to spent once", async () => {
       signIn(actor("desk"))
       const orderId = (await createActiveOrder(bOrderBody(2))).body.order.id
+      await asLegacyTrackedOrder(orderId)
       await superDeliver(orderId)
       signIn(actor("desk"))
       const before = await budgetB1()
@@ -1247,7 +1500,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       const orderId = (await createOrder(bOrderBody(2))).body.order.id
 
       const [edited, cancelled] = await Promise.all([
-        editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 5 }] }),
+        editOrder(orderId, { items: [bLine(5)] }),
         cancel(orderId),
       ])
 
@@ -1285,7 +1538,7 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
         expect((await listDeskOrders("status=all&limit=50")).body.items).toEqual([])
         expect((await cancel(orderId)).status).toBe(404)
         expect((await fulfil(orderId)).status).toBe(404)
-        expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryA, quantity: 1 }] })).status).toBe(404)
+        expect((await editOrder(orderId, { items: [deskLine(1)] })).status).toBe(404)
         expect((await attachment(orderId)).status).toBe(404)
         expect((await refundHistory(orderId)).status).toBe(403)
         expect((await createOrder(deskOrderBody())).status).toBe(403)
@@ -1326,18 +1579,20 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       expect((await cancel(orderId, { reason: "x", status: "APPROVED" })).status).toBe(400)
       expect((await cancel(orderId, { reason: "x".repeat(501) })).status).toBe(400)
 
-      const line = (organizationInventoryId: number, quantity: unknown) => ({ organizationInventoryId, quantity })
       for (const items of [
-        [line(f.inventoryA, 1), line(f.inventoryA, 2)],
-        [line(f.inventoryA, 1.5)],
-        [line(f.inventoryA, 0)],
-        [line(f.inventoryA, -1)],
-        [line(f.inventoryA, "lots")],
+        [deskLine(1), deskLine(2)],
+        [deskLine(1.5)],
+        [deskLine(0)],
+        [deskLine(-1)],
+        [deskLine("lots")],
+        [deskLine(1, { unitPriceCents: undefined })],
+        [deskLine(1, { unitPriceCents: 0 })],
+        [{ organizationInventoryId: f.inventoryA, quantity: 1 }],
       ]) {
         expect((await editOrder(orderId, { items })).status, JSON.stringify(items)).toBe(400)
       }
       const badId = await read(await deskOrderRoute.PUT(
-        jsonRequest("http://localhost/api/v1/order-desk/orders/abc", "PUT", { items: [line(f.inventoryA, 1)] }),
+        jsonRequest("http://localhost/api/v1/order-desk/orders/abc", "PUT", { items: [deskLine(1)] }),
         params("abc"),
       ))
       expect(badId.status).toBe(400)

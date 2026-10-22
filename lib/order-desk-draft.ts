@@ -1,34 +1,69 @@
 /**
- * The Order Desk's new-order form, as pure functions: turning what the desk
- * user typed into the body `POST /api/v1/orders` accepts, and the estimate it
- * shows before submitting.
+ * The Order Desk's new-order and edit forms, as pure functions: turning what
+ * the desk user chose and typed into the body the API accepts, and the
+ * estimate it shows before submitting.
+ *
+ * A desk line names any active Apricart product — whether or not the branch
+ * carries it — and needs the price the customer agreed, typed by the desk,
+ * including tax (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md).
+ * The price box starts empty and the order cannot be sent until every chosen
+ * product has a price above zero.
  *
  * Presentation only. The server re-validates every field, re-checks the desk's
- * reach, and re-prices every line through the price ladder; the estimate here
- * uses the catalogue's prices, which come from that same ladder — or the price
- * the desk typed for a line, which the server then charges instead
- * (plans/OF-ORDER-DESK-line-price-entry.md).
+ * reach, and re-prices every line inside its own transaction.
  */
 
-import { parsePriceInput } from "@/lib/group-price-input"
+import { formatPriceInput, parsePriceInput } from "@/lib/group-price-input"
 import { INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH, type IntakeChannel } from "@/lib/order-desk-access"
 import { calculateLineCents, parseQuantity, validateProductQuantity } from "@/lib/quantity"
 
+/** One product in the desk's picker, as `GET /api/v1/order-desk/catalogue` returns it. */
 export type DeskCatalogueItem = {
-  organizationInventoryId: number
+  globalProductId: number
+  organizationInventoryId: number | null
+  productCode: string
   name: string
+  unit: string
   allowDecimalQuantity: boolean
   quantityStep: number
-  priceCents: number | null
+  stockQuantity: number
+  /** The branch carries this product; its catalogue price there is `cataloguePriceCents`. */
+  assignedToBranch: boolean
+  cataloguePriceCents: number | null
 }
+
+/**
+ * What a chosen line keeps about its product, so the line survives a new
+ * search or another page of the picker.
+ */
+export type DeskLineProduct = {
+  globalProductId: number
+  name: string
+  productCode: string | null
+  unit: string
+  allowDecimalQuantity: boolean
+  quantityStep: number
+  assignedToBranch: boolean
+  cataloguePriceCents: number | null
+  /** Known when chosen from the picker; an edit's existing lines do not carry it. */
+  stockQuantity?: number
+}
+
+export type DeskDraftLine = {
+  product: DeskLineProduct
+  /** Typed quantity; blank or zero means not ordered. */
+  quantity: string
+  /** Typed unit price in rupees, including tax; required on every ordered line. */
+  price: string
+}
+
+/** Lines keyed by global product id. */
+export type DeskLines = Readonly<Record<number, DeskDraftLine>>
 
 export type DeskDraft = {
   organizationId: number | null
   branchId: number | null
-  /** Typed quantities keyed by organization inventory id; blank means not ordered. */
-  quantities: Readonly<Record<number, string>>
-  /** Typed unit prices in rupees, keyed the same way; blank means the catalogue price. */
-  prices: Readonly<Record<number, string>>
+  lines: DeskLines
   intakeChannel: IntakeChannel | ""
   intakeReference: string
   poNumber: string
@@ -37,8 +72,8 @@ export type DeskDraft = {
   intakeAttachmentKey: string | null
 }
 
-/** One line of a desk request; `unitPriceCents` only when the desk typed a price. */
-export type DeskOrderLine = { organizationInventoryId: number; quantity: number; unitPriceCents?: number }
+/** One line of a desk request: a global product, its quantity and its agreed tax-inclusive price. */
+export type DeskOrderLine = { globalProductId: number; quantity: number; unitPriceCents: number }
 
 export type DeskOrderRequest = {
   organizationId: number
@@ -68,39 +103,65 @@ export function screenshotFileError(file: { type: string; size: number }): strin
   return null
 }
 
-/** The lines the desk user has actually filled in. */
-export function filledLines(draft: Pick<DeskDraft, "quantities">): { organizationInventoryId: number; raw: string }[] {
-  return Object.entries(draft.quantities)
-    .filter(([, raw]) => raw.trim() !== "")
-    .map(([id, raw]) => ({ organizationInventoryId: Number(id), raw: raw.trim() }))
+/** The product a picker row describes, kept on the line it starts. */
+export function lineProductOf(item: DeskCatalogueItem): DeskLineProduct {
+  return {
+    globalProductId: item.globalProductId,
+    name: item.name,
+    productCode: item.productCode,
+    unit: item.unit,
+    allowDecimalQuantity: item.allowDecimalQuantity,
+    quantityStep: item.quantityStep,
+    assignedToBranch: item.assignedToBranch,
+    cataloguePriceCents: item.cataloguePriceCents,
+    stockQuantity: item.stockQuantity,
+  }
 }
 
-/**
- * Filled-in lines whose product the branch catalogue no longer offers — it was
- * hidden, deactivated or unassigned after it was chosen, or after the order
- * being edited was placed. The form has no row for them, so it must list them
- * to be removed; otherwise the draft can never be sent and nothing says why.
- */
-export function unavailableDraftLines(
-  quantities: Readonly<Record<number, string>>,
-  catalogue: readonly Pick<DeskCatalogueItem, "organizationInventoryId">[],
-): number[] {
-  const offered = new Set(catalogue.map((item) => item.organizationInventoryId))
-  return filledLines({ quantities })
-    .map((line) => line.organizationInventoryId)
-    .filter((id) => !offered.has(id))
+function isOrdered(line: DeskDraftLine): boolean {
+  const raw = line.quantity.trim()
+  if (raw === "") return false
+  const quantity = parseQuantity(raw)
+  // A typed quantity that is not a positive number is still "ordered", so the
+  // form reports it rather than silently dropping the line.
+  return !(Number.isFinite(quantity) && quantity === 0)
+}
+
+/** The lines the desk has actually ordered, by product name. */
+export function chosenLines(lines: DeskLines): DeskDraftLine[] {
+  return Object.values(lines)
+    .filter(isOrdered)
+    .sort((a, b) => a.product.name.localeCompare(b.product.name) || a.product.globalProductId - b.product.globalProductId)
+}
+
+/** Set a line's quantity, starting the line from its product when it is new. */
+export function withLineQuantity(lines: DeskLines, product: DeskLineProduct, quantity: string): DeskLines {
+  const current = lines[product.globalProductId]
+  return { ...lines, [product.globalProductId]: { product: current?.product ?? product, quantity, price: current?.price ?? "" } }
+}
+
+/** Set a line's price, starting the line from its product when it is new. */
+export function withLinePrice(lines: DeskLines, product: DeskLineProduct, price: string): DeskLines {
+  const current = lines[product.globalProductId]
+  return { ...lines, [product.globalProductId]: { product: current?.product ?? product, quantity: current?.quantity ?? "", price } }
+}
+
+export function withoutLine(lines: DeskLines, globalProductId: number): DeskLines {
+  const next = { ...lines }
+  delete next[globalProductId]
+  return next
 }
 
 export type DeskPriceInput =
-  /** Nothing typed: the line is charged the catalogue price. */
-  | { kind: "catalogue" }
+  | { kind: "missing"; error: string }
   | { kind: "entered"; cents: number }
   | { kind: "invalid"; error: string }
 
 /**
- * What the desk typed in a line's price box: rupees with at most two decimals,
- * more than zero; blank means the catalogue price. The server holds the same
- * bounds (`MIN_ENTERED_UNIT_PRICE_CENTS`, `MAX_PRICE_CENTS`).
+ * What the desk typed in a line's price box: rupees with at most two
+ * decimals, more than zero, including tax. Blank is missing — the price is
+ * required. The server holds the same bounds (`MIN_ENTERED_UNIT_PRICE_CENTS`,
+ * `MAX_PRICE_CENTS`).
  */
 export function parseDeskPriceInput(raw: string | undefined, productName: string): DeskPriceInput {
   const parsed = parsePriceInput(raw ?? "")
@@ -112,64 +173,46 @@ export function parseDeskPriceInput(raw: string | undefined, productName: string
         : `Enter the price for ${productName} in rupees, e.g. 250 or 250.50`,
     }
   }
-  if (parsed.cents === null) return { kind: "catalogue" }
+  if (parsed.cents === null) return { kind: "missing", error: `Enter the price for ${productName}, including tax` }
   if (parsed.cents <= 0) return { kind: "invalid", error: `The price for ${productName} must be more than zero` }
   return { kind: "entered", cents: parsed.cents }
 }
 
-/**
- * The unit price a line will be charged: the typed one when it is a valid
- * price, else the catalogue's (null when the catalogue has none).
- */
-export function deskLineUnitPriceCents(item: Pick<DeskCatalogueItem, "name" | "priceCents">, rawPrice: string | undefined): number | null {
-  const price = parseDeskPriceInput(rawPrice, item.name)
-  return price.kind === "entered" ? price.cents : item.priceCents
+/** The valid typed unit price, or null while it is blank or invalid. */
+export function deskLineUnitPriceCents(line: Pick<DeskDraftLine, "product" | "price">): number | null {
+  const price = parseDeskPriceInput(line.price, line.product.name)
+  return price.kind === "entered" ? price.cents : null
 }
 
-/** True when the typed price is valid and differs from the catalogue's. */
-export function isDeskPriceChanged(item: Pick<DeskCatalogueItem, "name" | "priceCents">, rawPrice: string | undefined): boolean {
-  const price = parseDeskPriceInput(rawPrice, item.name)
-  return price.kind === "entered" && price.cents !== item.priceCents
+/** True when a valid typed price differs from the branch's catalogue price for the product. */
+export function isDeskPriceChanged(line: Pick<DeskDraftLine, "product" | "price">): boolean {
+  const cents = deskLineUnitPriceCents(line)
+  return cents !== null && line.product.cataloguePriceCents !== null && cents !== line.product.cataloguePriceCents
 }
 
-/** The filled-in lines, validated against the branch catalogue, or why not. */
-export function buildDeskOrderLines(
-  quantities: Readonly<Record<number, string>>,
-  catalogue: readonly DeskCatalogueItem[],
-  prices: Readonly<Record<number, string>> = {},
-): { ok: true; items: DeskOrderLine[] } | { ok: false; error: string } {
-  const byId = new Map(catalogue.map((item) => [item.organizationInventoryId, item]))
+/** The ordered lines, validated, or the first reason they cannot be sent. */
+export function buildDeskOrderLines(lines: DeskLines): { ok: true; items: DeskOrderLine[] } | { ok: false; error: string } {
   const items: DeskOrderLine[] = []
-  for (const line of filledLines({ quantities })) {
-    const product = byId.get(line.organizationInventoryId)
-    if (!product) return { ok: false, error: "A product in this order is no longer available for this branch" }
-    const check = validateProductQuantity(line.raw, {
-      allowDecimalQuantity: product.allowDecimalQuantity,
-      quantityStep: product.quantityStep,
-      label: `Quantity for ${product.name}`,
+  for (const line of chosenLines(lines)) {
+    const check = validateProductQuantity(line.quantity.trim(), {
+      allowDecimalQuantity: line.product.allowDecimalQuantity,
+      quantityStep: line.product.quantityStep,
+      label: `Quantity for ${line.product.name}`,
     })
     if (!check.ok) return { ok: false, error: check.error }
-    const price = parseDeskPriceInput(prices[product.organizationInventoryId], product.name)
-    if (price.kind === "invalid") return { ok: false, error: price.error }
-    if (price.kind === "catalogue" && product.priceCents === null) {
-      return { ok: false, error: `${product.name} has no catalogue price; enter its price` }
-    }
-    items.push({
-      organizationInventoryId: product.organizationInventoryId,
-      quantity: check.quantity,
-      ...(price.kind === "entered" ? { unitPriceCents: price.cents } : {}),
-    })
+    const price = parseDeskPriceInput(line.price, line.product.name)
+    if (price.kind !== "entered") return { ok: false, error: price.error }
+    items.push({ globalProductId: line.product.globalProductId, quantity: check.quantity, unitPriceCents: price.cents })
   }
   return items.length === 0 ? { ok: false, error: "Add at least one product" } : { ok: true, items }
 }
 
-export function buildDeskOrderRequest(draft: DeskDraft, catalogue: readonly DeskCatalogueItem[]): DeskDraftResult {
+export function buildDeskOrderRequest(draft: DeskDraft): DeskDraftResult {
   if (!draft.organizationId) return { ok: false, error: "Choose an organization" }
   if (!draft.branchId) return { ok: false, error: "Choose a branch" }
 
-  const lines = buildDeskOrderLines(draft.quantities, catalogue, draft.prices)
+  const lines = buildDeskOrderLines(draft.lines)
   if (!lines.ok) return lines
-  const items = lines.items
 
   if (!(INTAKE_CHANNELS as readonly string[]).includes(draft.intakeChannel)) {
     return { ok: false, error: "Choose where this order came from" }
@@ -189,7 +232,7 @@ export function buildDeskOrderRequest(draft: DeskDraft, catalogue: readonly Desk
     body: {
       organizationId: draft.organizationId,
       branchId: draft.branchId,
-      items,
+      items: lines.items,
       intakeChannel: draft.intakeChannel as IntakeChannel,
       intakeReference,
       ...(poNumber ? { poNumber } : {}),
@@ -200,22 +243,16 @@ export function buildDeskOrderRequest(draft: DeskDraft, catalogue: readonly Desk
 }
 
 /**
- * The estimated total of the filled-in lines, in cents, at the price each will
- * be charged — the typed one, else the catalogue's. Lines whose quantity is not
- * yet a number, or that have no price either way, contribute nothing.
+ * The estimated total of the ordered lines, in cents, at the prices typed —
+ * which already include tax, so nothing is added. A line whose quantity or
+ * price is not yet valid contributes nothing.
  */
-export function estimateDraftTotalCents(
-  draft: Pick<DeskDraft, "quantities"> & Partial<Pick<DeskDraft, "prices">>,
-  catalogue: readonly DeskCatalogueItem[],
-): number {
-  const byId = new Map(catalogue.map((item) => [item.organizationInventoryId, item]))
+export function estimateDraftTotalCents(lines: DeskLines): number {
   let total = 0
-  for (const line of filledLines(draft)) {
-    const product = byId.get(line.organizationInventoryId)
-    const quantity = parseQuantity(line.raw)
-    if (!product || !Number.isFinite(quantity) || quantity <= 0) continue
-    const unitPriceCents = deskLineUnitPriceCents(product, draft.prices?.[line.organizationInventoryId])
-    if (unitPriceCents === null) continue
+  for (const line of chosenLines(lines)) {
+    const quantity = parseQuantity(line.quantity)
+    const unitPriceCents = deskLineUnitPriceCents(line)
+    if (unitPriceCents === null || !Number.isFinite(quantity) || quantity <= 0) continue
     total += calculateLineCents(unitPriceCents, quantity)
   }
   return total
@@ -228,23 +265,67 @@ export type DeskEditRequest = {
 }
 
 /**
- * An edit of an Active desk order: the full set of lines it should now have,
+ * An edit of a pending desk order: the full set of lines it should now have,
  * plus notes and PO number (an empty PO number clears it).
  */
 export function buildDeskEditRequest(
-  input: {
-    quantities: Readonly<Record<number, string>>
-    prices?: Readonly<Record<number, string>>
-    notes: string
-    poNumber: string
-  },
-  catalogue: readonly DeskCatalogueItem[],
+  input: { lines: DeskLines; notes: string; poNumber: string },
 ): { ok: true; body: DeskEditRequest } | { ok: false; error: string } {
-  const lines = buildDeskOrderLines(input.quantities, catalogue, input.prices)
+  const lines = buildDeskOrderLines(input.lines)
   if (!lines.ok) return lines
   const notes = input.notes.trim()
   if (notes.length > NOTES_MAX_LENGTH) return { ok: false, error: `Notes must be at most ${NOTES_MAX_LENGTH} characters` }
   return { ok: true, body: { items: lines.items, notes, poNumber: input.poNumber.trim() || null } }
+}
+
+/** A desk order's line as `GET /api/v1/order-desk/orders` returns it, enough to edit it. */
+export type DeskOrderItemForEdit = {
+  organizationInventoryId: number | null
+  globalProductId: number
+  productName: string
+  productCode: string | null
+  unit: string | null
+  allowDecimalQuantity: boolean
+  quantityStep: number
+  quantity: number
+  priceCents: number
+  priceEnteredManually?: boolean
+  cataloguePriceCents?: number | null
+}
+
+/**
+ * An existing order's lines as an edit draft. Each keeps the price it is
+ * charged now, so saving without touching a line changes nothing about it.
+ */
+export function deskLinesFromOrder(items: readonly DeskOrderItemForEdit[]): DeskLines {
+  const lines: Record<number, DeskDraftLine> = {}
+  for (const item of items) {
+    lines[item.globalProductId] = {
+      product: {
+        globalProductId: item.globalProductId,
+        name: item.productName,
+        productCode: item.productCode,
+        unit: item.unit ?? "unit",
+        allowDecimalQuantity: item.allowDecimalQuantity,
+        quantityStep: item.quantityStep,
+        assignedToBranch: item.organizationInventoryId !== null,
+        cataloguePriceCents: referenceCataloguePrice(item),
+      },
+      quantity: String(item.quantity),
+      price: formatPriceInput(item.priceCents),
+    }
+  }
+  return lines
+}
+
+/**
+ * The branch's price at the time the line was ordered: recorded beside a
+ * typed price, or the line's own price when it was charged the catalogue
+ * price. None for a product the branch did not carry.
+ */
+function referenceCataloguePrice(item: DeskOrderItemForEdit): number | null {
+  if (item.priceEnteredManually) return item.cataloguePriceCents ?? null
+  return item.organizationInventoryId === null ? null : item.priceCents
 }
 
 export type DeskRefundLine = { id: number; productName: string; quantity: number }
@@ -275,16 +356,22 @@ export function buildDeskRefundRequest(
   return { ok: true, body: { items, reason: trimmed } }
 }
 
-export type DeskDraftCheck = { key: "customer" | "products" | "channel" | "reference" | "screenshot"; label: string; done: boolean }
+export type DeskDraftCheck = {
+  key: "customer" | "products" | "prices" | "channel" | "reference" | "screenshot"
+  label: string
+  done: boolean
+}
 
 /**
  * What a new order still needs, in the order the form asks for it — shown
  * beside the Create button so it is clear why the order cannot be sent yet.
  */
 export function deskDraftChecklist(draft: DeskDraft): DeskDraftCheck[] {
+  const chosen = chosenLines(draft.lines)
   return [
     { key: "customer", label: "Organization and branch", done: Boolean(draft.organizationId && draft.branchId) },
-    { key: "products", label: "At least one product", done: filledLines(draft).length > 0 },
+    { key: "products", label: "At least one product", done: chosen.length > 0 },
+    { key: "prices", label: "A price for every product", done: chosen.length > 0 && chosen.every((line) => deskLineUnitPriceCents(line) !== null) },
     { key: "channel", label: "Order channel", done: draft.intakeChannel !== "" },
     { key: "reference", label: "Message reference", done: draft.intakeReference.trim() !== "" },
     { key: "screenshot", label: "Screenshot of the message", done: Boolean(draft.intakeAttachmentKey) },

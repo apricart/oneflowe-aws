@@ -42,6 +42,7 @@ export const ORDER_REPORT_SORT_KEYS = [
   "deliveryStatus",
   "paymentStatus",
   "approvalLevel",
+  "financialApproverLevel",
   "approver",
   "quantityOrdered",
   "quantityDelivered",
