@@ -312,9 +312,17 @@ describe.skipIf(!hasTestDatabase)("the management delivery dashboard through the
       expect(body.orders.total).toBe(5)
     })
 
-    it("lists the most overdue first, with no money and no people", async () => {
+    it("lists the latest approved first, with no money and no people", async () => {
       const { body } = await tenantA()
-      expect(body.orders.items[0]).toMatchObject({
+      expect(body.orders.order).toBe("newest")
+      expect(body.orders.items.map((item: { id: number }) => item.id)).toEqual([
+        orderIds.ONTRACK,
+        orderIds.ONTIME,
+        orderIds.DUESOON,
+        orderIds.OVERDUE,
+        orderIds.LATE,
+      ])
+      expect(body.orders.items[3]).toMatchObject({
         id: orderIds.OVERDUE,
         health: "OVERDUE",
         hoursOverdue: 27,
@@ -322,7 +330,7 @@ describe.skipIf(!hasTestDatabase)("the management delivery dashboard through the
         city: "Lahore",
         region: "Unknown",
       })
-      expect(body.orders.items[1]).toMatchObject({ id: orderIds.DUESOON, health: "DUE_SOON", city: "Hyderabad", region: "South" })
+      expect(body.orders.items[2]).toMatchObject({ id: orderIds.DUESOON, health: "DUE_SOON", city: "Hyderabad", region: "South" })
       expect(JSON.stringify(body)).not.toMatch(/cents|price|email|phone|fullName|createdByUserId/i)
     })
 
