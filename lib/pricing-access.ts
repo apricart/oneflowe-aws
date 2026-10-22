@@ -58,6 +58,43 @@ export const GLOBAL_PRICE_VIEW_ROLES = ["SUPER_ADMIN"] as const
 
 export type GlobalPriceViewRole = (typeof GLOBAL_PRICE_VIEW_ROLES)[number]
 
+/**
+ * The only roles permitted to set the price of **one order line** — never a
+ * catalogue tier. Also a list of one: Apricart's Order Desk keys in orders a
+ * customer agreed by email or WhatsApp, sometimes at a price of their own
+ * (plans/OF-ORDER-DESK-line-price-entry.md).
+ *
+ * Deliberately separate from `PRICE_MUTATION_ROLES`: a line price changes what
+ * one order is charged and nothing else, so it carries no authority over the
+ * catalogue — and Super Admin's authority over the catalogue does not make
+ * every order it places hand-priced. Every desk order waits for an Apricart
+ * Executive, who sees the catalogue price beside the entered one.
+ */
+export const ORDER_LINE_PRICE_ROLES = ["ORDER_DESK"] as const
+
+export const ORDER_LINE_PRICE_FORBIDDEN_MESSAGE =
+  "Forbidden: only the Order Desk may set the price of an order line"
+
+/** True only for a role allowed to set an order line's price. */
+export function canSetOrderLinePrice(role: unknown): boolean {
+  return typeof role === "string"
+    && (ORDER_LINE_PRICE_ROLES as readonly string[]).includes(role)
+}
+
+/**
+ * Guard for an order write whose lines may carry `unitPriceCents`. Returns the
+ * failure when any line carries one and the caller may not set it — refused,
+ * never stripped, so a caller that thinks it priced a line is told it did not.
+ */
+export function orderLinePriceFailure(
+  role: unknown,
+  items: readonly { unitPriceCents?: number | null }[],
+): PriceAccessFailure | null {
+  const touchesPrice = items.some((item) => item.unitPriceCents !== undefined && item.unitPriceCents !== null)
+  if (!touchesPrice || canSetOrderLinePrice(role)) return null
+  return { message: ORDER_LINE_PRICE_FORBIDDEN_MESSAGE, status: 403 }
+}
+
 /** True only for a role allowed to see the global base price. */
 export function canViewGlobalBasePrice(role: unknown): role is GlobalPriceViewRole {
   return typeof role === "string"

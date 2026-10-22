@@ -131,7 +131,7 @@ import {
 } from "@/lib/server/multi-branch-scope"
 import { canOrderPortalReadOrder, isGroupPortalOrder } from "@/lib/group-order-visibility"
 // The read rule, shared with what is attached to an order (its delivery challan).
-import { hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"
+import { ORDER_DETAIL_READ_ROLES, hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"
 import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
 
 
@@ -641,7 +641,7 @@ export async function GET(
   _: Request,
   props: { params: Promise<{ id: string }> },
 ) {
-  const authError = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"], { viewerReadsAsHeadOffice: true })
+  const authError = await requireApiRole([...ORDER_DETAIL_READ_ROLES], { viewerReadsAsHeadOffice: true })
   if (authError) return authError
 
   const { id } = await props.params

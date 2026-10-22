@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test"
 
 import { openFromSidebar } from "./support/admin-ui"
+import { verifyJoinEmail } from "./support/join-email"
 import { closeRoleRenameNoticeWhenShown, signIn, testDatabaseUrl } from "./support/session"
 import { destroyTenant, queryTestDb, seedTenant, tenantNames, type Tenant } from "./support/tenant"
 
@@ -80,10 +81,12 @@ test.describe.serial("joining an organization", () => {
       await page.getByLabel("Organization join code").fill(JOIN_CODE)
       await page.getByRole("button", { name: "Continue" }).click()
       await expect(page.getByText(`@${EMAIL_DOMAIN}`, { exact: true })).toBeVisible({ timeout: 150_000 })
+      // The address is proven by an emailed code before the form is shown.
+      await verifyJoinEmail(page, { joinCode: JOIN_CODE, localPart: "joining.applicant", domain: EMAIL_DOMAIN })
+      await expect(page.getByLabel(/^Work email \(verified\)/)).toHaveValue("joining.applicant")
 
       await page.getByLabel(/^First name/).fill("Joining")
       await page.getByLabel(/^Last name/).fill("Applicant")
-      await page.getByLabel(/^Work email/).fill("joining.applicant")
       await page.getByLabel(/^Username/).fill(applicantUsername)
       await page.getByLabel(/^Password/).fill(APPLICANT_PASSWORD)
       await page.getByLabel(/^Confirm password/).fill(APPLICANT_PASSWORD)

@@ -11,18 +11,20 @@
  * Level 2 makes them a Level 2 approver for **everyone** at the initiator's
  * branches, and they must reach every one of those branches.
  *
- * **The approver's role follows how many branches it will reach**
- * (plans/OF-JOIN-department-signup-multi-user.md, "Approver roles"): one branch
- * is a Branch Admin of that branch, more than one is a Group User.
+ * **Levels 1 and 2 are always Group Users.** Other levels follow how many
+ * branches the approver will reach (plans/OF-JOIN-department-signup-multi-user.md,
+ * "Approver roles"): one branch is a Branch Admin of that branch, more than
+ * one is a Group User.
  *
- *   * A new approver for one branch is created a Branch Admin — and is blocked
- *     where the organization's approver role is Head Office, because a Branch
- *     Admin cannot hold a level there. For more than one branch it is a Group
- *     User.
- *   * An existing Branch Admin that would reach more than its own branch is
- *     converted to a Group User assigned to its old branch and the initiator's
- *     ones — refused while it still has orders of its own pending or approved,
- *     the rule every role change follows.
+ *   * A new Level 1 or Level 2 approver is always a Group User. At later
+ *     levels, one branch creates a Branch Admin — and is blocked where the
+ *     organization's approver role is Head Office, because a Branch Admin
+ *     cannot hold a level there. More than one branch creates a Group User.
+ *   * An existing Branch Admin assigned to Level 1 or Level 2, or one that
+ *     would reach more than its own branch, is converted to a Group User
+ *     assigned to its old branch and the initiator's ones — refused while it
+ *     still has orders of its own pending or approved, the rule every role
+ *     change follows.
  *   * No other existing account changes role: a Group User stays a Group User
  *     even for one branch, Head Office stays Head Office, and any other role is
  *     blocked as before.
@@ -110,16 +112,24 @@ export function approverBranchCount(input: { initiatorBranchIds: readonly number
   return new Set(input.initiatorBranchIds).size + input.newBranchCount
 }
 
-/** The role a new approver is created as: Branch Admin for exactly one branch, Group User for more. */
-export function newApproverRole(branchCount: number): NewApproverRole {
-  return branchCount === 1 ? "BRANCH_ADMIN" : "GROUP_USER"
+/** Levels 1 and 2 always use the organization-wide Financial Approver role. */
+export function levelRequiresGroupFinancialApprover(level: number): boolean {
+  return level === 1 || level === 2
+}
+
+/**
+ * The role a new approver is created as. Levels 1 and 2 are always Group
+ * Users; remaining levels use a Branch Admin only when they reach one branch.
+ */
+export function newApproverRole(level: number, branchCount: number): NewApproverRole {
+  return levelRequiresGroupFinancialApprover(level) || branchCount !== 1 ? "GROUP_USER" : "BRANCH_ADMIN"
 }
 
 export const NEW_BRANCH_ADMIN_APPROVER_REFUSAL =
   "A new approver for one branch is created as a Financial Approver, and in this organization a Financial Approver cannot hold an approval level (its approver role is Head Office). Name an existing Group Financial Approver instead."
 
 function resolveNewApprover(input: PlanInput): ApproverResolution {
-  const role = newApproverRole(approverBranchCount(input))
+  const role = newApproverRole(input.level, approverBranchCount(input))
   if (role === "BRANCH_ADMIN" && !canHoldApprovalLevel("BRANCH_ADMIN", input.organization)) {
     return { kind: "blocked", reason: NEW_BRANCH_ADMIN_APPROVER_REFUSAL }
   }
@@ -127,14 +137,15 @@ function resolveNewApprover(input: PlanInput): ApproverResolution {
 }
 
 /**
- * Whether an existing Branch Admin would reach more than its own branch, and so
- * has to become a Group User to approve for all of the initiator's branches.
+ * Whether an existing Branch Admin must become a Group User: Levels 1 and 2
+ * always use that role; other levels convert when they reach past its branch.
  */
 export function branchAdminBecomesGroupUser(
   candidate: Pick<ApproverCandidate, "role" | "branchId">,
-  input: { initiatorBranchIds: readonly number[]; newBranchCount: number },
+  input: { level: number; initiatorBranchIds: readonly number[]; newBranchCount: number },
 ): boolean {
   if (candidate.role !== "BRANCH_ADMIN") return false
+  if (levelRequiresGroupFinancialApprover(input.level)) return true
   return input.newBranchCount > 0 || input.initiatorBranchIds.some((branchId) => branchId !== candidate.branchId)
 }
 

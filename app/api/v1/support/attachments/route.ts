@@ -16,7 +16,7 @@ import {
 import { sanitizeRasterUpload } from "@/lib/server/upload-security"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
 import { getSupportThreadForViewer } from "@/lib/server/support-threads"
-import { resolveSupportAuthor, supportViewerFromSession } from "@/lib/server/support-session"
+import { resolveSupportAuthor, supportViewerFromSession, withSupportReach } from "@/lib/server/support-session"
 
 /**
  * Uploading a screenshot to attach to a support message.
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const viewer = supportViewerFromSession(session)
+    const viewer = await withSupportReach(supportViewerFromSession(session))
     if (!viewer || !isSupportParticipantRole(viewer.role)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }

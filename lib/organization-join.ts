@@ -236,3 +236,35 @@ export function joinEmailDomainRefusal(
   }
   return null
 }
+
+/* ── Proving the address (plans/OF-JOIN-email-otp-verification.md) ─────── */
+
+/** How long the emailed code may be entered. */
+export const JOIN_EMAIL_CODE_VALIDITY_MINUTES = 10
+
+/** How long a verified address may be used to submit the form. */
+export const JOIN_EMAIL_PROOF_VALIDITY_MINUTES = 60
+
+/** The emailed code: six digits. */
+export const JOIN_EMAIL_OTP_PATTERN = /^\d{6}$/
+
+/** The single-use proof the verify step hands back: 32 random bytes, base64url. */
+export const JOIN_EMAIL_PROOF_PATTERN = /^[A-Za-z0-9_-]{43}$/
+
+/**
+ * One answer for every refused code — wrong, expired, spent, or a challenge
+ * that never existed — and no remaining-attempt count, so the verify step tells
+ * a guesser nothing beyond "no".
+ */
+export const JOIN_EMAIL_CODE_INVALID_MESSAGE =
+  "The code is invalid or expired. Request a new code and try again."
+
+/** The submit's answer to a missing, lapsed, spent or mismatched proof. */
+export const JOIN_EMAIL_NOT_VERIFIED_MESSAGE =
+  "Your email address is not verified, or its verification has expired. Go back and verify your email again."
+
+export const JOIN_EMAIL_CODE_SEND_FAILED_MESSAGE =
+  "We could not send a code to that address. Please try again in a few minutes."
+
+export const JOIN_EMAIL_DAILY_LIMIT_MESSAGE =
+  "Too many codes have been requested for this email address today. Please try again tomorrow."

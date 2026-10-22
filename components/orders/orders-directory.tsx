@@ -129,6 +129,12 @@ type OrdersDirectoryProps = {
   isSuperAdmin: boolean
   isBranchAdmin: boolean
   isHeadOffice?: boolean
+  /** Presentation guard for roles that may inspect orders but never act on them. */
+  readOnly?: boolean
+  /** Platform-wide readers need the tenant named on every row. */
+  showOrganization?: boolean
+  /** False when the caller's confined page area does not include invoices. */
+  showInvoiceLink?: boolean
   canDecideOrders?: boolean
   showCostCenterId?: boolean
   pricesHidden?: boolean
@@ -231,6 +237,9 @@ export function OrdersDirectory({
   isSuperAdmin,
   isBranchAdmin,
   isHeadOffice,
+  readOnly = false,
+  showOrganization,
+  showInvoiceLink = true,
   canDecideOrders = false,
   showCostCenterId,
   pricesHidden = false,
@@ -244,7 +253,8 @@ export function OrdersDirectory({
   // An Order Desk entry is an Apricart Executive's to decide, never the tenant's;
   // an order waiting at an approval level this reader does not hold is that
   // level's holders' (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md).
-  const canDecideViewingOrder = canDecideOrders
+  const canDecideViewingOrder = !readOnly
+    && canDecideOrders
     && !viewingOrder?.decidedByApricart
     && !viewingOrder?.levelDecisionLocked
 
@@ -267,8 +277,9 @@ export function OrdersDirectory({
   const [orderDetailsError, setOrderDetailsError] = useState<string | null>(null)
   const [orderDetailsRequestKey, setOrderDetailsRequestKey] = useState(0)
   const viewingOrderId = viewingOrder?.id
-  const showOrganizationColumn = isSuperAdmin && userRole === "SUPER_ADMIN"
-  const viewingOrderCanHandoffToken = !isSuperAdmin
+  const showOrganizationColumn = showOrganization ?? (isSuperAdmin && userRole === "SUPER_ADMIN")
+  const viewingOrderCanHandoffToken = !readOnly
+    && !isSuperAdmin
     && String(viewingOrder?.status ?? "").trim().toUpperCase() === "APPROVED"
     && typeof viewingOrder?.approvalToken === "string"
     && viewingOrder.approvalToken.trim().length > 0
@@ -286,7 +297,7 @@ export function OrdersDirectory({
   const availableTableColumnKeys = new Set(availableTableColumns.map((column) => column.key))
   const selectedTableColumns = availableTableColumns.filter((column) => isVisible(column.key))
   const selectedTableColumnKeys = selectedTableColumns.map((column) => column.key)
-  const showFulfillmentColumns = !isSuperAdmin
+  const showFulfillmentColumns = !readOnly && !isSuperAdmin
   const fulfillmentColumnsWidth = showFulfillmentColumns
     ? TOKEN_COLUMN_WIDTH + ACTION_COLUMN_WIDTH
     : 0
@@ -1116,7 +1127,7 @@ export function OrdersDirectory({
                   })()
                 )}
 
-                {isInvoiceAvailableForOrder(viewingOrder) && (
+                {showInvoiceLink && isInvoiceAvailableForOrder(viewingOrder) && (
                   <div className="flex bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 h-14 rounded-2xl justify-center items-center border border-dashed border-slate-200 dark:border-slate-700 transition-colors">
                     <ReceiptIconButton
                       orderId={viewingOrder.id}

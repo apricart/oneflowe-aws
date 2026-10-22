@@ -6,6 +6,7 @@ import * as mockedNextAuth from "next-auth"
 
 import * as lookupRoute from "@/app/api/v1/join/lookup/route"
 import * as submitRoute from "@/app/api/v1/join/requests/route"
+import { submitWithJoinEmailProof } from "./helpers/join-email-proof"
 import * as joinCodeRoute from "@/app/api/v1/organizations/join-code/route"
 import * as organizationRoute from "@/app/api/v1/organizations/[id]/route"
 import * as organizationsRoute from "@/app/api/v1/organizations/route"
@@ -72,7 +73,7 @@ const { getServerSession } = mockedNextAuth
 const { POST: createOrganization } = organizationsRoute
 const { PATCH: updateOrganization } = organizationRoute
 const { POST: lookup } = lookupRoute
-const { POST: submit } = submitRoute
+const submit = submitWithJoinEmailProof(submitRoute.POST)
 const { GET: readJoinCode } = joinCodeRoute
 
 type Actor = { id: string; role: string; organizationId: number | null }

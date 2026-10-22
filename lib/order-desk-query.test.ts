@@ -20,6 +20,7 @@ describe("the desk's order list query", () => {
         organizationId: null,
         branchId: null,
         status: "awaiting_approval",
+        paymentStatus: null,
         search: "",
         page: 1,
         limit: DESK_ORDER_PAGE_SIZE_DEFAULT,
@@ -28,9 +29,9 @@ describe("the desk's order list query", () => {
   })
 
   it("reads the filters it allows", () => {
-    expect(parse("organizationId=4&branchId=9&status=READY_TO_FULFIL&q=%20Ali%20&page=3&limit=10")).toEqual({
+    expect(parse("organizationId=4&branchId=9&status=READY_TO_FULFIL&paymentStatus=paid&q=%20Ali%20&page=3&limit=10")).toEqual({
       ok: true,
-      value: { organizationId: 4, branchId: 9, status: "ready_to_fulfil", search: "Ali", page: 3, limit: 10 },
+      value: { organizationId: 4, branchId: 9, status: "ready_to_fulfil", paymentStatus: "PAID", search: "Ali", page: 3, limit: 10 },
     })
   })
 
@@ -50,6 +51,7 @@ describe("the desk's order list query", () => {
     "status=pending",
     "status=active",
     "status=all;DROP",
+    "paymentStatus=settled",
     `q=${"x".repeat(DESK_ORDER_SEARCH_MAX_LENGTH + 1)}`,
   ])("refuses %s", (query) => {
     expect(parse(query).ok).toBe(false)

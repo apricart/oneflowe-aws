@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Building2, Cloud, CloudOff, Layers, LifeBuoy, Loader2, Menu, ShoppingBag } from "lucide-react"
+import { Building2, Cloud, CloudOff, Layers, LifeBuoy, Loader2, Menu, Route, ShoppingBag } from "lucide-react"
 
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { Button } from "@/components/ui/button"
@@ -151,6 +151,13 @@ export function StorefrontHeader({
               </div>
             </div>
           )}
+
+          <Button asChild type="button" variant="outline" size="sm" className="gap-2">
+            <Link href="/group-portal/tracking">
+              <Route className="h-4 w-4" />
+              <span className="hidden sm:inline">Track order</span>
+            </Link>
+          </Button>
 
           <Button
             type="button"

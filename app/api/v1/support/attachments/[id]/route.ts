@@ -11,7 +11,7 @@ import {
   isValidSupportAttachmentKey,
 } from "@/lib/server/image-storage"
 import { getSupportAttachmentForViewer } from "@/lib/server/support-threads"
-import { supportReaderFromSession } from "@/lib/server/support-session"
+import { supportReaderFromSession, withSupportReach } from "@/lib/server/support-session"
 
 /**
  * Streams one support attachment.
@@ -36,7 +36,7 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const viewer = supportReaderFromSession(session)
+    const viewer = await withSupportReach(supportReaderFromSession(session))
     if (!viewer || !isSupportParticipantRole(viewer.role)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }

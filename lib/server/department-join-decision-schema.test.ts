@@ -60,3 +60,32 @@ describe("departmentJoinDecisionSchema — new branch details", () => {
     if (!parsed.success) expect(validationMessage(parsed.error)).toBe("New branch: the city can be at most 100 characters")
   })
 })
+
+describe("departmentJoinDecisionSchema — the created branch's type (plans/OF-JOIN-new-branch-parent-child.md)", () => {
+  const parse = (newBranches: Array<Record<string, unknown>>) =>
+    departmentJoinDecisionSchema.safeParse({ decision: "approve", newBranches, expectedResolutions: [] })
+
+  it("accepts a parent created with its child, and a child of an existing branch", () => {
+    expect(parse([
+      { requestBranchId: 1, ...complete, hierarchyRole: "PARENT" },
+      { requestBranchId: 2, ...complete, name: "Kid", hierarchyRole: "CHILD", parentRequestBranchId: 1 },
+      { requestBranchId: 3, ...complete, name: "Kiosk", hierarchyRole: "CHILD", parentBranchId: 7 },
+    ]).success).toBe(true)
+  })
+
+  it.each([
+    ["a child with no parent", [{ requestBranchId: 1, ...complete, hierarchyRole: "CHILD" }], /Choose the parent branch/],
+    ["a child with two parents", [{ requestBranchId: 1, ...complete, hierarchyRole: "CHILD", parentBranchId: 7, parentRequestBranchId: 2 }], /Choose one parent/],
+    ["a standalone with a parent", [{ requestBranchId: 1, ...complete, parentBranchId: 7 }], /Only a child branch/],
+    ["a type on a mapped CRC", [{ requestBranchId: 1, mapToBranchId: 7, hierarchyRole: "PARENT" }], /keeps that branch's type/],
+    ["a child of a branch not created as Parent", [
+      { requestBranchId: 1, ...complete },
+      { requestBranchId: 2, ...complete, name: "Kid", hierarchyRole: "CHILD", parentRequestBranchId: 1 },
+    ], /created here as Parent/],
+    ["a child of a request branch not decided here", [{ requestBranchId: 2, ...complete, hierarchyRole: "CHILD", parentRequestBranchId: 99 }], /created here as Parent/],
+  ])("refuses %s, saying why", (_case, newBranches, message) => {
+    const parsed = parse(newBranches)
+    expect(parsed.success).toBe(false)
+    if (!parsed.success) expect(validationMessage(parsed.error)).toMatch(message)
+  })
+})

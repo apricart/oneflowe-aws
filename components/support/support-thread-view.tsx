@@ -1,7 +1,7 @@
 "use client"
 
 import { isReadOnlyRole } from "@/lib/viewer-access"
-import { isApricartSupportRole } from "@/lib/apricart-support-access"
+import { supportLinksOrderInvoice } from "@/lib/support-shell"
 import { useState } from "react"
 import Link from "next/link"
 import { CheckCircle2, Download, Loader2, Lock, RotateCcw, Send } from "lucide-react"
@@ -160,9 +160,9 @@ export function SupportThreadView({ threadId }: Readonly<{ threadId: number }>) 
             </Detail>
             {thread.orderId ? (
               <Detail label="About order">
-                {/* An Apricart Support agent reaches the support pages alone, so
-                    the invoice is named, not linked — the link would only bounce. */}
-                {isApricartSupportRole(sessionRole) ? (
+                {/* Named, not linked, where the invoice page is outside the
+                    role's area (`supportLinksOrderInvoice`). */}
+                {!supportLinksOrderInvoice(sessionRole) ? (
                   <span className="font-semibold">{thread.orderTid || `#${thread.orderId}`}</span>
                 ) : (
                   <Link

@@ -19,8 +19,20 @@ const branch = {
   headCount: 12,
 }
 
+const parents = [{ id: 5, name: "Lahore Head Branch", status: "active" }]
+
+/** Opens a Radix Select by its label and picks one option. */
+function choose(label: string, option: string) {
+  fireEvent.pointerDown(screen.getByLabelText(label), { button: 0, ctrlKey: false, pointerType: "mouse" })
+  fireEvent.click(screen.getByRole("option", { name: option }))
+}
+
 describe("HeadOfficeEditBranchDialog", () => {
   beforeAll(() => {
+    // Radix Select needs layout APIs jsdom does not implement.
+    Element.prototype.scrollIntoView = vi.fn()
+    Element.prototype.hasPointerCapture = vi.fn(() => false)
+    Element.prototype.releasePointerCapture = vi.fn()
     vi.stubGlobal("ResizeObserver", class {
       observe() {}
       unobserve() {}
@@ -45,7 +57,7 @@ describe("HeadOfficeEditBranchDialog", () => {
       json: async () => ({ item: { ...branch, headCount: 40 } }),
     } as Response)
 
-    render(<HeadOfficeEditBranchDialog branch={branch} onSaved={onSaved} />)
+    render(<HeadOfficeEditBranchDialog branch={branch} parentOptions={parents} onSaved={onSaved} />)
     fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
 
     expect((screen.getByLabelText("Head count") as HTMLInputElement).value).toBe("12")
@@ -68,7 +80,7 @@ describe("HeadOfficeEditBranchDialog", () => {
       json: async () => ({ item: branch }),
     } as Response)
 
-    render(<HeadOfficeEditBranchDialog branch={branch} onSaved={vi.fn()} />)
+    render(<HeadOfficeEditBranchDialog branch={branch} parentOptions={parents} onSaved={vi.fn()} />)
     fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
     fireEvent.change(screen.getByLabelText("Head count"), { target: { value: "" } })
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
@@ -77,10 +89,42 @@ describe("HeadOfficeEditBranchDialog", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ headCount: null })
   })
 
+  it("starts from the stored phone, sends a changed one, and clears it to null", async () => {
+    const withPhone = { ...branch, contactPhone: "042-35453651" }
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ item: withPhone }),
+    } as Response)
+
+    render(<HeadOfficeEditBranchDialog branch={withPhone} parentOptions={parents} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+    expect((screen.getByLabelText("Contact phone") as HTMLInputElement).value).toBe("042-35453651")
+
+    fireEvent.change(screen.getByLabelText("Contact phone"), { target: { value: "0300-1234567" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ contactPhone: "0300-1234567" })
+
+    cleanup()
+    render(<HeadOfficeEditBranchDialog branch={withPhone} parentOptions={parents} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+    fireEvent.change(screen.getByLabelText("Contact phone"), { target: { value: "" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ contactPhone: null })
+  })
+
+  it("will not save a contact phone that is not a phone number", () => {
+    render(<HeadOfficeEditBranchDialog branch={branch} parentOptions={parents} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+    fireEvent.change(screen.getByLabelText("Contact phone"), { target: { value: "12" } })
+    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it("sends nothing when nothing changed", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
 
-    render(<HeadOfficeEditBranchDialog branch={branch} onSaved={vi.fn()} />)
+    render(<HeadOfficeEditBranchDialog branch={branch} parentOptions={parents} onSaved={vi.fn()} />)
     fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
 
@@ -89,10 +133,51 @@ describe("HeadOfficeEditBranchDialog", () => {
   })
 
   it("will not submit a malformed head count", () => {
-    render(<HeadOfficeEditBranchDialog branch={branch} onSaved={vi.fn()} />)
+    render(<HeadOfficeEditBranchDialog branch={branch} parentOptions={parents} onSaved={vi.fn()} />)
     fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
     fireEvent.change(screen.getByLabelText("Head count"), { target: { value: "2.5" } })
 
     expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it("sends the type and its parent together when the type changes", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ item: branch }),
+    } as Response)
+
+    render(<HeadOfficeEditBranchDialog branch={branch} parentOptions={parents} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+    choose("Branch type", "Child")
+    choose("Parent branch", "Lahore Head Branch")
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ hierarchyRole: "CHILD", parentBranchId: 5 })
+  })
+
+  it("clears the parent when a child is made standalone", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ item: branch }),
+    } as Response)
+    const child = { ...branch, hierarchyRole: "CHILD", parentBranchId: 5 }
+
+    render(<HeadOfficeEditBranchDialog branch={child} parentOptions={parents} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+    choose("Branch type", "Standalone")
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ hierarchyRole: "STANDALONE", parentBranchId: null })
+  })
+
+  it("keeps a parent that still has children from changing type", () => {
+    const parent = { ...branch, hierarchyRole: "PARENT" }
+    render(<HeadOfficeEditBranchDialog branch={parent} parentOptions={[]} hasChildren onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+
+    expect((screen.getByLabelText("Branch type") as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/has child branches/)).toBeTruthy()
   })
 })

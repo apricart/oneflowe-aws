@@ -57,7 +57,19 @@ export type ExecutiveApprovalItem = ExecutiveApprovalActions & {
   rejectionReason: string | null
   returnedForCorrectionAt: Date | null
   correctionRequestNote: string | null
-  items: { id: number; productName: string; productCode: string | null; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    productName: string
+    productCode: string | null
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually: boolean
+    cataloguePriceCents: number | null
+    /** False when the product was outside the branch's own catalogue when it was ordered. */
+    inBranchCatalogue: boolean
+  }[]
 }
 
 export type ExecutiveApprovalPage = {
@@ -194,6 +206,9 @@ export async function listExecutiveApprovals(
         quantity: orderItems.quantity,
         unit: orderItems.unit,
         priceCents: orderItems.priceCents,
+        organizationInventoryId: orderItems.organizationInventoryId,
+        priceEnteredManually: orderItems.priceEnteredManually,
+        cataloguePriceCents: orderItems.cataloguePriceCents,
       })
       .from(orderItems)
       .where(inArray(orderItems.orderId, orderIds))
@@ -215,10 +230,14 @@ export async function listExecutiveApprovals(
       hasAttachment: intakeAttachmentKey !== null,
       items: lineRows
         .filter((line) => line.orderId === row.id)
-        .map(({ orderId: _orderId, quantity, priceCents, ...line }) => ({
+        .map(({ orderId: _orderId, quantity, priceCents, cataloguePriceCents, organizationInventoryId, ...line }) => ({
           ...line,
+          // Only a desk order reaches this list; its line has no catalogue
+          // entry exactly when the branch did not carry the product.
+          inBranchCatalogue: organizationInventoryId !== null,
           quantity: Number(quantity),
           priceCents: Number(priceCents),
+          cataloguePriceCents: cataloguePriceCents === null ? null : Number(cataloguePriceCents),
         })),
     })),
     pagination: {

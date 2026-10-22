@@ -56,6 +56,7 @@ export const UNKNOWN_REGION_FILTER = "UNKNOWN"
 
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const ALLOWED_QUERY_KEYS = new Set([
+  "orderId",
   "organizationId",
   "branchId",
   "region",
@@ -74,6 +75,7 @@ const ALLOWED_QUERY_KEYS = new Set([
 export type DeliveryListOrder = "attention" | "newest"
 
 export type DeliveryDashboardFilters = {
+  orderId: number | null
   organizationId: number | null
   branchId: number | null
   region: BranchRegion | typeof UNKNOWN_REGION_FILTER | null
@@ -171,6 +173,7 @@ export function parseDeliveryDashboardQuery(params: URLSearchParams, now: Date):
   const unknownKey = [...params.keys()].find((key) => !ALLOWED_QUERY_KEYS.has(key))
   if (unknownKey) return refuse(`Unknown filter: ${unknownKey}`)
 
+  const orderId = parseOptionalId(readParam(params, "orderId"), "orderId")
   const organizationId = parseOptionalId(readParam(params, "organizationId"), "organizationId")
   const branchId = parseOptionalId(readParam(params, "branchId"), "branchId")
   const region = parseRegion(readParam(params, "region"))
@@ -179,11 +182,11 @@ export function parseDeliveryDashboardQuery(params: URLSearchParams, now: Date):
   const range = parseDeliveredRange(params, now)
   const city = readParam(params, "city")
 
-  for (const result of [organizationId, branchId, region, stage, view, range]) {
+  for (const result of [orderId, organizationId, branchId, region, stage, view, range]) {
     if (!result.ok) return result
   }
   // Unreachable after the loop; repeated so TypeScript narrows each result.
-  if (!organizationId.ok || !branchId.ok || !region.ok || !stage.ok || !view.ok || !range.ok) {
+  if (!orderId.ok || !organizationId.ok || !branchId.ok || !region.ok || !stage.ok || !view.ok || !range.ok) {
     return refuse("Invalid filters")
   }
   if (branchId.value !== null && organizationId.value === null) return refuse("branchId requires organizationId")
@@ -192,6 +195,7 @@ export function parseDeliveryDashboardQuery(params: URLSearchParams, now: Date):
   return {
     ok: true,
     filters: {
+      orderId: orderId.value,
       organizationId: organizationId.value,
       branchId: branchId.value,
       region: region.value,

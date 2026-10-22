@@ -1,11 +1,12 @@
 import "server-only"
 
-import { and, count, desc, eq, gte, ilike, inArray, isNotNull, or, sql, sum, type SQL } from "drizzle-orm"
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, or, sql, sum, type SQL } from "drizzle-orm"
 
 import { branches, budgets, globalProducts, orderItems, orders, organizations, refunds, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isOrderDelivered, normalizeFulfillmentStatus, type FulfillmentStatus } from "@/lib/fulfillment-status"
+import { normalizePaymentStatus } from "@/lib/payment-status"
 import { STAGES_BEFORE_TAX_INVOICE, isBeforeTaxInvoiceStage } from "@/lib/invoice-policy"
 import { deskOrderActions, type DeskOrderActions, type IntakeChannel } from "@/lib/order-desk-access"
 import {
@@ -74,7 +75,23 @@ export type DeskOrderSummary = DeskOrderActions & {
   fulfilledAt: Date | null
   cancelledAt: Date | null
   cancellationReason: string | null
-  items: { id: number; organizationInventoryId: number | null; productName: string; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    /** The branch's catalogue entry the line was ordered against; null when it was outside the branch catalogue. */
+    organizationInventoryId: number | null
+    globalProductId: number
+    productName: string
+    productCode: string | null
+    /** The product's quantity rules today, so an edit is checked the way the server will check it. */
+    allowDecimalQuantity: boolean
+    quantityStep: number
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually: boolean
+    cataloguePriceCents: number | null
+  }[]
 }
 
 export type DeskOrderPage = {
@@ -110,6 +127,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
   // Filters only narrow what the reach above already allows.
   if (query.organizationId !== null) conditions.push(eq(orders.organizationId, query.organizationId))
   if (query.branchId !== null) conditions.push(eq(orders.branchId, query.branchId))
+  if (query.paymentStatus !== null) conditions.push(eq(orderSelectColumns.paymentStatus, query.paymentStatus))
   if (query.search) {
     // A parameter, with the LIKE wildcards in what was typed escaped.
     const pattern = `%${escapeLikePattern(query.search)}%`
@@ -144,6 +162,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       correctionRequestNote: orders.correctionRequestNote,
       rejectionReason: orders.rejectionReason,
       fulfillmentStatus: orders.fulfillmentStatus,
+      paymentStatus: orderSelectColumns.paymentStatus,
       organizationId: orders.organizationId,
       organizationName: organizations.name,
       branchId: orders.branchId,
@@ -180,13 +199,21 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
           id: orderItems.id,
           orderId: orderItems.orderId,
           organizationInventoryId: orderItems.organizationInventoryId,
+          globalProductId: orderItems.globalProductId,
           productName: orderItems.productName,
+          productCode: orderItems.productCode,
+          allowDecimalQuantity: globalProducts.allowDecimalQuantity,
+          quantityStep: globalProducts.quantityStep,
           quantity: orderItems.quantity,
           unit: orderItems.unit,
           priceCents: orderItems.priceCents,
+          priceEnteredManually: orderItems.priceEnteredManually,
+          cataloguePriceCents: orderItems.cataloguePriceCents,
         })
         .from(orderItems)
-        .where(inArray(orderItems.orderId, orderIds)),
+        .leftJoin(globalProducts, eq(globalProducts.id, orderItems.globalProductId))
+        .where(inArray(orderItems.orderId, orderIds))
+        .orderBy(asc(orderItems.id)),
       db
         .select({ orderId: refunds.orderId, amount: sum(refunds.amountCents) })
         .from(refunds)
@@ -201,6 +228,7 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       ...row,
       ...deskOrderActions(row),
       fulfillmentStatus: normalizeFulfillmentStatus(row.fulfillmentStatus),
+      paymentStatus: normalizePaymentStatus(row.paymentStatus),
       totalCents: Number(row.totalCents),
       refundedCents: Number(row.refundedCents ?? 0),
       pendingRefundCents: pendingByOrder.get(row.id) ?? 0,
@@ -210,10 +238,13 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       hasAttachment: intakeAttachmentKey !== null,
       items: lineRows
         .filter((line) => line.orderId === row.id)
-        .map(({ orderId: _orderId, quantity, priceCents, ...line }) => ({
+        .map(({ orderId: _orderId, quantity, priceCents, cataloguePriceCents, allowDecimalQuantity, quantityStep, ...line }) => ({
           ...line,
+          allowDecimalQuantity: allowDecimalQuantity ?? false,
+          quantityStep: quantityStep === null ? 1 : Number(quantityStep),
           quantity: Number(quantity),
           priceCents: Number(priceCents),
+          cataloguePriceCents: cataloguePriceCents === null ? null : Number(cataloguePriceCents),
         })),
     })),
     pagination: {

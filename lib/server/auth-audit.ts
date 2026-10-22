@@ -48,6 +48,12 @@ export type AuthAuditAction =
   | "AUTH_PASSWORD_RESET_VERIFIED"
   | "AUTH_PASSWORD_RESET_COMPLETED"
   | "AUTH_PASSWORD_RESET_FAILURE"
+  // The public join page proving an applicant's address before its form
+  // (plans/OF-JOIN-email-otp-verification.md). No account exists yet, so
+  // these carry the organization and the challenge id, never the address.
+  | "AUTH_JOIN_EMAIL_CODE_SENT"
+  | "AUTH_JOIN_EMAIL_VERIFIED"
+  | "AUTH_JOIN_EMAIL_VERIFICATION_FAILURE"
   // Written by `scripts/force-password-rotation.ts`, one row per account.
   | "AUTH_PASSWORD_ROTATION_FORCED"
   | "AUTH_PASSWORD_ROTATION_REVERSED"
@@ -76,6 +82,8 @@ export type AuthFailureReason =
   | "reset_challenge_invalid"
   | "reset_token_invalid"
   | "password_reset_unavailable"
+  | "join_email_challenge_invalid"
+  | "join_email_delivery_failed"
 
 export type AuthAuditEvent = {
   action: AuthAuditAction

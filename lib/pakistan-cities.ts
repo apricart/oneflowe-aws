@@ -2,8 +2,9 @@
  * Pakistan's cities, each with its province, one spelling each
  * (plans/OF-JOIN-new-branch-city-warehouse.md).
  *
- * The list a new branch's city is chosen from when Head Office approves a
- * department sign-up. The server refuses a city that is not here and stores
+ * The list a new branch's city is chosen from, by the applicant on the
+ * department sign-up and again by Head Office when it approves
+ * (plans/OF-JOIN-applicant-new-branch-city.md). The server refuses a city that is not here and stores
  * the spelling given here, so every branch created that way names its city
  * the same way — which is what a warehouse's whole-city assignment matches on.
  *

@@ -32,13 +32,14 @@ function SuperAdminContextControls(props: Readonly<{
   branchOpen: boolean
   orgsLoading: boolean
   branchesLoading: boolean
+  disabled: boolean
   setOrganizationId: (id: string | null) => void
   setBranchId: (id: string | null) => void
   setOrgOpen: (open: boolean) => void
   setBranchOpen: (open: boolean) => void
   resetContext: () => void
 }>) {
-  const { organizations, branches, organizationId, branchId, orgOpen, branchOpen, orgsLoading, branchesLoading, setOrganizationId, setBranchId, setOrgOpen, setBranchOpen, resetContext } = props
+  const { organizations, branches, organizationId, branchId, orgOpen, branchOpen, orgsLoading, branchesLoading, disabled, setOrganizationId, setBranchId, setOrgOpen, setBranchOpen, resetContext } = props
 
   const selectedOrg = organizations.find((o: any) => o.id.toString() === organizationId)
   const selectedBranch = branches.find((b: any) => b.id.toString() === branchId)
@@ -54,6 +55,7 @@ function SuperAdminContextControls(props: Readonly<{
                 variant="outline"
                 role="combobox"
                 aria-expanded={orgOpen}
+                disabled={disabled}
                 className={cn(
                   "w-[220px] justify-between px-3.5 h-10 rounded-xl border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 font-bold text-xs shadow-sm hover:bg-slate-50 dark:hover:bg-slate-900 transition-all focus-within:ring-2 focus-within:ring-indigo-500/20",
                   !organizationId && "text-slate-400"
@@ -120,7 +122,7 @@ function SuperAdminContextControls(props: Readonly<{
                 variant="outline"
                 role="combobox"
                 aria-expanded={branchOpen}
-                disabled={!organizationId}
+                disabled={disabled || !organizationId}
                 className={cn(
                   "w-[220px] justify-between px-3.5 h-10 rounded-xl border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 font-bold text-xs shadow-sm hover:bg-slate-50 dark:hover:bg-slate-900 transition-all focus-within:ring-2 focus-within:ring-indigo-500/20",
                   !branchId && "text-slate-400",
@@ -270,7 +272,7 @@ function ReadOnlyContextBreadcrumb(props: Readonly<{
   )
 }
 
-export function ContextSelector() {
+export function ContextSelector({ disabled = false }: Readonly<{ disabled?: boolean }>) {
   const {
     organizationId,
     branchId,
@@ -355,6 +357,7 @@ export function ContextSelector() {
       branchOpen={branchOpen}
       orgsLoading={orgsLoading}
       branchesLoading={branchesLoading}
+      disabled={disabled}
       setOrganizationId={setOrganizationId}
       setBranchId={setBranchId}
       setOrgOpen={setOrgOpen}

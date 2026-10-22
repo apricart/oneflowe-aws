@@ -1,6 +1,21 @@
 import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+const appContext = vi.hoisted(() => ({
+  value: {
+    organizationId: null,
+    branchId: null,
+    branchIds: [],
+    userRole: "BRANCH_ADMIN",
+    userOrgId: 12 as number | null,
+    userBranchId: 34 as number | null,
+    setOrganizationId: vi.fn(),
+    setBranchId: vi.fn(),
+    resetContext: vi.fn(),
+    isInitialized: true,
+  },
+}))
+
 vi.mock("swr", () => ({
   default: (key: string | null) => {
     if (key === "/api/v1/organizations") {
@@ -38,18 +53,7 @@ vi.mock("swr", () => ({
 }))
 
 vi.mock("@/components/context/app-context", () => ({
-  useAppContext: () => ({
-    organizationId: null,
-    branchId: null,
-    branchIds: [],
-    userRole: "BRANCH_ADMIN",
-    userOrgId: 12,
-    userBranchId: 34,
-    setOrganizationId: vi.fn(),
-    setBranchId: vi.fn(),
-    resetContext: vi.fn(),
-    isInitialized: true,
-  }),
+  useAppContext: () => appContext.value,
 }))
 
 import { ContextSelector } from "@/components/shell/context-selector"
@@ -57,6 +61,18 @@ import { ContextSelector } from "@/components/shell/context-selector"
 describe("ContextSelector", () => {
   afterEach(() => {
     cleanup()
+    appContext.value = {
+      organizationId: null,
+      branchId: null,
+      branchIds: [],
+      userRole: "BRANCH_ADMIN",
+      userOrgId: 12,
+      userBranchId: 34,
+      setOrganizationId: vi.fn(),
+      setBranchId: vi.fn(),
+      resetContext: vi.fn(),
+      isInitialized: true,
+    }
   })
 
   it("shows a Branch Admin's assigned scope after client context is reset", () => {
@@ -65,5 +81,27 @@ describe("ContextSelector", () => {
     expect(screen.getByText("Zoomato")).not.toBeNull()
     expect(screen.getByText("Airport Branch")).not.toBeNull()
     expect(screen.queryByText("Global Overview")).toBeNull()
+  })
+
+  it("disables the organization and branch filters for Global Inventory", () => {
+    appContext.value = {
+      organizationId: null,
+      branchId: null,
+      branchIds: [],
+      userRole: "SUPER_ADMIN",
+      userOrgId: null,
+      userBranchId: null,
+      setOrganizationId: vi.fn(),
+      setBranchId: vi.fn(),
+      resetContext: vi.fn(),
+      isInitialized: true,
+    }
+
+    render(<ContextSelector disabled />)
+
+    expect(screen.getAllByRole("combobox")).toHaveLength(2)
+    screen.getAllByRole("combobox").forEach((filter) => {
+      expect((filter as HTMLButtonElement).disabled).toBe(true)
+    })
   })
 })

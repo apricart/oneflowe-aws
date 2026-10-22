@@ -9,6 +9,7 @@ import { ApricartSupportHeader } from "@/components/support/apricart-support-hea
 import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import { getProtectedPageSession } from "@/lib/server/page-session"
 import { supportUsesPortalShell } from "@/lib/support-shell"
+import { WAREHOUSE_LABEL, isWarehouseRole } from "@/lib/warehouse-access"
 
 /**
  * The support area is shared by every role, so the shell is chosen per role
@@ -45,16 +46,31 @@ export default async function SupportLayout({
     return <PortalShell preload={false}>{children}</PortalShell>
   }
 
-  // Support is an Apricart Support agent's whole workspace. It does not mount
-  // the admin shell, whose sidebar, bell and context call endpoints the agent
-  // may not reach (`APRICART_SUPPORT_API_RULES`); it gets a bar with its
-  // profile menu instead, so it can sign out.
+  // Support and read-only Orders are the Apricart Support agent's workspace.
+  // Neither mounts the admin shell, whose sidebar, bell and context call
+  // endpoints the agent may not reach (`APRICART_SUPPORT_API_RULES`); the
+  // shared bar links the two safe areas and carries the profile menu.
   if (isApricartSupportRole(role)) {
     return (
       <SessionGuard>
         <RoleRenameNotice />
         <div className="min-h-svh bg-background dark:bg-slate-950">
           <ApricartSupportHeader />
+          <main>{children}</main>
+        </div>
+      </SessionGuard>
+    )
+  }
+
+  // The warehouse answers the threads of the branches it serves here, under
+  // the same bar, for the same reason: the admin shell calls endpoints outside
+  // `WAREHOUSE_API_RULES`. See plans/OF-WAREHOUSE-support-queue.md.
+  if (isWarehouseRole(role)) {
+    return (
+      <SessionGuard>
+        <RoleRenameNotice />
+        <div className="min-h-svh bg-background dark:bg-slate-950">
+          <ApricartSupportHeader roleLabel={WAREHOUSE_LABEL} subtitle="Support — the branches you serve" />
           <main>{children}</main>
         </div>
       </SessionGuard>

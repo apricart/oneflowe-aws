@@ -2,7 +2,14 @@ import "server-only"
 
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm"
 
-import { branches, roles, users, warehouseAssignments, warehouseCityAssignments } from "@/db/schema"
+import {
+  branches,
+  roles,
+  users,
+  warehouseAssignments,
+  warehouseCityAssignments,
+  warehouseCityOrganizations,
+} from "@/db/schema"
 import { db } from "@/lib/db"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
 import { branchCityKeySql } from "@/lib/server/branch-city-key"
@@ -12,11 +19,12 @@ import { WAREHOUSE_ASSIGNMENT_AUDIT_ACTION, WAREHOUSE_ROLE } from "@/lib/warehou
  * Which Apricart warehouse serves a city, and attaching a branch a department
  * sign-up has just created to it (plans/OF-JOIN-new-branch-city-warehouse.md).
  *
- * A warehouse serves a city when it is an active, undeleted `WAREHOUSE`
- * account that either holds the city as a whole (`warehouse_city_assignments`)
- * or is assigned one by one to an active branch in it — in any organization,
- * because a warehouse's reach is geography, not a tenant. Cities are matched
- * only by `branchCityKeySql`, in SQL, on both sides.
+ * A warehouse serves a city, for an organization, when it is an active,
+ * undeleted `WAREHOUSE` account that either holds the city as a whole with that
+ * organization chosen (`warehouse_city_assignments` ∩
+ * `warehouse_city_organizations`, plans/OF-WAREHOUSE-city-assignments-by-organization.md)
+ * or is assigned one by one to an active branch in it — in any organization.
+ * Cities are matched only by `branchCityKeySql`, in SQL, on both sides.
  *
  * Neither function ever returns a warehouse account to its caller: Head Office
  * is told how many serve a city, never who.
@@ -35,11 +43,13 @@ function activeWarehouseAccounts(executor: Executor) {
 }
 
 /**
- * The listed cities an active warehouse serves, each with how many do. For
- * Head Office's review: a city not in the answer is served by none.
+ * The listed cities an active warehouse serves for the organization, each with
+ * how many do. For Head Office's review: a city not in the answer is served by
+ * none.
  */
 export async function loadWarehouseServedCities(
   executor: Executor,
+  organizationId: number,
   cityNames: readonly string[],
 ): Promise<Array<{ city: string; warehouseCount: number }>> {
   if (cityNames.length === 0) return []
@@ -56,6 +66,9 @@ export async function loadWarehouseServedCities(
     serving AS (
       SELECT ${warehouseCityAssignments.userId} AS user_id, ${warehouseCityAssignments.cityKey} AS city_key
       FROM ${warehouseCityAssignments}
+      INNER JOIN ${warehouseCityOrganizations}
+        ON ${warehouseCityOrganizations.userId} = ${warehouseCityAssignments.userId}
+        AND ${warehouseCityOrganizations.organizationId} = ${organizationId}
       UNION
       SELECT ${warehouseAssignments.userId}, ${branchCityKeySql(branches.city)}
       FROM ${warehouseAssignments}
@@ -72,10 +85,13 @@ export async function loadWarehouseServedCities(
   return rows.rows.map((row) => ({ city: row.city, warehouseCount: Number(row.warehouse_count) }))
 }
 
-/** Who serves the city, and how: a whole-city assignment, or single branches there. */
+/**
+ * Who serves the city, and how: a whole-city assignment with the organization
+ * chosen, or single branches there (in any organization).
+ */
 async function servingWarehouses(
   tx: TransactionExecutor,
-  input: { city: string; excludeBranchId: number; within?: string[] },
+  input: { city: string; organizationId: number; excludeBranchId: number; within?: string[] },
 ): Promise<{ byCity: Set<string>; byBranch: Set<string> }> {
   const accounts = (await activeWarehouseAccounts(tx)).map((row) => row.id)
   const candidates = input.within ? accounts.filter((id) => input.within!.includes(id)) : accounts
@@ -84,8 +100,12 @@ async function servingWarehouses(
   const cityKey = branchCityKeySql(input.city)
   const [cityRows, branchRows] = await Promise.all([
     tx
-      .select({ userId: warehouseCityAssignments.userId })
+      .selectDistinct({ userId: warehouseCityAssignments.userId })
       .from(warehouseCityAssignments)
+      .innerJoin(warehouseCityOrganizations, and(
+        eq(warehouseCityOrganizations.userId, warehouseCityAssignments.userId),
+        eq(warehouseCityOrganizations.organizationId, input.organizationId),
+      ))
       .where(and(inArray(warehouseCityAssignments.userId, candidates), eq(warehouseCityAssignments.cityKey, cityKey))),
     tx
       .selectDistinct({ userId: warehouseAssignments.userId })
@@ -107,7 +127,7 @@ async function servingWarehouses(
 export type NewBranchWarehouseCoverage = {
   branchId: number
   city: string
-  /** Warehouses holding the whole city: they reach the branch with no write. */
+  /** Warehouses holding the whole city for this organization: they reach the branch with no write. */
   servedByCity: number
   /** Warehouses serving the city through single branches, now given this one. */
   assigned: number
@@ -115,8 +135,8 @@ export type NewBranchWarehouseCoverage = {
 
 /**
  * Give a branch this transaction has just created to every warehouse that
- * serves its city through single branches there. A whole-city warehouse
- * already reaches it and is not written to.
+ * serves its city through single branches there. A whole-city warehouse that
+ * has the branch's organization chosen already reaches it and is not written to.
  *
  * The serving accounts are taken `FOR SHARE`, in id order, and their
  * assignments re-read under that lock: Super Admin's `replaceWarehouseBranches`
@@ -134,7 +154,11 @@ export async function attachNewBranchToCityWarehouses(
     joinRequestId: number
   },
 ): Promise<NewBranchWarehouseCoverage> {
-  const first = await servingWarehouses(tx, { city: input.city, excludeBranchId: input.branchId })
+  const first = await servingWarehouses(tx, {
+    city: input.city,
+    organizationId: input.organizationId,
+    excludeBranchId: input.branchId,
+  })
   const seen = [...new Set([...first.byCity, ...first.byBranch])].sort((a, b) => a.localeCompare(b))
   if (seen.length === 0) return { branchId: input.branchId, city: input.city, servedByCity: 0, assigned: 0 }
 
@@ -147,6 +171,7 @@ export async function attachNewBranchToCityWarehouses(
 
   const { byCity, byBranch } = await servingWarehouses(tx, {
     city: input.city,
+    organizationId: input.organizationId,
     excludeBranchId: input.branchId,
     within: seen,
   })

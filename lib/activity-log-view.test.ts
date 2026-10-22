@@ -18,6 +18,7 @@ import {
   SEVERITY_TONE,
   WINDOW_PRESETS,
   actorLabel,
+  actorRoleLabel,
   actorRoleOptions,
   changedFields,
   contextEntries,
@@ -124,6 +125,25 @@ describe("actorRoleOptions", () => {
     ])
     const labels = actorRoleOptions(false).map((option) => option.label).join(" ")
     expect(labels).not.toMatch(/Apricart|Super Admin|Warehouse|Order Desk/)
+  })
+})
+
+describe("actorRoleLabel", () => {
+  it("shows a renamed role by its new name, never the code", () => {
+    expect(actorRoleLabel("BRANCH_ADMIN")).toBe("Financial Approver")
+    expect(actorRoleLabel("ORDER_PORTAL")).toBe("Order Initiator")
+    expect(actorRoleLabel("GROUP_USER")).toBe("Group Financial Approver")
+    expect(actorRoleLabel("GROUP_ORDER_PORTAL")).toBe("Group Order Initiator")
+  })
+
+  it("labels every role the log knows", () => {
+    for (const role of ACTIVITY_ACTOR_ROLES) expect(actorRoleLabel(role)).toBe(ACTOR_ROLE_LABEL[role])
+  })
+
+  it("keeps an unknown recorded role as written and has nothing for no role", () => {
+    expect(actorRoleLabel("LEGACY_ROLE")).toBe("LEGACY_ROLE")
+    expect(actorRoleLabel(null)).toBeNull()
+    expect(actorRoleLabel("")).toBeNull()
   })
 })
 

@@ -2,6 +2,7 @@ import { z } from "zod"
 import { ORDER_APPROVER_ROLES } from "@/lib/order-approver-role"
 import { MAX_BUSINESS_QUANTITY, isUniquePositiveIdList } from "@/lib/business-rules"
 import { ORDER_CORRECTION_TEXT_MAX_LENGTH } from "@/lib/order-correction"
+import { MIN_ENTERED_UNIT_PRICE_CENTS } from "@/lib/order-line-price"
 import {
   DELIVERY_ADDRESS_DECISIONS,
   MAX_DELIVERY_ADDRESS_CITY,
@@ -19,6 +20,13 @@ import {
 } from "@/lib/server/group-refund-rules"
 import { PROPAGATION_MODES } from "@/lib/group-price-propagation"
 import { BRANCH_REGIONS } from "@/lib/branch-region"
+import { BRANCH_HIERARCHY_ROLES } from "@/lib/branch-hierarchy"
+import {
+  BRANCH_CONTACT_PHONE_HINT,
+  MAX_BRANCH_CONTACT_PHONE,
+  isValidBranchContactPhone,
+  normalizeBranchContactPhone,
+} from "@/lib/branch-contact-phone"
 import {
   HEAD_COUNT_REQUEST_DECISIONS,
   MAX_BRANCH_HEAD_COUNT,
@@ -33,6 +41,8 @@ import {
   JOINABLE_ROLES,
   JOIN_CODE_MAX_LENGTH,
   JOIN_DECISIONS,
+  JOIN_EMAIL_OTP_PATTERN,
+  JOIN_EMAIL_PROOF_PATTERN,
   joinCodeError,
   normalizeJoinCode,
 } from "@/lib/organization-join"
@@ -41,6 +51,17 @@ import { CANCELLATION_REASON_MAX_LENGTH, INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_L
 import { GROUP_ORDER_CANCEL_REASON_MAX_LENGTH } from "@/lib/group-order-cancel"
 import { APRICART_EXECUTIVE_ASSIGNMENT_MAX } from "@/lib/apricart-executive-access"
 import { WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION, WAREHOUSE_CITY_MAX_LENGTH } from "@/lib/warehouse-access"
+import {
+  APRICART_WAREHOUSE_ADDRESS_MAX_LENGTH,
+  APRICART_WAREHOUSE_CITY_MAX_LENGTH,
+  APRICART_WAREHOUSE_CODE_MAX_LENGTH,
+  APRICART_WAREHOUSE_CODE_PATTERN,
+  APRICART_WAREHOUSE_NAME_MAX_LENGTH,
+  APRICART_WAREHOUSE_PHONE_MAX_LENGTH,
+  APRICART_WAREHOUSE_STATUSES,
+  BRANCH_ROUTE_MAX_PER_ORGANIZATION,
+  normalizeWarehouseCode,
+} from "@/lib/apricart-warehouses"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import { MAX_APPROVAL_LEVELS, approvalLevelsError } from "@/lib/order-approval-levels"
 import { USERNAME_BASE_MAX_LENGTH } from "@/lib/username-prefix"
@@ -61,6 +82,12 @@ import {
   SIGNUP_MAX_BRANCHES,
   SIGNUP_PHONE_PATTERN,
   UNLISTED_CITY_MESSAGE,
+  newBranchChoiceHierarchyError,
+  newBranchDecisionHierarchyError,
+  requestedBranchHierarchyError,
+  requestedHierarchyOf,
+  requestedHierarchyPairingError,
+  requestedNewBranches,
 } from "@/lib/join-department-signup"
 import { findPakistanCity } from "@/lib/pakistan-cities"
 import {
@@ -263,6 +290,21 @@ export const userAccessUpdateSchema = z.object({
  */
 const branchHeadCount = z.number().int().min(0).max(MAX_BRANCH_HEAD_COUNT)
 
+/**
+ * A branch's contact phone as the API takes it: blank or null is "not
+ * provided"; anything else must pass `isValidBranchContactPhone`. Stored
+ * normalised. See plans/OF-BRANCH-contact-phone.md.
+ */
+const branchContactPhone = z.union([
+  z.string().max(MAX_BRANCH_CONTACT_PHONE * 2)
+    .transform((value) => normalizeBranchContactPhone(value) || null)
+    .refine((value) => value === null || isValidBranchContactPhone(value), { message: `Invalid contact phone. ${BRANCH_CONTACT_PHONE_HINT}` }),
+  z.null(),
+])
+
+/** A parent branch id, kept inside a Postgres `integer`; null = no parent. */
+const parentBranchIdField = z.union([z.number().int().positive().max(2_147_483_647), z.null()])
+
 export const branchCreateSchema = z.object({
   organizationId: positiveId,
   name: z.string().trim().min(2).max(100),
@@ -275,6 +317,12 @@ export const branchCreateSchema = z.object({
   region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
   // How many people work there; null or absent = not provided.
   headCount: z.union([branchHeadCount, z.null()]).optional(),
+  // The number the branch is reached on; null or absent = not provided.
+  contactPhone: branchContactPhone.optional(),
+  // Parent / child / standalone (absent = standalone); a child names its
+  // parent. The pairing is checked by branchHierarchyInputError in the route.
+  hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
+  parentBranchId: parentBranchIdField.optional(),
 }).strict()
 
 export const branchUpdateSchema = z.object({
@@ -289,6 +337,11 @@ export const branchUpdateSchema = z.object({
   region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
   // Null clears it back to "not provided".
   headCount: z.union([branchHeadCount, z.null()]).optional(),
+  // Null or blank clears it back to "not provided".
+  contactPhone: branchContactPhone.optional(),
+  // Either alone or both; planned by planBranchHierarchyChange in the route.
+  hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
+  parentBranchId: parentBranchIdField.optional(),
 }).strict().refine((input) => Object.keys(input).length > 0, {
   message: "At least one branch field is required",
 })
@@ -480,8 +533,28 @@ const orderMutationItemsSchema = z.array(z.object({
     "Each product can only appear once in an order",
   )
 
-export const orderCreateSchema = z.object({
-  items: orderMutationItemsSchema,
+/**
+ * An Order Desk line: any active Apricart global product, a quantity, and the
+ * price the customer agreed — required, more than zero, tax-inclusive
+ * (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md).
+ * Only `POST /api/v1/orders` for an `ORDER_DESK` caller and the desk's own edit
+ * accept it; every other order write keeps `orderMutationItemsSchema`, whose
+ * strict lines refuse a price and a global product id outright.
+ */
+const deskOrderItemsSchema = z.array(z.object({
+    globalProductId: positiveId,
+    quantity: z.coerce.number().positive().max(MAX_BUSINESS_QUANTITY),
+    unitPriceCents: z
+      .number({ error: (issue) => (issue.input === undefined ? "Enter a price for every product" : "A price must be a number of paisa") })
+      .int("A price must be a whole number of paisa")
+      .min(MIN_ENTERED_UNIT_PRICE_CENTS, "A price must be more than zero")
+      .max(MAX_PRICE_CENTS, "A price is too large"),
+  }).strict()).min(1).max(500).refine(
+    (items) => isUniquePositiveIdList(items.map((item) => item.globalProductId)),
+    "Each product can only appear once in an order",
+  )
+
+const orderCreateFields = {
   organizationId: positiveId.optional(),
   branchId: positiveId.optional(),
   notes: z.string().trim().max(2_000).optional(),
@@ -506,11 +579,23 @@ export const orderCreateSchema = z.object({
   intakeReference: z.string().trim().min(1).max(INTAKE_REFERENCE_MAX_LENGTH).optional(),
   /** The key the upload route returned for the customer's screenshot. Optional. */
   intakeAttachmentKey: z.string().max(128).optional(),
+}
+
+/** Every role but the Order Desk: lines from the branch's own catalogue, priced by the ladder. */
+export const orderCreateSchema = z.object({
+  items: orderMutationItemsSchema,
+  ...orderCreateFields,
 }).strict()
 
-/** An Order Desk edit of an Active order before delivery: its lines, notes and PO number. */
+/** The Order Desk: lines by global product, each with its agreed tax-inclusive price. */
+export const deskOrderCreateSchema = z.object({
+  items: deskOrderItemsSchema,
+  ...orderCreateFields,
+}).strict()
+
+/** An Order Desk edit of a pending order: its lines, notes and PO number. */
 export const orderDeskEditSchema = z.object({
-  items: orderMutationItemsSchema,
+  items: deskOrderItemsSchema,
   notes: z.string().trim().max(2_000).optional(),
   poNumber: clearablePurchaseOrderNumber.optional(),
 }).strict()
@@ -632,6 +717,66 @@ export const warehouseBranchAssignmentsUpdateSchema = z.object({
 export const warehouseCityAssignmentUpdateSchema = z.object({
   city: z.string().trim().min(1).max(WAREHOUSE_CITY_MAX_LENGTH),
   assigned: z.boolean(),
+}).strict()
+
+/**
+ * Chooses or withdraws one organization a warehouse user's cities apply to;
+ * one per request, like a city. A JSON integer, never a string.
+ * See plans/OF-WAREHOUSE-city-assignments-by-organization.md.
+ */
+export const warehouseCityOrganizationUpdateSchema = z.object({
+  organizationId: z.number().int().positive().max(2_147_483_647),
+  assigned: z.boolean(),
+}).strict()
+
+/**
+ * An optional free-text field of a warehouse: trimmed, and an empty string
+ * clears it (stored as null).
+ */
+const optionalWarehouseText = (max: number) => z.string().trim().max(max).transform((value) => value || null).nullable()
+
+/** Creating an Apricart warehouse. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md. */
+export const apricartWarehouseCreateSchema = z.object({
+  code: z.string()
+    .transform(normalizeWarehouseCode)
+    .pipe(z.string().min(2).max(APRICART_WAREHOUSE_CODE_MAX_LENGTH).regex(APRICART_WAREHOUSE_CODE_PATTERN, {
+      message: "Use letters and digits, with single hyphens between them",
+    })),
+  name: z.string().trim().min(2).max(APRICART_WAREHOUSE_NAME_MAX_LENGTH),
+  city: optionalWarehouseText(APRICART_WAREHOUSE_CITY_MAX_LENGTH).optional(),
+  address: optionalWarehouseText(APRICART_WAREHOUSE_ADDRESS_MAX_LENGTH).optional(),
+  contactPhone: optionalWarehouseText(APRICART_WAREHOUSE_PHONE_MAX_LENGTH).optional(),
+}).strict()
+
+/** Changing an Apricart warehouse. The code is permanent; at least one field. */
+export const apricartWarehouseUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(APRICART_WAREHOUSE_NAME_MAX_LENGTH).optional(),
+  city: optionalWarehouseText(APRICART_WAREHOUSE_CITY_MAX_LENGTH).optional(),
+  address: optionalWarehouseText(APRICART_WAREHOUSE_ADDRESS_MAX_LENGTH).optional(),
+  contactPhone: optionalWarehouseText(APRICART_WAREHOUSE_PHONE_MAX_LENGTH).optional(),
+  status: z.enum(APRICART_WAREHOUSE_STATUSES).optional(),
+}).strict().refine((input) => Object.values(input).some((value) => value !== undefined), {
+  message: "Nothing to change",
+})
+
+/**
+ * Adds or removes one account at a warehouse. The responsibility is not sent:
+ * the server takes it from the account's role.
+ */
+export const apricartWarehouseMemberUpdateSchema = z.object({
+  userId: z.uuid(),
+  assigned: z.boolean(),
+}).strict()
+
+/**
+ * Replaces the branches **of one organization** whose default warehouse is
+ * this one. One organization per request keeps the body under the WAF's 8 KB.
+ */
+export const branchFulfillmentRoutesUpdateSchema = z.object({
+  organizationId: z.number().int().positive().max(2_147_483_647),
+  branchIds: z.array(z.number().int().positive().max(2_147_483_647))
+    .max(BRANCH_ROUTE_MAX_PER_ORGANIZATION)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
 }).strict()
 
 /** Replacing a delivered order's challan with another uploaded one. */
@@ -1145,6 +1290,29 @@ export const joinLookupSchema = z.object({
   code: joinCodeSchema,
 }).strict()
 
+/*
+ * Proving the applicant's address before the join form
+ * (plans/OF-JOIN-email-otp-verification.md). The request names the join code,
+ * never an organization; the verify step names only the challenge.
+ */
+const joinEmailSchema = z.string().trim().pipe(z.email().max(255))
+
+export const joinEmailCodeRequestSchema = z.object({
+  code: joinCodeSchema,
+  email: joinEmailSchema,
+}).strict()
+
+export const joinEmailCodeVerifySchema = z.object({
+  challengeId: z.uuid("Request a new code and try again"),
+  otp: z.string().trim().regex(JOIN_EMAIL_OTP_PATTERN, "Enter the 6-digit code from the email"),
+}).strict()
+
+/** The proof the verify step answered, carried by either join submission. */
+const joinEmailVerificationSchema = z.object({
+  challengeId: z.uuid("Verify your email address again"),
+  proof: z.string().regex(JOIN_EMAIL_PROOF_PATTERN, "Verify your email address again"),
+}, { error: "Verify your email address before sending the form" }).strict()
+
 /**
  * A join submission.
  *
@@ -1178,6 +1346,7 @@ export const joinRequestSubmitSchema = z.object({
   contactPerson: nullableText(255).optional(),
   location: nullableText(255).optional(),
   address: nullableText(2_000).optional(),
+  emailVerification: joinEmailVerificationSchema,
 }).strict()
 
 /**
@@ -1236,6 +1405,57 @@ const requestedBranchNameSchema = z.string().trim()
   .min(NEW_BRANCH_FIELD_RULES.name.min, `A new branch's name needs at least ${NEW_BRANCH_FIELD_RULES.name.min} characters`)
   .max(NEW_BRANCH_FIELD_RULES.name.max, `A new branch's name can be at most ${NEW_BRANCH_FIELD_RULES.name.max} characters`)
 
+/*
+ * The city a branch still to be created is in, chosen by the applicant from
+ * Pakistan's list and stored in the list's spelling, and its province, which
+ * must be that city's own (plans/OF-JOIN-applicant-new-branch-city.md).
+ */
+const requestedBranchCitySchema = z.string().trim().max(NEW_BRANCH_FIELD_RULES.city.max)
+  .refine((city) => findPakistanCity(city) !== null, `New branch: ${UNLISTED_CITY_MESSAGE.toLowerCase()}`)
+  .transform((city) => findPakistanCity(city)?.name ?? city)
+const requestedBranchProvinceSchema = z.string().trim().max(NEW_BRANCH_FIELD_RULES.province.max)
+
+function requestedBranchProvinceIsTheCitys(
+  branch: { city?: string; province?: string },
+  context: z.RefinementCtx,
+): void {
+  if ((branch.city === undefined) !== (branch.province === undefined)) {
+    context.addIssue({ code: "custom", path: ["province"], message: "New branch: give its city and province together" })
+    return
+  }
+  const city = branch.city === undefined ? null : findPakistanCity(branch.city)
+  if (city && branch.province !== city.province) {
+    context.addIssue({ code: "custom", path: ["province"], message: `New branch: ${city.name} is in ${city.province}` })
+  }
+}
+
+/*
+ * The type the applicant proposes for a branch still to be created, and a
+ * child's parent: an existing branch, or the CRC of another branch on the same
+ * request (plans/OF-JOIN-new-branch-parent-child.md). Optional, so a request
+ * from a page that does not ask for it is still accepted.
+ */
+const requestedHierarchyFields = {
+  hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
+  parentBranchId: positiveId.optional(),
+  parentCrc: signupCrcSchema.optional(),
+}
+
+function requestedHierarchyStandsAlone(
+  branch: { crc: string; hierarchyRole?: (typeof BRANCH_HIERARCHY_ROLES)[number]; parentBranchId?: number; parentCrc?: string },
+  context: z.RefinementCtx,
+): void {
+  const hierarchy = requestedHierarchyOf(branch)
+  if (!hierarchy) {
+    if (branch.parentBranchId !== undefined || branch.parentCrc !== undefined) {
+      context.addIssue({ code: "custom", path: ["hierarchyRole"], message: "New branch: a parent branch needs the branch type Child" })
+    }
+    return
+  }
+  const problem = requestedHierarchyPairingError(branch.crc, hierarchy)
+  if (problem) context.addIssue({ code: "custom", path: ["hierarchyRole"], message: `New branch: ${problem}` })
+}
+
 export const departmentJoinSubmitSchema = z.object({
   formVersion: z.literal(DEPARTMENT_SIGNUP_FORM_VERSION),
   code: joinCodeSchema,
@@ -1246,14 +1466,28 @@ export const departmentJoinSubmitSchema = z.object({
   ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
   employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
   department: z.enum(DEPARTMENTS),
-  // An existing branch picked by name, or a new branch: its name and its CRC number.
+  // An existing branch picked by name, or a new branch: its name, its CRC
+  // number, the city and province it is in, and its proposed type.
   branches: z.array(z.union([
     z.object({ branchId: positiveId }).strict(),
-    z.object({ name: requestedBranchNameSchema, crc: signupCrcSchema }).strict(),
-  ])).min(1).max(SIGNUP_MAX_BRANCHES),
+    z.object({
+      name: requestedBranchNameSchema,
+      crc: signupCrcSchema,
+      city: requestedBranchCitySchema,
+      province: requestedBranchProvinceSchema,
+      ...requestedHierarchyFields,
+    }).strict().superRefine(requestedBranchProvinceIsTheCitys).superRefine(requestedHierarchyStandsAlone),
+  ])).min(1).max(SIGNUP_MAX_BRANCHES)
+    // A child may name another branch on the list as its parent, so the list
+    // is judged whole: that branch must be on it, proposed as Parent.
+    .superRefine((list, context) => {
+      const problem = requestedBranchHierarchyError(requestedNewBranches(list))
+      if (problem) context.addIssue({ code: "custom", message: problem })
+    }),
   addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES),
   approvers: z.array(signupApproverSchema).min(1).max(MAX_APPROVAL_LEVELS),
   termsAccepted: z.literal(true),
+  emailVerification: joinEmailVerificationSchema,
 }).strict()
 
 /** One field of a new branch, refused with a message that names it (`NEW_BRANCH_FIELD_RULES`). */
@@ -1286,12 +1520,25 @@ export const departmentJoinDecisionSchema = z.object({
       .refine((city) => city === undefined || findPakistanCity(city) !== null, `New branch: ${UNLISTED_CITY_MESSAGE.toLowerCase()}`)
       .transform((city) => (city === undefined ? undefined : findPakistanCity(city)?.name ?? city)),
     address: newBranchText("address"),
+    // The created branch's type (plans/OF-JOIN-new-branch-parent-child.md):
+    // absent is Standalone. A child's parent is an existing branch, or another
+    // branch this approval creates as Parent, named by its request branch id.
+    hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
+    parentBranchId: positiveId.optional(),
+    parentRequestBranchId: positiveId.optional(),
   }).strict().superRefine((branch, context) => {
     const city = branch.city === undefined ? null : findPakistanCity(branch.city)
     if (city && branch.province !== undefined && branch.province !== city.province) {
       context.addIssue({ code: "custom", path: ["province"], message: `New branch: ${city.name} is in ${city.province}` })
     }
-  })).max(SIGNUP_MAX_BRANCHES).optional(),
+    const hierarchyProblem = newBranchChoiceHierarchyError(branch)
+    if (hierarchyProblem) context.addIssue({ code: "custom", path: ["hierarchyRole"], message: `New branch: ${hierarchyProblem}` })
+  })).max(SIGNUP_MAX_BRANCHES)
+    .superRefine((list, context) => {
+      const problem = newBranchDecisionHierarchyError(list)
+      if (problem) context.addIssue({ code: "custom", message: problem })
+    })
+    .optional(),
   addressBranches: z.array(z.object({
     requestAddressId: positiveId,
     requestBranchId: positiveId,
@@ -1335,11 +1582,19 @@ export const departmentJoinUpdateSchema = z.object({
     ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
     employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
     department: z.enum(DEPARTMENTS),
-    // A new branch's name is optional here: a request submitted before names
-    // were asked for has none, and Head Office names it at approval anyway.
+    // A new branch's name, city and type are optional here: a request
+    // submitted before they were asked for has none, and Head Office gives
+    // them at approval anyway. A type left out keeps the stored one, so the
+    // list is judged whole by the server once merged with the stored rows.
     branches: z.array(z.union([
       z.object({ branchId: positiveId }).strict(),
-      z.object({ crc: signupCrcSchema, name: requestedBranchNameSchema.optional() }).strict(),
+      z.object({
+        crc: signupCrcSchema,
+        name: requestedBranchNameSchema.optional(),
+        city: requestedBranchCitySchema.optional(),
+        province: requestedBranchProvinceSchema.optional(),
+        ...requestedHierarchyFields,
+      }).strict().superRefine(requestedBranchProvinceIsTheCitys).superRefine(requestedHierarchyStandsAlone),
     ])).min(1).max(SIGNUP_MAX_BRANCHES)
       .refine((list) => editedBranchListError(list) === null, { message: "The same branch is listed twice" }),
     addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES)

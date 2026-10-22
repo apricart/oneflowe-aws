@@ -137,6 +137,10 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/auth/password-reset/complete/route.ts", module: "lib/server/password-reset.ts" },
   { file: "app/api/v1/users/me/email-verification/send/route.ts", module: "lib/server/email-verification.ts" },
   { file: "app/api/v1/users/me/email-verification/verify/route.ts", module: "lib/server/email-verification.ts" },
+  // Public: proving a join applicant's address before the form. Every code
+  // sent, verified or refused is recorded by the service.
+  { file: "app/api/v1/join/email-verification/request/route.ts", module: "lib/server/join-email-verification.ts" },
+  { file: "app/api/v1/join/email-verification/verify/route.ts", module: "lib/server/join-email-verification.ts" },
 
   // The APPROVED → FULFILLED transition. Three routes reach it; the record
   // belongs with the ledger move, not with any one of them.
@@ -233,6 +237,15 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   // Assigning or withdrawing a whole city records inside the change.
   // See plans/OF-WAREHOUSE-city-assignments.md.
   { file: "app/api/v1/warehouse-team/[userId]/cities/route.ts", module: "lib/server/warehouse-team.ts" },
+  // So does choosing the organizations those cities apply to.
+  // See plans/OF-WAREHOUSE-city-assignments-by-organization.md.
+  { file: "app/api/v1/warehouse-team/[userId]/city-organizations/route.ts", module: "lib/server/warehouse-team.ts" },
+  // Apricart warehouses, their members and branch routes record inside each change.
+  // See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+  { file: "app/api/v1/apricart-warehouses/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  { file: "app/api/v1/apricart-warehouses/[id]/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  { file: "app/api/v1/apricart-warehouses/[id]/members/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  { file: "app/api/v1/apricart-warehouses/[id]/branches/route.ts", module: "lib/server/apricart-warehouses.ts" },
 ]
 
 /**

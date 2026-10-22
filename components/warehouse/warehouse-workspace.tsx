@@ -14,6 +14,7 @@ import { WarehouseTaxonomy } from "@/components/warehouse/catalog/warehouse-taxo
 import { WarehouseCatalog } from "@/components/warehouse/warehouse-catalog"
 import { WarehouseNotificationBell } from "@/components/warehouse/warehouse-notification-bell"
 import { WarehouseOrders } from "@/components/warehouse/warehouse-orders"
+import { WarehouseSupportLink } from "@/components/warehouse/warehouse-support-link"
 import { WAREHOUSE_LABEL } from "@/lib/warehouse-access"
 import { cn } from "@/lib/utils"
 
@@ -73,7 +74,8 @@ function navItemClass(active: boolean) {
  * The warehouse's workspace: its dashboard of the workload against the
  * delivery SLA (the landing section), its order queue, and the whole product
  * catalogue — every menu Super Admin has, view only
- * (plans/OF-WAREHOUSE-full-read-only-catalog.md) — under a header of its own,
+ * (plans/OF-WAREHOUSE-full-read-only-catalog.md) — and a link to the support
+ * queue of its branches, under a header of its own,
  * outside the admin shell. The chosen section is kept in the URL hash, so a
  * refresh or a shared link opens the same one; it never reaches the server.
  * Every call made from here is on the role's allowlist (`lib/warehouse-access.ts`).
@@ -190,12 +192,15 @@ export function WarehouseWorkspace() {
                 })}
               </ul>
             )}
+            {/* The support queue of the branches it serves, in the shared support
+                area (plans/OF-WAREHOUSE-support-queue.md). */}
+            <WarehouseSupportLink className={navItemClass(false)} />
           </nav>
         </aside>
         <main className="min-w-0 flex-1 px-4 py-6">
           <div className="mx-auto max-w-7xl">
             {section === "dashboard" && (
-              <DeliveryDashboard dashboardEndpoint="/api/v1/warehouse/workload" timelineEndpoint={warehouseTimeline} />
+              <DeliveryDashboard dashboardEndpoint="/api/v1/warehouse/workload" timelineEndpoint={warehouseTimeline} warehouseOrderIdTools />
             )}
             {section === "orders" && <WarehouseOrders />}
             {section === "catalog" && <WarehouseCatalog />}

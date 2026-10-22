@@ -1,5 +1,6 @@
 "use client"
 import { viewerAccessFor } from "@/lib/viewer-access"
+import { renamedRoleName } from "@/lib/role-display-names"
 import { useAppContext } from "@/components/context/app-context"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { NotificationBell } from "@/components/notifications/notification-center"
@@ -19,7 +20,7 @@ import { useSession } from "next-auth/react"
 import { useTheme } from "next-themes"
 import Image from "next/image"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { useEffect,useState } from "react"
 
 async function logout() {
@@ -34,12 +35,14 @@ async function logout() {
 export function Topbar() {
   const { data: session } = useSession()
   const router = useRouter()
+  const pathname = usePathname()
   const [mounted, setMounted] = useState(false)
   const { theme, setTheme } = useTheme()
   const { organizationId, branchIds, setBranchIds } = useAppContext()
   // An organization-wide Viewer gets Head Office's filters and links; it reads
   // the same pages, read-only.
   const { viewRole: userRole } = viewerAccessFor(session?.user)
+  const isGlobalInventory = userRole === "SUPER_ADMIN" && pathname === "/inventory"
 
   useEffect(() => {
     setMounted(true)
@@ -51,7 +54,7 @@ export function Topbar() {
     >
       <div className="flex items-center gap-3">
         <div className="hidden lg:flex">
-          <ContextSelector />
+          <ContextSelector disabled={isGlobalInventory} />
         </div>
         
         {/* Global Branch Filter for HEAD_OFFICE */}
@@ -156,7 +159,7 @@ export function Topbar() {
                   {(session?.user as any)?.email || "user@example.com"}
                 </p>
                 <p className="text-[10px] leading-none text-muted-foreground mt-1 capitalize font-normal bg-slate-100 dark:bg-slate-800 w-fit px-1.5 py-0.5 rounded">
-                  {userRole?.toLowerCase().replace("_", " ")}
+                  {renamedRoleName(userRole) ?? userRole?.toLowerCase().replaceAll("_", " ")}
                 </p>
               </div>
             </DropdownMenuLabel>

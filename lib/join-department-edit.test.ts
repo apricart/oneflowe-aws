@@ -6,13 +6,16 @@ import {
   crcDraftError,
   departmentJoinEditErrors,
   draftFromReview,
+  editBranchHierarchyText,
   editedAddressListError,
   editedBranchListError,
   newBranchDraftError,
   newBranchLabel,
   planAddressEdit,
   planRequestBranchEdit,
+  removeEditBranch,
   toDepartmentJoinUpdatePayload,
+  withKeptHierarchy,
 } from "@/lib/join-department-edit"
 
 const REVIEW = {
@@ -28,7 +31,15 @@ const REVIEW = {
   },
   branches: [
     { kind: "existing" as const, branchId: 5, name: "Clifton", costCenterId: null, requestedName: null },
-    { kind: "new" as const, branchId: null, name: null, costCenterId: "crc-9", requestedName: "Saddar Office" },
+    {
+      kind: "new" as const,
+      branchId: null,
+      name: null,
+      costCenterId: "crc-9",
+      requestedName: "Saddar Office",
+      requestedCity: "Karachi",
+      requestedProvince: "Sindh",
+    },
   ],
   addresses: [{ requestAddressId: 41, address: "Plot 4, Clifton" }],
   approvers: [
@@ -40,19 +51,21 @@ const REVIEW = {
 describe("planRequestBranchEdit", () => {
   const current = [
     { id: 1, existingBranchId: 5, costCenterId: null, requestedBranchName: null },
-    { id: 2, existingBranchId: null, costCenterId: "CRC-9", requestedBranchName: "Saddar Office" },
+    { id: 2, existingBranchId: null, costCenterId: "CRC-9", requestedBranchName: "Saddar Office", requestedBranchCity: "Karachi" },
     { id: 3, existingBranchId: 6, costCenterId: null, requestedBranchName: null },
   ]
-  const nothing = { deleteIds: [], insertExistingIds: [], insertNewBranches: [], renames: [] }
+  const nothing = { deleteIds: [], insertExistingIds: [], insertNewBranches: [], renames: [], relocations: [], retypes: [] }
+  const noLocation = { city: null, province: null }
+  const karachi = { city: "Karachi", province: "Sindh" }
 
   it("keeps rows naming the same branch or CRC, so their ids survive", () => {
-    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "crc-9", name: "Saddar Office" }] }))
+    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "crc-9", name: "Saddar Office", ...karachi }] }))
       .toEqual(nothing)
   })
 
   it("drops what was removed and adds what is new, with its name", () => {
-    expect(planRequestBranchEdit(current, { existingIds: [5, 8], newBranches: [{ crc: "NEW-1", name: "  Gulshan   Depot " }] }))
-      .toEqual({ ...nothing, deleteIds: [2, 3], insertExistingIds: [8], insertNewBranches: [{ crc: "NEW-1", name: "Gulshan Depot" }] })
+    expect(planRequestBranchEdit(current, { existingIds: [5, 8], newBranches: [{ crc: "NEW-1", name: "  Gulshan   Depot ", ...karachi }] }))
+      .toEqual({ ...nothing, deleteIds: [2, 3], insertExistingIds: [8], insertNewBranches: [{ crc: "NEW-1", name: "Gulshan Depot", ...karachi, hierarchy: null }] })
   })
 
   it("replaces a CRC that now matches a branch with that branch", () => {
@@ -61,15 +74,30 @@ describe("planRequestBranchEdit", () => {
   })
 
   it("renames a kept CRC row when the edit gives it another name, and keeps its own when none is given", () => {
-    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: "Saddar Head Office" }] }))
+    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: "Saddar Head Office", ...noLocation }] }))
       .toEqual({ ...nothing, renames: [{ id: 2, name: "Saddar Head Office" }] })
-    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: null }] }))
+    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: null, ...noLocation }] }))
       .toEqual(nothing)
+  })
+
+  it("moves a kept CRC row when the edit gives it another city, and keeps its own when none is given", () => {
+    expect(planRequestBranchEdit(current, {
+      existingIds: [5, 6],
+      newBranches: [{ crc: "CRC-9", name: "Saddar Office", city: "Lahore", province: "Punjab" }],
+    })).toEqual({ ...nothing, relocations: [{ id: 2, city: "Lahore", province: "Punjab" }] })
+    expect(planRequestBranchEdit(current, { existingIds: [5, 6], newBranches: [{ crc: "CRC-9", name: "Saddar Office", ...noLocation }] }))
+      .toEqual(nothing)
+  })
+
+  it("gives a request's CRC row with no city the city the edit gives it", () => {
+    const unplaced = [{ id: 7, existingBranchId: null, costCenterId: "OLD-1", requestedBranchName: "Korangi", requestedBranchCity: null }]
+    expect(planRequestBranchEdit(unplaced, { existingIds: [], newBranches: [{ crc: "old-1", name: "Korangi", ...karachi }] }))
+      .toEqual({ ...nothing, relocations: [{ id: 7, ...karachi }] })
   })
 
   it("names a request's unnamed CRC row when the edit gives it a name", () => {
     const unnamed = [{ id: 7, existingBranchId: null, costCenterId: "OLD-1", requestedBranchName: null }]
-    expect(planRequestBranchEdit(unnamed, { existingIds: [], newBranches: [{ crc: "old-1", name: "Korangi" }] }))
+    expect(planRequestBranchEdit(unnamed, { existingIds: [], newBranches: [{ crc: "old-1", name: "Korangi", ...noLocation }] }))
       .toEqual({ ...nothing, renames: [{ id: 7, name: "Korangi" }] })
   })
 })
@@ -199,7 +227,7 @@ describe("the dialog's draft", () => {
         ipExtension: "1234",
         employeeId: "E-7",
         department: "Finance",
-        branches: [{ branchId: 5 }, { crc: "CRC-9", name: "Saddar Office" }],
+        branches: [{ branchId: 5 }, { crc: "CRC-9", name: "Saddar Office", city: "Karachi", province: "Sindh" }],
         addresses: ["Plot 4, Clifton"],
         approvers: [
           { level: 1, email: "one@demo.test", designation: "Director" },
@@ -212,15 +240,16 @@ describe("the dialog's draft", () => {
 
 describe("edge cases", () => {
   it("adds every row of a request that had none, and deletes every row when all are replaced", () => {
-    expect(planRequestBranchEdit([], { existingIds: [1, 2], newBranches: [{ crc: "A-1", name: "Alpha" }] }))
-      .toEqual({ deleteIds: [], insertExistingIds: [1, 2], insertNewBranches: [{ crc: "A-1", name: "Alpha" }], renames: [] })
+    const location = { city: "Karachi", province: "Sindh" }
+    expect(planRequestBranchEdit([], { existingIds: [1, 2], newBranches: [{ crc: "A-1", name: "Alpha", ...location }] }))
+      .toEqual({ deleteIds: [], insertExistingIds: [1, 2], insertNewBranches: [{ crc: "A-1", name: "Alpha", ...location, hierarchy: null }], renames: [], relocations: [], retypes: [] })
     expect(planRequestBranchEdit(
       [
         { id: 1, existingBranchId: 5, costCenterId: null, requestedBranchName: null },
         { id: 2, existingBranchId: null, costCenterId: "B-1", requestedBranchName: "Beta" },
       ],
       { existingIds: [9], newBranches: [] },
-    )).toEqual({ deleteIds: [1, 2], insertExistingIds: [9], insertNewBranches: [], renames: [] })
+    )).toEqual({ deleteIds: [1, 2], insertExistingIds: [9], insertNewBranches: [], renames: [], relocations: [], retypes: [] })
   })
 
   it("never keeps a CRC row for an existing branch of the same id, or the reverse", () => {
@@ -228,7 +257,7 @@ describe("edge cases", () => {
     expect(planRequestBranchEdit(
       [{ id: 1, existingBranchId: null, costCenterId: "5", requestedBranchName: null }],
       { existingIds: [5], newBranches: [] },
-    )).toEqual({ deleteIds: [1], insertExistingIds: [5], insertNewBranches: [], renames: [] })
+    )).toEqual({ deleteIds: [1], insertExistingIds: [5], insertNewBranches: [], renames: [], relocations: [], retypes: [] })
   })
 
   it("matches stored addresses one for one, so a repeated address is not kept twice", () => {
@@ -322,10 +351,94 @@ describe("edge cases", () => {
         crc: `${"C".repeat(29)}-${index}`,
         name: `${index}${"n".repeat(99)}`,
         label: "",
+        // The longest city and province on the list, together.
+        city: "Islamabad",
+        province: "Islamabad Capital Territory",
       })),
       addresses: Array.from({ length: 5 }, (_, index) => ({ key: `a${index}`, address: `${index}${"a".repeat(199)}` })),
       approvers: Array.from({ length: 5 }, (_, index) => ({ level: index + 1, email: `${"p".repeat(100)}${index}@demo.test`, designation: "d".repeat(60) })),
     }
     expect(payloadSizeError(toDepartmentJoinUpdatePayload(draft))).toBeNull()
+  })
+})
+
+describe("a new branch's proposed type through an edit (plans/OF-JOIN-new-branch-parent-child.md)", () => {
+  const stored = [
+    { id: 1, existingBranchId: null, costCenterId: "PAR-1", requestedBranchName: "Hub", requestedHierarchyRole: "PARENT" },
+    { id: 2, existingBranchId: null, costCenterId: "KID-1", requestedBranchName: "Kid", requestedHierarchyRole: "CHILD", requestedParentCrc: "PAR-1" },
+    { id: 3, existingBranchId: null, costCenterId: "OLD-1", requestedBranchName: "Old" },
+  ]
+  const asNew = (crc: string, hierarchy: { hierarchyRole: "STANDALONE" | "PARENT" | "CHILD"; parentBranchId: number | null; parentCrc: string | null } | null = null) =>
+    ({ crc, name: null, city: null, province: null, hierarchy })
+
+  it("keeps the stored type of a CRC the edit sends without one", () => {
+    expect(withKeptHierarchy(stored, [asNew("KID-1"), asNew("OLD-1"), asNew("NEW-1")]).map((branch) => branch.hierarchy)).toEqual([
+      { hierarchyRole: "CHILD", parentBranchId: null, parentCrc: "PAR-1" },
+      null,
+      null,
+    ])
+  })
+
+  it("re-types a kept row only when the edit gives a different type", () => {
+    const same = planRequestBranchEdit(stored, {
+      existingIds: [],
+      newBranches: [asNew("PAR-1", { hierarchyRole: "PARENT", parentBranchId: null, parentCrc: null }), asNew("KID-1"), asNew("OLD-1")],
+    })
+    expect(same.retypes).toEqual([])
+
+    const changed = planRequestBranchEdit(stored, {
+      existingIds: [],
+      newBranches: [
+        asNew("PAR-1"),
+        asNew("KID-1", { hierarchyRole: "STANDALONE", parentBranchId: null, parentCrc: null }),
+        asNew("OLD-1", { hierarchyRole: "CHILD", parentBranchId: 9, parentCrc: null }),
+      ],
+    })
+    expect(changed.retypes).toEqual([
+      { id: 2, hierarchy: { hierarchyRole: "STANDALONE", parentBranchId: null, parentCrc: null } },
+      { id: 3, hierarchy: { hierarchyRole: "CHILD", parentBranchId: 9, parentCrc: null } },
+    ])
+    expect(changed.deleteIds).toEqual([])
+  })
+
+  it("makes the children of a removed parent Standalone, and leaves everything else", () => {
+    const draft = draftFromReview({
+      ...REVIEW,
+      branches: [
+        { kind: "new", branchId: null, name: null, costCenterId: "PAR-1", requestedName: "Hub", requestedHierarchyRole: "PARENT" },
+        { kind: "new", branchId: null, name: null, costCenterId: "KID-1", requestedName: "Kid", requestedHierarchyRole: "CHILD", requestedParentCrc: "PAR-1" },
+        { kind: "new", branchId: null, name: null, costCenterId: "KID-2", requestedName: "Kiosk", requestedHierarchyRole: "CHILD", requestedParentBranchId: 7, requestedParentBranchName: "North Region" },
+      ],
+    })
+    expect(draft.branches.map((entry) => editBranchHierarchyText(entry, draft.branches)))
+      .toEqual(["Parent", "Child of Hub", "Child of North Region"])
+
+    const after = removeEditBranch(draft.branches, "crc:PAR-1")
+    expect(after.map((entry) => editBranchHierarchyText(entry, after))).toEqual(["Standalone", "Child of North Region"])
+    expect(departmentJoinEditErrors({ ...draft, branches: after }, "demo.test").branches).toBeUndefined()
+  })
+
+  it("refuses to save a child whose parent is no longer on the request", () => {
+    const draft = draftFromReview({
+      ...REVIEW,
+      branches: [{ kind: "new", branchId: null, name: null, costCenterId: "KID-1", requestedName: "Kid", requestedHierarchyRole: "CHILD", requestedParentCrc: "PAR-1" }],
+    })
+    expect(departmentJoinEditErrors(draft, "demo.test").branches).toMatch(/Kid: its parent must be a new branch on this request marked Parent/)
+  })
+
+  it("sends each type back as it was", () => {
+    const draft = draftFromReview({
+      ...REVIEW,
+      branches: [
+        { kind: "new", branchId: null, name: null, costCenterId: "PAR-1", requestedName: "Hub", requestedHierarchyRole: "PARENT" },
+        { kind: "new", branchId: null, name: null, costCenterId: "KID-1", requestedName: "Kid", requestedHierarchyRole: "CHILD", requestedParentCrc: "PAR-1" },
+        { kind: "new", branchId: null, name: null, costCenterId: "OLD-1", requestedName: "Old" },
+      ],
+    })
+    expect(toDepartmentJoinUpdatePayload(draft).update.branches).toEqual([
+      { crc: "PAR-1", name: "Hub", hierarchyRole: "PARENT" },
+      { crc: "KID-1", name: "Kid", hierarchyRole: "CHILD", parentCrc: "PAR-1" },
+      { crc: "OLD-1", name: "Old" },
+    ])
   })
 })

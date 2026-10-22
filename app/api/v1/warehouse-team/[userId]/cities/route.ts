@@ -11,10 +11,12 @@ import { WAREHOUSE_CITY_MAX_PER_USER } from "@/lib/warehouse-access"
 
 /**
  * Assign or withdraw one whole city for one warehouse user: every branch in
- * the city, in every organization, now and opened later. Super Admin only. A
- * user who is not a warehouse account is 404, so this cannot probe other
- * accounts. The audit row is written by `lib/server/warehouse-team.ts`, inside
- * the change. See plans/OF-WAREHOUSE-city-assignments.md.
+ * the city, in the organizations chosen for the user (`../city-organizations`),
+ * now and opened later. Super Admin only. A user who is not a warehouse account
+ * is 404, so this cannot probe other accounts. The audit row is written by
+ * `lib/server/warehouse-team.ts`, inside the change. See
+ * plans/OF-WAREHOUSE-city-assignments.md and
+ * plans/OF-WAREHOUSE-city-assignments-by-organization.md.
  */
 
 const userIdSchema = z.uuid()

@@ -1,4 +1,6 @@
+import { isApricartSupportRole } from "@/lib/apricart-support-access"
 import { usesPortalChrome, type PortalChromeRole } from "@/lib/portal-chrome"
+import { isWarehouseRole } from "@/lib/warehouse-access"
 
 /**
  * Which shell the support area wears.
@@ -37,4 +39,16 @@ export type SupportPortalShellRole = PortalChromeRole
  */
 export function supportUsesPortalShell(role: string | null | undefined): boolean {
   return usesPortalChrome(role)
+}
+
+/**
+ * Does the thread page link a cited order to its invoice page for this role?
+ *
+ * Not for the Apricart roles confined to an area of their own: the Apricart
+ * Support agent reaches the support pages alone, and the warehouse prints an
+ * invoice from its own order sheet, never from `/invoices`. For them the order
+ * is named, not linked — the link would only bounce. Presentation only.
+ */
+export function supportLinksOrderInvoice(role: string | null | undefined): boolean {
+  return !isApricartSupportRole(role) && !isWarehouseRole(role)
 }

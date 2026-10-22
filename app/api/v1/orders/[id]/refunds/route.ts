@@ -34,6 +34,11 @@ import { loadDeskOrder } from "@/lib/server/order-desk-orders"
 import { CREDIT_NOTE_CONFLICT_ERRORS, issueCreditNoteForRefund } from "@/lib/server/credit-notes"
 import { refundDetailsStillPriced, refundHistoryByLine, refundLineAmountCents } from "@/lib/refund-amount"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
+import {
+  hasApricartSupportOrderReadScope,
+  isApricartSupportRole,
+} from "@/lib/apricart-support-access"
+import { getRequestScope } from "@/lib/auth"
 
 const refundRequestRoles = new Set([
   "SUPER_ADMIN",
@@ -516,7 +521,10 @@ export async function GET(
 
     // An organization-wide Viewer reads an order's refunds as Head Office does;
     // a pinned one is refused. Reading only — the POST below never maps it.
-    const userRole = viewerReadRole(session.user as any)
+    const sessionRole = (session.user as any).role
+    const userRole = isApricartSupportRole(sessionRole)
+      ? sessionRole
+      : viewerReadRole(session.user as any)
     if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
     const userOrgId = (session.user as any).organizationId
     const userBranchId = (session.user as any).branchId
@@ -525,7 +533,11 @@ export async function GET(
     const allowedBranchIds = await resolveRefundBranchIds(userRole, userId, userBranchId)
     const deskOrderInReach = isOrderDeskRole(userRole) && Boolean(await loadDeskOrder(db, userId, orderId))
 
-    if (!canAccessOrderForRefund(userRole, order, userOrgId, allowedBranchIds, userId, deskOrderInReach)) {
+    const canReadRefunds = isApricartSupportRole(userRole)
+      ? hasApricartSupportOrderReadScope(userRole, userId, await getRequestScope())
+      : canAccessOrderForRefund(userRole, order, userOrgId, allowedBranchIds, userId, deskOrderInReach)
+
+    if (!canReadRefunds) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
 

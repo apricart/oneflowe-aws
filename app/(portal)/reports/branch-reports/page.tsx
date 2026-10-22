@@ -11,6 +11,17 @@ import { ReportTableScroll } from "@/components/reports/report-table-scroll"
 import { SortableHeader, ariaSortFor, useTableSort } from "@/components/reports/sortable-header"
 import { sortRows, type SortValue } from "@/lib/table-sort"
 import { MultiSelectFilter } from "@/components/reports/multi-select-filter"
+import { BranchHierarchyBadge } from "@/components/branches/branch-hierarchy-badge"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+import { useBranches } from "@/lib/hooks/use-api"
+import {
+    BRANCH_HIERARCHY_LABELS,
+    BRANCH_HIERARCHY_ROLES,
+    describeBranchHierarchy,
+    parentBranchOptions,
+    rollUpBranchRowsByParent,
+} from "@/lib/branch-hierarchy"
 import { OrganizationFilter as OrgFilter } from "@/components/reports/organization-filter"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -34,6 +45,8 @@ import autoTable from "jspdf-autotable"
 import {
 Building2,
 Calculator,
+GitBranch,
+Network,
 Calendar,
 Crown,
 Layers,
@@ -60,11 +73,25 @@ type DateRange = { startDate: Date; endDate: Date }
 
 const ALL_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
-type BranchSortKey = "branch" | "status" | "group" | "revenue" | "refunds" | "orders" | "fulfillment"
+type BranchSortKey = "branch" | "status" | "type" | "group" | "revenue" | "refunds" | "orders" | "fulfillment"
+
+/**
+ * The Type cell, and the export's Branch Type column: a rolled-up family
+ * counts its branches; any other row reads its own label
+ * (plans/OF-BRANCH-parent-child-label.md).
+ */
+function branchTypeText(row: any): string {
+    if (typeof row.memberCount === "number" && typeof row.id === "string") {
+        return `Parent + ${row.childCount} child ${row.childCount === 1 ? "branch" : "branches"}`
+    }
+    return describeBranchHierarchy(row)
+}
+
 /** What each sortable column of the branch table orders by. */
 const BRANCH_SORT_ACCESSORS: Record<BranchSortKey, (row: any) => SortValue> = {
     branch: (row) => row.name,
     status: (row) => row.status,
+    type: (row) => branchTypeText(row),
     group: (row) => row.groupName,
     revenue: (row) => row.revenue,
     refunds: (row) => row.refunds,
@@ -123,6 +150,10 @@ export default function BranchReportsPage() {
       return (userOrgId ? String(userOrgId) : "")
     })())
     const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([])
+    // Parent / child label filters; they only narrow what the scope allows.
+    const [selectedHierarchyRoles, setSelectedHierarchyRoles] = useState<string[]>([])
+    const [selectedParentIds, setSelectedParentIds] = useState<number[]>([])
+    const [rollUpByParent, setRollUpByParent] = useState(false)
     const lastSyncedBranchIds = useRef<string[]>([])
 
     // ━━━ SMART SYNC (Global to Local) ━━━
@@ -155,6 +186,8 @@ export default function BranchReportsPage() {
         if (selectedOrgId) globalQueryParams.set("organizationId", selectedOrgId)
         if (selectedGroupIds.length > 0) globalQueryParams.set("groupIds", selectedGroupIds.join(","))
         if (selectedBranchIds.length > 0) globalQueryParams.set("branchIds", selectedBranchIds.join(","))
+        if (selectedHierarchyRoles.length > 0) globalQueryParams.set("hierarchyRoles", selectedHierarchyRoles.join(","))
+        if (selectedParentIds.length > 0) globalQueryParams.set("parentBranchIds", selectedParentIds.join(","))
     }
 
     if (selectedMonths.length > 0) globalQueryParams.set("months", selectedMonths.join(","))
@@ -194,6 +227,39 @@ export default function BranchReportsPage() {
 
     // ━━━ TIER 4: ALL-TIME (YEAR SELECTION) ━━━
     const { data: allTimeData } = useSWR<any>(isInitialized ? `/api/v1/analytics/branches/performance?allTime=true&${globalQueryParams.toString()}` : null, fetcher)
+
+    // The organization's parent branches, for the Parent branch filter.
+    const parentFilterOrgId = role === "SUPER_ADMIN" ? selectedOrgId : String(userOrgId || contextOrgId || "")
+    const { data: parentSourceBranches } = useBranches(role !== "BRANCH_ADMIN" && parentFilterOrgId ? parentFilterOrgId : undefined)
+    const parentFilterItems = useMemo(
+        () => (parentFilterOrgId
+            ? parentBranchOptions(parentSourceBranches?.items ?? [], Number(parentFilterOrgId)).map((option) => ({ id: option.id, label: option.name }))
+            : []),
+        [parentSourceBranches?.items, parentFilterOrgId],
+    )
+    const hierarchyFilters = (
+        <>
+            <MultiSelectFilter
+                title="Branch type"
+                items={BRANCH_HIERARCHY_ROLES.map((hierarchyRole) => ({ id: hierarchyRole, label: BRANCH_HIERARCHY_LABELS[hierarchyRole] }))}
+                selectedIds={selectedHierarchyRoles}
+                onChange={(ids) => setSelectedHierarchyRoles(ids.map(String))}
+                icon={<GitBranch className="h-3.5 w-3.5 mr-2 text-emerald-500" />}
+                placeholder="Branch type"
+                showSearch={false}
+            />
+            {parentFilterItems.length > 0 && (
+                <MultiSelectFilter
+                    title="Parent branch"
+                    items={parentFilterItems}
+                    selectedIds={selectedParentIds}
+                    onChange={(ids) => setSelectedParentIds(ids.map(Number))}
+                    icon={<Network className="h-3.5 w-3.5 mr-2 text-emerald-500" />}
+                    placeholder="Parent branch"
+                />
+            )}
+        </>
+    )
 
     const isInitialLoad = useRef(true)
 
@@ -262,6 +328,9 @@ export default function BranchReportsPage() {
         setSelectedOrgId(defaultOrgId)
         setSelectedGroupIds([])
         setSelectedBranchIds(defaultBranchIds)
+        setSelectedHierarchyRoles([])
+        setSelectedParentIds([])
+        setRollUpByParent(false)
         setReportMonths(activePreset === "all" ? [...ALL_MONTHS] : [])
         setReportYears(activePreset === "all" ? [...allYears] : [])
         setReportSearch("")
@@ -289,6 +358,8 @@ export default function BranchReportsPage() {
         setSelectedOrgId(defaultOrgId)
         setSelectedGroupIds([])
         setSelectedBranchIds(defaultBranchIds)
+        setSelectedHierarchyRoles([])
+        setSelectedParentIds([])
         setChartMonths(activePreset === "all" ? [...ALL_MONTHS] : [])
         setChartYears(activePreset === "all" ? [...allYears] : [])
         void mutateChart()
@@ -309,7 +380,10 @@ export default function BranchReportsPage() {
 
     const filteredBranches = useMemo(() => {
         const branches = reportData?.items || []
-        let list = branches.filter((b: any) => b.name?.toLowerCase().includes(reportSearch.toLowerCase()) || b.groupName?.toLowerCase().includes(reportSearch.toLowerCase()))
+        const query = reportSearch.toLowerCase()
+        let list = branches.filter((b: any) => b.name?.toLowerCase().includes(query)
+            || b.groupName?.toLowerCase().includes(query)
+            || b.parentBranchName?.toLowerCase().includes(query))
         
         // Security Fallback: Client-side filtering to ensure only authorized branch is shown
         if (role === "BRANCH_ADMIN" && userBranchId) {
@@ -321,10 +395,15 @@ export default function BranchReportsPage() {
 
     // The rank badge is the branch's place in the ranking the report returns,
     // whichever column the table is currently sorted by.
-    const branchRank = useMemo(() => new Map<unknown, number>(filteredBranches.map((b: any, position: number) => [b.id, position] as const)), [filteredBranches])
+    // Rolled up, each parent and its children are one row (lib/branch-hierarchy.ts).
+    const reportRows: any[] = useMemo(
+        () => (rollUpByParent ? rollUpBranchRowsByParent(filteredBranches) : filteredBranches),
+        [filteredBranches, rollUpByParent],
+    )
+    const branchRank = useMemo(() => new Map<unknown, number>(reportRows.map((b: any, position: number) => [b.id, position] as const)), [reportRows])
     // Column sort, applied after the search filter (plans/OF-TABLE-column-sorting.md).
     const { sort: branchSort, toggleSort: toggleBranchSort } = useTableSort<BranchSortKey>()
-    const sortedBranchRows = useMemo(() => sortRows(filteredBranches, branchSort, BRANCH_SORT_ACCESSORS), [filteredBranches, branchSort])
+    const sortedBranchRows = useMemo(() => sortRows(reportRows, branchSort, BRANCH_SORT_ACCESSORS), [reportRows, branchSort])
     const sortBranchHead = (key: BranchSortKey, label: ReactNode) => (
         <SortableHeader
             label={label}
@@ -383,6 +462,7 @@ export default function BranchReportsPage() {
               }
               return 'Inactive'
             })() },
+            { label: "Branch Type",        value: (b: any) => branchTypeText(b) },
             ...(role !== "BRANCH_ADMIN" ? [{ label: "Cluster / Group", value: (b: any) => b.groupName || "UNGROUPED" }] : []),
             ...(!pricesHidden ? [
                 { label: `${revenueHeader} (PKR)`, value: (b: any) => (b.revenue / 100).toFixed(2) },
@@ -393,7 +473,7 @@ export default function BranchReportsPage() {
         ]
 
         const headers = columns.map(c => c.label)
-        const rows = filteredBranches.map((b: any, idx: number) => columns.map(c => c.value(b, idx)))
+        const rows = reportRows.map((b: any, idx: number) => columns.map(c => c.value(b, idx)))
 
         if (format === 'pdf') {
             const doc = new jsPDF()
@@ -588,6 +668,7 @@ export default function BranchReportsPage() {
                                             />
                                         </>
                                     )}
+                                    {role !== "BRANCH_ADMIN" && hierarchyFilters}
                                     <MonthFilter selected={chartMonths} onChange={setChartMonths} />
                                      <YearFilter selected={chartYears} onChange={setChartYears} availableYears={allYears} />
                                 </div>
@@ -691,6 +772,7 @@ export default function BranchReportsPage() {
                                     />
                                 </>
                             )}
+                            {role !== "BRANCH_ADMIN" && hierarchyFilters}
                             <MonthFilter selected={reportMonths} onChange={setReportMonths} />
                              <YearFilter selected={reportYears} onChange={setReportYears} availableYears={allYears} />
                             <Button variant="outline" size="sm" onClick={resetReportFilters} className="h-10 w-10 p-0 rounded-xl" aria-label="Reset report filters" title="Reset report filters">
@@ -719,9 +801,17 @@ export default function BranchReportsPage() {
                                         </div>
                                         Branch Performance Rankings
                                     </CardTitle>
-                                    <Badge variant="outline" className="h-8 rounded-lg px-3 text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-50 dark:bg-slate-900">
-                                        {filteredBranches.length} ENTRIES
-                                    </Badge>
+                                    <div className="flex items-center gap-4">
+                                        {role !== "BRANCH_ADMIN" && (
+                                            <div className="flex items-center gap-2">
+                                                <Switch id="branch-report-roll-up" checked={rollUpByParent} onCheckedChange={setRollUpByParent} />
+                                                <Label htmlFor="branch-report-roll-up" className="text-[10px] font-black uppercase tracking-widest text-slate-500">Roll up by parent</Label>
+                                            </div>
+                                        )}
+                                        <Badge variant="outline" className="h-8 rounded-lg px-3 text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-50 dark:bg-slate-900">
+                                            {reportRows.length} ENTRIES
+                                        </Badge>
+                                    </div>
                                 </div>
                             </CardHeader>
                             <ReportTableScroll>
@@ -730,6 +820,7 @@ export default function BranchReportsPage() {
                                         <TableRow className="bg-slate-50/50 dark:bg-slate-900/50 border-b border-slate-100 dark:border-slate-800">
                                             <TableHead aria-sort={ariaSortFor(branchSort, "branch")} className="pl-8 h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">{sortBranchHead("branch", "Rank & Branch")}</TableHead>
                                             <TableHead aria-sort={ariaSortFor(branchSort, "status")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-center">{sortBranchHead("status", "Status")}</TableHead>
+                                            <TableHead aria-sort={ariaSortFor(branchSort, "type")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">{sortBranchHead("type", "Type")}</TableHead>
                                             {role !== "BRANCH_ADMIN" && <TableHead aria-sort={ariaSortFor(branchSort, "group")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400">{sortBranchHead("group", "Cluster / Group")}</TableHead>}
                                             {!pricesHidden && <TableHead aria-sort={ariaSortFor(branchSort, "revenue")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right">{sortBranchHead("revenue", <>{revenueHeader} (PKR)</>)}</TableHead>}
                                             {!pricesHidden && <TableHead aria-sort={ariaSortFor(branchSort, "refunds")} className="h-14 font-black text-[10px] uppercase tracking-[0.2em] text-slate-400 text-right text-rose-500">{sortBranchHead("refunds", "Refunds")}</TableHead>}
@@ -742,13 +833,13 @@ export default function BranchReportsPage() {
                                           if (isReportLoading) {
                                             return (
                                             Array.from({ length: 6 }, (_, position) => `branch-report-loading-${position + 1}`).map((skeletonKey) => (
-                                                <TableRow key={skeletonKey} className="h-20 animate-pulse"><TableCell colSpan={role === "BRANCH_ADMIN" ? 6 : 7}><div className="h-10 bg-slate-50 dark:bg-slate-900/50 rounded-xl mx-4" /></TableCell></TableRow>
+                                                <TableRow key={skeletonKey} className="h-20 animate-pulse"><TableCell colSpan={role === "BRANCH_ADMIN" ? 7 : 8}><div className="h-10 bg-slate-50 dark:bg-slate-900/50 rounded-xl mx-4" /></TableCell></TableRow>
                                             ))
                                         )
                                           }
-                                          if (filteredBranches.length === 0) {
+                                          if (reportRows.length === 0) {
                                             return (
-                                            <TableRow><TableCell colSpan={role === "BRANCH_ADMIN" ? 6 : 7} className="h-60 text-center text-slate-400 text-xs font-black uppercase tracking-widest">No branch records found</TableCell></TableRow>
+                                            <TableRow><TableCell colSpan={role === "BRANCH_ADMIN" ? 7 : 8} className="h-60 text-center text-slate-400 text-xs font-black uppercase tracking-widest">No branch records found</TableCell></TableRow>
                                         )
                                           }
                                           return (
@@ -794,6 +885,11 @@ export default function BranchReportsPage() {
                                                             })()}
                                                         </Badge>
                                                     </TableCell>
+                                                    <TableCell>
+                                                        {typeof branch.id === "string"
+                                                            ? <Badge variant="outline" className="text-[10px] font-semibold border-indigo-200 bg-indigo-50 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-300">{branchTypeText(branch)}</Badge>
+                                                            : <BranchHierarchyBadge branch={branch} />}
+                                                    </TableCell>
                                                     {role !== "BRANCH_ADMIN" && (
                                                         <TableCell>
                                                             <Badge variant="secondary" className="bg-slate-100 dark:bg-slate-800 text-[10px] font-bold border-none uppercase tracking-tighter">
@@ -827,7 +923,7 @@ export default function BranchReportsPage() {
                                 </Table>
                             </ReportTableScroll>
                             <div className="px-8 py-5 border-t border-slate-100 dark:border-slate-900 bg-slate-50/50 dark:bg-slate-900/40 flex items-center justify-between">
-                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{filteredBranches.length} units listed</p>
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{reportRows.length} {rollUpByParent ? "rows" : "units"} listed</p>
                                 <p className="text-[10px] font-bold text-slate-300 dark:text-slate-700 font-mono italic" suppressHydrationWarning>GEN_TS: {generatedDate}</p>
                             </div>
                         </Card>

@@ -38,6 +38,12 @@ describe("departmentJoinUpdateSchema", () => {
     expect(parse({ ...valid, branches: [{ crc: "CRC-9" }] }).success).toBe(true)
   })
 
+  it("accepts a new branch with or without its city, taking the list's spelling", () => {
+    const parsed = parse({ ...valid, branches: [{ crc: "CRC-9", name: "Saddar Office", city: " lahore ", province: "Punjab" }] })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.update.branches[0]).toMatchObject({ city: "Lahore", province: "Punjab" })
+  })
+
   it("accepts an empty last name", () => {
     expect(parse({ ...valid, lastName: "" }).success).toBe(true)
   })
@@ -69,6 +75,10 @@ describe("departmentJoinUpdateSchema", () => {
     ["branches", [{ crc: "A-1", name: "K" }]],
     ["branches", [{ crc: "A-1", name: "x".repeat(101) }]],
     ["branches", [{ branchId: 5, name: "Korangi" }]],
+    ["branches", [{ branchId: 5, city: "Karachi", province: "Sindh" }]],
+    ["branches", [{ crc: "A-1", city: "Karachi" }]],
+    ["branches", [{ crc: "A-1", city: "Karachee", province: "Sindh" }]],
+    ["branches", [{ crc: "A-1", city: "Karachi", province: "Punjab" }]],
     ["addresses", []],
     ["addresses", ["abc"]],
     ["addresses", ["Plot 4, Clifton", "plot 4, clifton"]],
@@ -76,5 +86,18 @@ describe("departmentJoinUpdateSchema", () => {
     ["approvers", [{ level: 1, email: "one@demo.test", designation: "Director", userId: "x" }]],
   ])("refuses %s = %j", (field, value) => {
     expect(parse({ ...valid, [field]: value }).success).toBe(false)
+  })
+})
+
+describe("departmentJoinUpdateSchema — a new branch's type (plans/OF-JOIN-new-branch-parent-child.md)", () => {
+  it("accepts a type on a CRC entry, or none (the stored one is kept)", () => {
+    expect(parse({ ...valid, branches: [{ crc: "PAR-1", hierarchyRole: "PARENT" }, { crc: "KID-1", hierarchyRole: "CHILD", parentCrc: "PAR-1" }] }).success).toBe(true)
+    expect(parse({ ...valid, branches: [{ crc: "KID-1" }] }).success).toBe(true)
+  })
+
+  it("refuses a pairing that cannot stand on its own", () => {
+    expect(parse({ ...valid, branches: [{ crc: "KID-1", hierarchyRole: "CHILD" }] }).success).toBe(false)
+    expect(parse({ ...valid, branches: [{ crc: "KID-1", parentBranchId: 7 }] }).success).toBe(false)
+    expect(parse({ ...valid, branches: [{ branchId: 5, hierarchyRole: "PARENT" }] }).success).toBe(false)
   })
 })

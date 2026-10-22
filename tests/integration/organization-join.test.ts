@@ -9,6 +9,7 @@ import * as decideRoute from "@/app/api/v1/join-requests/[id]/route"
 import * as queueRoute from "@/app/api/v1/join-requests/route"
 import * as lookupRoute from "@/app/api/v1/join/lookup/route"
 import * as submitRoute from "@/app/api/v1/join/requests/route"
+import { submitWithJoinEmailProof } from "./helpers/join-email-proof"
 import * as joinCodeRoute from "@/app/api/v1/organizations/join-code/route"
 import {
   auditLogs,
@@ -58,7 +59,7 @@ vi.mock("@/lib/rate-limiter", async (importOriginal) => {
 
 const { getServerSession } = mockedNextAuth
 const { POST: lookup } = lookupRoute
-const { POST: submit } = submitRoute
+const submit = submitWithJoinEmailProof(submitRoute.POST)
 const { GET: readCode, PUT: setCode } = joinCodeRoute
 const { GET: listQueue } = queueRoute
 const { PATCH: decide } = decideRoute

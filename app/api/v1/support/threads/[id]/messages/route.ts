@@ -10,7 +10,7 @@ import type { SupportStatus } from "@/lib/support-thread"
 import { supportMessageCreateSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { getSupportThreadForViewer, postSupportMessage } from "@/lib/server/support-threads"
 import { attemptImmediateEmailDelivery } from "@/lib/server/order-notifications"
-import { resolveSupportResponder, supportViewerFromSession } from "@/lib/server/support-session"
+import { resolveSupportResponder, supportViewerFromSession, withSupportReach } from "@/lib/server/support-session"
 
 /**
  * Posting a reply.
@@ -30,7 +30,7 @@ export async function POST(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const viewer = supportViewerFromSession(session)
+    const viewer = await withSupportReach(supportViewerFromSession(session))
     if (!viewer || !isSupportParticipantRole(viewer.role)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
@@ -60,6 +60,7 @@ export async function POST(
         organizationId: thread.organizationId,
         branchId: thread.branchId,
         createdByUserId: thread.createdByUserId,
+        orderBranchId: thread.orderBranchId,
         status: thread.status as SupportStatus,
       },
     })

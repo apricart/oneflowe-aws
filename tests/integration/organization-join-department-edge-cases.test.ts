@@ -7,6 +7,7 @@ import * as mockedNextAuth from "next-auth"
 import * as decideRoute from "@/app/api/v1/join-requests/[id]/route"
 import * as lookupRoute from "@/app/api/v1/join/lookup/route"
 import * as submitRoute from "@/app/api/v1/join/requests/route"
+import { submitWithJoinEmailProof } from "./helpers/join-email-proof"
 import * as joinCodeRoute from "@/app/api/v1/organizations/join-code/route"
 import {
   auditLogs,
@@ -46,6 +47,8 @@ import {
 
 const TEMPORARY_PASSWORD = "Temp-Pass-2026!x"
 const STRONG_PASSWORD = "Join-Flow-2026!x"
+/** Where every new branch submitted here says it is (plans/OF-JOIN-applicant-new-branch-city.md). */
+const KARACHI = { city: "Karachi", province: "Sindh" }
 
 const mocks = vi.hoisted(() => ({
   hashPassword: vi.fn(async (plain: string) => `hashed:${plain}`),
@@ -137,7 +140,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
   async function submit(body: Record<string, unknown>) {
     signIn(null)
-    return submitRoute.POST(jsonRequest("/api/v1/join/requests", "POST", body))
+    return submitWithJoinEmailProof(submitRoute.POST)(jsonRequest("/api/v1/join/requests", "POST", body))
   }
 
   async function submitAccepted(body: Record<string, unknown>) {
@@ -273,13 +276,13 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
   describe("submitting", () => {
     it("keeps a CRC two active branches share as a CRC, for Head Office to map", async () => {
-      const stored = await submitAccepted(signup({ branches: [{ crc: sharedCrc.toLowerCase(), name: "New Depot" }] }))
+      const stored = await submitAccepted(signup({ branches: [{ crc: sharedCrc.toLowerCase(), name: "New Depot", ...KARACHI }] }))
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
       expect(rows).toEqual([expect.objectContaining({ existingBranchId: null, costCenterId: sharedCrc })])
     })
 
     it("treats a CRC that only a retired branch carries as a new one", async () => {
-      const stored = await submitAccepted(signup({ branches: [{ crc: retiredCrc, name: "New Depot" }] }))
+      const stored = await submitAccepted(signup({ branches: [{ crc: retiredCrc, name: "New Depot", ...KARACHI }] }))
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
       expect(rows).toEqual([expect.objectContaining({ existingBranchId: null, costCenterId: retiredCrc })])
     })
@@ -287,7 +290,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     it("stores a branch picked twice, or a CRC typed twice in different case, once", async () => {
       const crc = `IT-TWICE-${unique()}`.toUpperCase()
       const stored = await submitAccepted(signup({
-        branches: [{ branchId: fixtures.northBranchId }, { branchId: fixtures.northBranchId }, { crc, name: "New Depot" }, { crc: ` ${crc.toLowerCase()} `, name: "New Depot" }],
+        branches: [{ branchId: fixtures.northBranchId }, { branchId: fixtures.northBranchId }, { crc, name: "New Depot", ...KARACHI }, { crc: ` ${crc.toLowerCase()} `, name: "New Depot", ...KARACHI }],
       }))
       const rows = await db.select().from(organizationJoinRequestBranches).where(eq(organizationJoinRequestBranches.requestId, stored.id))
       expect(rows).toHaveLength(2)
@@ -299,12 +302,15 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
 
     it.each([
-      ["eleven branches", { branches: Array.from({ length: 11 }, (_, index) => ({ crc: `IT-MANY-${index}`, name: "New Depot" })) }],
+      ["eleven branches", { branches: Array.from({ length: 11 }, (_, index) => ({ crc: `IT-MANY-${index}`, name: "New Depot", ...KARACHI })) }],
       ["six addresses", { addresses: Array.from({ length: 6 }, (_, index) => `Plot ${index + 10}, Clifton`) }],
       ["no address", { addresses: [] }],
       ["no branch", { branches: [] }],
-      ["a new branch named only by its CRC", { branches: [{ crc: "IT-NO-NAME" }] }],
-      ["a new branch with a one-letter name", { branches: [{ crc: "IT-SHORT-NAME", name: "K" }] }],
+      ["a new branch named only by its CRC", { branches: [{ crc: "IT-NO-NAME", ...KARACHI }] }],
+      ["a new branch with a one-letter name", { branches: [{ crc: "IT-SHORT-NAME", name: "K", ...KARACHI }] }],
+      ["a new branch with no city", { branches: [{ crc: "IT-NO-CITY", name: "New Depot" }] }],
+      ["a new branch in a city not on the list", { branches: [{ crc: "IT-ODD-CITY", name: "New Depot", city: "Atlantis", province: "Sindh" }] }],
+      ["a new branch under another city's province", { branches: [{ crc: "IT-ODD-PROV", name: "New Depot", city: "Karachi", province: "Punjab" }] }],
       ["an unknown department", { department: "Treasury" }],
       ["an IP extension of two digits", { ipExtension: "12" }],
       ["a password below the policy", { password: "short" }],
@@ -416,7 +422,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
     it("when the new branch's name is already taken — after the branch would have been created", async () => {
       const crc = `IT-DUP-${unique()}`.toUpperCase()
-      const body = signup({ branches: [{ crc, name: "New Depot" }] })
+      const body = signup({ branches: [{ crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       const response = await patch(stored.id, {
@@ -431,7 +437,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
 
     it("when an address is given no branch — after a new branch was created for it", async () => {
       const crc = `IT-ADDR-${unique()}`.toUpperCase()
-      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot" }] })
+      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       const fresh = item.branches.find((row: any) => row.kind === "new")
@@ -446,7 +452,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
 
     it("when a CRC is mapped onto another organization's branch", async () => {
-      const body = signup({ branches: [{ crc: `IT-MAP-${unique()}`, name: "New Depot" }] })
+      const body = signup({ branches: [{ crc: `IT-MAP-${unique()}`, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       const response = await patch(stored.id, {
@@ -459,7 +465,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
 
     it("when a CRC to create arrives with no details at all", async () => {
-      const body = signup({ branches: [{ crc: `IT-BARE-${unique()}`, name: "New Depot" }] })
+      const body = signup({ branches: [{ crc: `IT-BARE-${unique()}`, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item } = await review(stored.id)
       const response = await patch(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
@@ -632,7 +638,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
   })
 
-  /* ── The approvers' roles: one branch is a Branch Admin, more a Group User ── */
+  /* ── Approver roles: Levels 1 and 2 are Group Users; later levels follow branch count ── */
 
   describe("approver roles", () => {
     async function accountAt(email: string) {
@@ -685,32 +691,34 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       return { item, response }
     }
 
-    it("creates a new approver for one branch as a Branch Admin of that branch", async () => {
+    it("creates a new Level 2 approver for one branch as a Group User assigned to that branch", async () => {
       const body = signup()
       const stored = await submitAccepted(body)
       const { item, response } = await approveAsReviewed(stored)
-      expect(item.approvers[1].resolution).toEqual({ kind: "create", role: "BRANCH_ADMIN" })
+      expect(item.approvers[1].resolution).toEqual({ kind: "create", role: "GROUP_USER" })
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
 
       const created = await accountAt(body.approvers[1].email)
-      expect(created).toMatchObject({ role: "BRANCH_ADMIN", branchId: fixtures.northBranchId, level: 2, mustChange: true })
-      expect(await assignedBranches(created.id)).toEqual([])
+      expect(created).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2, mustChange: true })
+      expect(await assignedBranches(created.id)).toEqual([fixtures.northBranchId])
       expect(mocks.sendWelcomeEmail).toHaveBeenCalledWith(body.approvers[1].email, expect.any(String), expect.any(String), TEMPORARY_PASSWORD, expect.any(String))
     })
 
-    it("creates a new approver for one CRC still to be created as a Branch Admin of the new branch", async () => {
+    it("creates a new Level 2 approver for one CRC as a Group User assigned to the new branch", async () => {
       const crc = `IT-ROLE-${unique()}`.toUpperCase()
-      const body = signup({ branches: [{ crc, name: "New Depot" }] })
+      const body = signup({ branches: [{ crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { response } = await approveAsReviewed(stored)
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
       const [created] = await db.select({ id: branches.id }).from(branches).where(eq(branches.costCenterId, crc))
-      expect(await accountAt(body.approvers[1].email)).toMatchObject({ role: "BRANCH_ADMIN", branchId: created.id, level: 2 })
+      const approver = await accountAt(body.approvers[1].email)
+      expect(approver).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2 })
+      expect(await assignedBranches(approver.id)).toEqual([created.id])
     })
 
     it("creates a new approver for several branches as a Group User assigned to all of them", async () => {
       const crc = `IT-ROLE-${unique()}`.toUpperCase()
-      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot" }] })
+      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item, response } = await approveAsReviewed(stored)
       expect(item.approvers[1].resolution).toEqual({ kind: "create", role: "GROUP_USER" })
@@ -722,30 +730,33 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     })
 
     it("decides a new approver's role on the final branches when a CRC is mapped onto one already listed", async () => {
-      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc: `IT-MAPPED-${unique()}`, name: "New Depot" }] })
+      const body = signup({ branches: [{ branchId: fixtures.northBranchId }, { crc: `IT-MAPPED-${unique()}`, name: "New Depot", ...KARACHI }] })
       const stored = await submitAccepted(body)
       const { item: before } = await review(stored.id)
       expect(before.approvers[1].resolution).toEqual({ kind: "create", role: "GROUP_USER" })
       const fresh = before.branches.find((row: any) => row.kind === "new")
       const { response } = await approveAsReviewed(stored, { [fresh.requestBranchId]: fixtures.northBranchId })
       expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
-      // One branch after all: the initiator orders through the shop, and the approver is its Branch Admin.
+      // One branch after all: the initiator orders through the shop, while a
+      // Level 2 Financial Approver remains an organization-scoped Group User.
       expect(await accountAt(body.email)).toMatchObject({ role: "ORDER_PORTAL", branchId: fixtures.northBranchId })
-      expect(await accountAt(body.approvers[1].email)).toMatchObject({ role: "BRANCH_ADMIN", branchId: fixtures.northBranchId })
+      const approver = await accountAt(body.approvers[1].email)
+      expect(approver).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2 })
+      expect(await assignedBranches(approver.id)).toEqual([fixtures.northBranchId])
     })
 
-    it("blocks a new one-branch approver where the approver role is Head Office, and creates nothing", async () => {
+    it("creates a new one-branch Level 2 approver as a Group User when the approver role is Head Office", async () => {
       const body = signup()
       const stored = await submitAccepted(body)
       await db.update(organizations).set({ orderApproverRole: "HEAD_OFFICE" }).where(eq(organizations.id, fixtures.organizationId))
       try {
         const { item } = await review(stored.id)
-        expect(item.approvers[1].resolution.kind).toBe("blocked")
-        expect(item.approvers[1].resolution.reason).toMatch(/created as a Financial Approver/)
+        expect(item.approvers[1].resolution).toEqual({ kind: "create", role: "GROUP_USER" })
         const response = await patch(stored.id, { decision: "approve", expectedResolutions: expectedFrom(item) })
-        expect(response.status).toBe(409)
-        expect(await accountsAt(body.email)).toHaveLength(0)
-        expect(await accountsAt(body.approvers[1].email)).toHaveLength(0)
+        expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
+        const approver = await accountAt(body.approvers[1].email)
+        expect(approver).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2 })
+        expect(await assignedBranches(approver.id)).toEqual([fixtures.northBranchId])
       } finally {
         await db.update(organizations).set({ orderApproverRole: "BRANCH_ADMIN" }).where(eq(organizations.id, fixtures.organizationId))
       }
@@ -792,7 +803,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       const admin = await branchAdminAt(fixtures.northBranchId)
       const crc = `IT-PLUS-${unique()}`.toUpperCase()
       const body = signup({
-        branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot" }],
+        branches: [{ branchId: fixtures.northBranchId }, { crc, name: "New Depot", ...KARACHI }],
         approvers: [signup().approvers[0], { level: 2, email: admin.email, designation: "Manager" }],
       })
       const stored = await submitAccepted(body)
@@ -803,18 +814,19 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       expect(await assignedBranches(admin.id)).toEqual([fixtures.northBranchId, created.id].sort((a, b) => a - b))
     })
 
-    it("leaves a Branch Admin of the only branch a Branch Admin, giving it the level", async () => {
+    it("converts a Branch Admin of the only branch into a Group User for Level 2", async () => {
       const admin = await branchAdminAt(fixtures.northBranchId)
       const before = await accountAt(admin.email)
       const body = signup({ approvers: [signup().approvers[0], { level: 2, email: admin.email, designation: "Manager" }] })
       const stored = await submitAccepted(body)
       const { item, response } = await approveAsReviewed(stored)
-      expect(item.approvers[1].resolution).toEqual({ kind: "assign", userId: admin.id, addBranchIds: [], becomesGroupUser: false })
+      expect(item.approvers[1].resolution).toEqual({ kind: "assign", userId: admin.id, addBranchIds: [], becomesGroupUser: true })
       expect(response.status).toBe(200)
       const after = await accountAt(admin.email)
-      expect(after).toMatchObject({ role: "BRANCH_ADMIN", branchId: fixtures.northBranchId, level: 2 })
-      expect(after.sessionVersion).toBe(before.sessionVersion)
-      expect(mocks.sendJoinApproverNoticeEmail).toHaveBeenCalledWith(expect.objectContaining({ to: admin.email, becameGroupUser: false }))
+      expect(after).toMatchObject({ role: "GROUP_USER", branchId: null, level: 2 })
+      expect(after.sessionVersion).toBe(before.sessionVersion + 1)
+      expect(await assignedBranches(admin.id)).toEqual([fixtures.northBranchId])
+      expect(mocks.sendJoinApproverNoticeEmail).toHaveBeenCalledWith(expect.objectContaining({ to: admin.email, becameGroupUser: true }))
     })
 
     it("refuses to convert a Branch Admin with orders of its own still in flight, and changes nothing", async () => {
@@ -882,7 +894,7 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
     beforeAll(async () => {
       const email = `standard-${fixtures.suffix}@example.test`
       signIn(null)
-      const response = await submitRoute.POST(jsonRequest("/api/v1/join/requests", "POST", {
+      const response = await submitWithJoinEmailProof(submitRoute.POST)(jsonRequest("/api/v1/join/requests", "POST", {
         code: foreignCode,
         firstName: "Standard",
         lastName: "Applicant",
@@ -980,8 +992,55 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       expect(matches).toEqual({ [ownCrc]: { branchId: ownBranchId, name: `Own CRC ${ownCrc}` }, [sharedCrc]: null })
     })
 
+    // plans/OF-JOIN-applicant-new-branch-city.md
+    it("keeps the applicant's city through an edit that does not send one, and moves it when one is sent", async () => {
+      const crc = `IT-CITY-${unique()}`.toUpperCase()
+      const stored = await submitAccepted(signup({ branches: [{ crc, name: "City Depot", ...KARACHI }] }))
+      const { item } = await review(stored.id)
+      const location = async () => {
+        const [row] = await db.select().from(organizationJoinRequestBranches)
+          .where(and(eq(organizationJoinRequestBranches.requestId, stored.id), eq(organizationJoinRequestBranches.costCenterId, crc)))
+        return [row.id, row.requestedBranchCity, row.requestedBranchProvince]
+      }
+      const [rowId] = await location()
+
+      expect((await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc }] } })).status).toBe(200)
+      expect(await location()).toEqual([rowId, "Karachi", "Sindh"])
+
+      const moved = await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc, city: "lahore", province: "Punjab" }] } })
+      expect(moved.status, JSON.stringify(await moved.clone().json())).toBe(200)
+      // The same row, so the review's choices still name it.
+      expect(await location()).toEqual([rowId, "Lahore", "Punjab"])
+      expect((await review(stored.id)).item.branches[0]).toMatchObject({ requestedCity: "Lahore", requestedProvince: "Punjab" })
+
+      const refused = await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc, city: "Lahore", province: "Sindh" }] } })
+      expect(refused.status).toBe(400)
+      expect(await location()).toEqual([rowId, "Lahore", "Punjab"])
+    })
+
+    it("lets the database refuse a location on an existing branch's row, or half a location", async () => {
+      const stored = await submitAccepted(signup())
+      const insert = (values: Partial<typeof organizationJoinRequestBranches.$inferInsert>) => db
+        .insert(organizationJoinRequestBranches)
+        .values({ requestId: stored.id, organizationId: fixtures.organizationId, ...values })
+      const code = async (attempt: Promise<unknown>) => {
+        try {
+          await attempt
+          return null
+        } catch (caughtError: any) {
+          return String(caughtError?.code ?? caughtError?.cause?.code)
+        }
+      }
+      const otherBranchId = await newBranch({ name: `Located ${unique()}` })
+      expect(await code(insert({ existingBranchId: otherBranchId, requestedBranchCity: "Karachi", requestedBranchProvince: "Sindh" })))
+        .toBe("23514")
+      expect(await code(insert({ costCenterId: `IT-HALF-${unique()}`.toUpperCase(), requestedBranchCity: "Karachi" }))).toBe("23514")
+      expect(await code(insert({ costCenterId: `IT-BLANK-${unique()}`.toUpperCase(), requestedBranchCity: " ", requestedBranchProvince: "Sindh" })))
+        .toBe("23514")
+    })
+
     it("turns a several-branch request into a one-branch request and back", async () => {
-      const stored = await submitAccepted(signup({ branches: [{ branchId: fixtures.northBranchId }, { crc: `IT-TWO-${unique()}`, name: "New Depot" }] }))
+      const stored = await submitAccepted(signup({ branches: [{ branchId: fixtures.northBranchId }, { crc: `IT-TWO-${unique()}`, name: "New Depot", ...KARACHI }] }))
       expect(stored.requestedRole).toBe("GROUP_ORDER_PORTAL")
       const { item } = await review(stored.id)
 
@@ -1077,6 +1136,24 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       expect((await patch(stored.id, { decision: "approve", expectedResolutions: expectedFrom(after) })).status).toBe(409)
     })
 
+    // plans/OF-JOIN-email-otp-verification.md: the applicant proved the address
+    // they typed, not one Head Office typed for them.
+    it("keeps the email verification through other edits and clears it when the email changes", async () => {
+      const stored = await submitAccepted(signup())
+      expect((await requestRow(stored.id)).emailVerifiedAt).toBeInstanceOf(Date)
+
+      const { item } = await review(stored.id)
+      expect((await patch(stored.id, { update: { ...editFrom(item), department: "IT" } })).status).toBe(200)
+      expect((await requestRow(stored.id)).emailVerifiedAt).toBeInstanceOf(Date)
+
+      const { item: edited } = await review(stored.id)
+      const corrected = `edge-corrected-${unique()}@example.test`
+      expect((await patch(stored.id, { update: { ...editFrom(edited), email: corrected } })).status).toBe(200)
+      const after = await requestRow(stored.id)
+      expect(after.email).toBe(corrected)
+      expect(after.emailVerifiedAt).toBeNull()
+    })
+
     it("refuses edited approvers that skip or repeat a level", async () => {
       const stored = await submitAccepted(signup())
       const { item } = await review(stored.id)
@@ -1085,6 +1162,218 @@ describe.skipIf(!hasTestDatabase)("the department sign-up, at its edges", () => 
       const levelThree = { ...edit, approvers: [...edit.approvers, { level: 3, email: `three-${unique()}@example.test`, designation: "Clerk" }] }
       expect((await patch(stored.id, { update: twoLevelOnes })).status).toBe(400)
       expect((await patch(stored.id, { update: levelThree })).status).toBe(400)
+    })
+  })
+
+  /* ── A new branch's type (plans/OF-JOIN-new-branch-parent-child.md) ────── */
+
+  describe("a new branch's type", () => {
+    let parentBranchId = 0
+    let foreignParentBranchId = 0
+
+    const requestRows = (requestId: number) => db
+      .select()
+      .from(organizationJoinRequestBranches)
+      .where(eq(organizationJoinRequestBranches.requestId, requestId))
+      .orderBy(organizationJoinRequestBranches.id)
+
+    const branchNamed = async (name: string) => {
+      const [row] = await db
+        .select({ id: branches.id, hierarchyRole: branches.hierarchyRole, parentBranchId: branches.parentBranchId })
+        .from(branches)
+        .where(and(eq(branches.organizationId, fixtures.organizationId), eq(branches.name, name)))
+      return row ?? null
+    }
+
+    /** Approve with the review's own resolutions, every address at the first branch. */
+    const approve = (item: any, newBranches: Array<Record<string, unknown>>) => patch(item.id, {
+      decision: "approve",
+      newBranches,
+      addressBranches: item.addresses.map((row: any) => ({ requestAddressId: row.requestAddressId, requestBranchId: item.branches[0].requestBranchId })),
+      expectedResolutions: expectedFrom(item),
+    })
+
+    const created = (row: any, name: string, hierarchy: Record<string, unknown>) => ({
+      requestBranchId: row.requestBranchId, name, province: "Sindh", city: "Karachi", address: "Plot 9, Clifton", ...hierarchy,
+    })
+
+    beforeAll(async () => {
+      const [parent] = await db.insert(branches).values({
+        organizationId: fixtures.organizationId, name: `Parent ${fixtures.suffix}`, status: "active", hierarchyRole: "PARENT",
+      }).returning({ id: branches.id })
+      parentBranchId = parent.id
+      const [foreignParent] = await db.insert(branches).values({
+        organizationId: fixtures.foreignOrganizationId, name: `Foreign Parent ${fixtures.suffix}`, status: "active", hierarchyRole: "PARENT",
+      }).returning({ id: branches.id })
+      foreignParentBranchId = foreignParent.id
+    })
+
+    it("offers the organization's parent branches on the lookup, and no other tenant's", async () => {
+      const lookup = await (await lookupRoute.POST(jsonRequest("/api/v1/join/lookup", "POST", { code }))).json()
+      expect(lookup.form).toBe("department")
+      expect(lookup.parentBranchIds).toContain(parentBranchId)
+      expect(lookup.parentBranchIds).not.toContain(fixtures.northBranchId)
+      expect(lookup.parentBranchIds).not.toContain(foreignParentBranchId)
+    })
+
+    it("stores a parent, its child named by CRC, and a child of an existing parent; the review answers them", async () => {
+      const tag = unique().toUpperCase()
+      const stored = await submitAccepted(signup({
+        branches: [
+          // The child first: the request is judged whole, not in order.
+          { crc: `KID-${tag}`, name: `Kid ${tag}`, ...KARACHI, hierarchyRole: "CHILD", parentCrc: `par-${tag}` },
+          { crc: `PAR-${tag}`, name: `Hub ${tag}`, ...KARACHI, hierarchyRole: "PARENT" },
+          { crc: `KIOSK-${tag}`, name: `Kiosk ${tag}`, ...KARACHI, hierarchyRole: "CHILD", parentBranchId },
+        ],
+      }))
+      expect((await requestRows(stored.id)).map((row) => [row.requestedHierarchyRole, row.requestedParentBranchId, row.requestedParentCrc]))
+        .toEqual([["CHILD", null, `PAR-${tag}`], ["PARENT", null, null], ["CHILD", parentBranchId, null]])
+
+      const { item } = await review(stored.id)
+      expect(item.branches.map((row: any) => [row.requestedHierarchyRole, row.requestedParentCrc, row.requestedParentBranchName])).toEqual([
+        ["CHILD", `PAR-${tag}`, null],
+        ["PARENT", null, null],
+        ["CHILD", null, `Parent ${fixtures.suffix}`],
+      ])
+    })
+
+    it.each([
+      ["a child of a branch that is not a parent", () => ({ parentBranchId: fixtures.northBranchId })],
+      ["a child of another organization's parent", () => ({ parentBranchId: foreignParentBranchId })],
+      ["a child of a branch that does not exist", () => ({ parentBranchId: 2_000_000_000 })],
+    ])("refuses %s with one answer, storing nothing", async (_case, parent) => {
+      const body = signup({ branches: [{ crc: `KID-${unique()}`, name: "Kid", ...KARACHI, hierarchyRole: "CHILD", ...parent() }] })
+      const response = await submit(body)
+      expect(response.status).toBe(400)
+      expect((await response.json()).error).toBe("A parent branch you chose is not available in this organization")
+      expect(await findRequestByEmail(String(body.email))).toBeNull()
+    })
+
+    it("refuses a child whose parent CRC is not a new branch marked Parent on the request", async () => {
+      const body = signup({ branches: [
+        { crc: "STAND-1", name: "Stand", ...KARACHI, hierarchyRole: "STANDALONE" },
+        { crc: "KID-1", name: "Kid", ...KARACHI, hierarchyRole: "CHILD", parentCrc: "STAND-1" },
+      ] })
+      expect((await submit(body)).status).toBe(400)
+      expect(await findRequestByEmail(String(body.email))).toBeNull()
+    })
+
+    it("creates the parent before the child it names, and a child under an existing parent", async () => {
+      const tag = unique().toUpperCase()
+      const stored = await submitAccepted(signup({
+        branches: [
+          { crc: `KID-${tag}`, name: `Kid ${tag}`, ...KARACHI, hierarchyRole: "CHILD", parentCrc: `PAR-${tag}` },
+          { crc: `PAR-${tag}`, name: `Hub ${tag}`, ...KARACHI, hierarchyRole: "PARENT" },
+          { crc: `KIOSK-${tag}`, name: `Kiosk ${tag}`, ...KARACHI, hierarchyRole: "CHILD", parentBranchId },
+        ],
+      }))
+      const { item } = await review(stored.id)
+      const [kid, hub, kiosk] = item.branches
+      const response = await approve(item, [
+        created(kid, `Kid ${tag}`, { hierarchyRole: "CHILD", parentRequestBranchId: hub.requestBranchId }),
+        created(hub, `Hub ${tag}`, { hierarchyRole: "PARENT" }),
+        created(kiosk, `Kiosk ${tag}`, { hierarchyRole: "CHILD", parentBranchId }),
+      ])
+      expect(response.status, JSON.stringify(await response.clone().json())).toBe(200)
+
+      const hubBranch = await branchNamed(`Hub ${tag}`)
+      expect(hubBranch).toMatchObject({ hierarchyRole: "PARENT", parentBranchId: null })
+      expect(await branchNamed(`Kid ${tag}`)).toMatchObject({ hierarchyRole: "CHILD", parentBranchId: hubBranch!.id })
+      expect(await branchNamed(`Kiosk ${tag}`)).toMatchObject({ hierarchyRole: "CHILD", parentBranchId })
+      // The branch's own audit row carries its type, as on Create Branch.
+      const [audit] = await db.select({ metadata: auditLogs.metadata }).from(auditLogs).where(and(
+        eq(auditLogs.action, "CREATE_BRANCH"),
+        eq(auditLogs.entityId, String((await branchNamed(`Kid ${tag}`))!.id)),
+      ))
+      expect(audit.metadata).toMatchObject({ hierarchyRole: "CHILD", parentBranchId: hubBranch!.id })
+    })
+
+    it.each([
+      ["a branch that is not a parent", () => fixtures.northBranchId, 400],
+      ["another organization's parent", () => foreignParentBranchId, 400],
+    ])("rolls the whole approval back when Head Office names %s", async (_case, parent, status) => {
+      const tag = unique().toUpperCase()
+      const body = signup({ branches: [{ crc: `KID-${tag}`, name: `Kid ${tag}`, ...KARACHI }] })
+      const stored = await submitAccepted(body)
+      const { item } = await review(stored.id)
+      const response = await approve(item, [created(item.branches[0], `Kid ${tag}`, { hierarchyRole: "CHILD", parentBranchId: parent() })])
+      expect(response.status).toBe(status)
+      expect(await branchNamed(`Kid ${tag}`)).toBeNull()
+      expect(await accountsAt(body.email)).toHaveLength(0)
+      expect((await requestRow(stored.id)).status).toBe("pending")
+    })
+
+    it("refuses a child naming a branch this approval does not create as Parent", async () => {
+      const tag = unique().toUpperCase()
+      const stored = await submitAccepted(signup({ branches: [
+        { crc: `A-${tag}`, name: `A ${tag}`, ...KARACHI },
+        { crc: `B-${tag}`, name: `B ${tag}`, ...KARACHI },
+      ] }))
+      const { item } = await review(stored.id)
+      const [first, second] = item.branches
+      const response = await approve(item, [
+        created(first, `A ${tag}`, {}),
+        created(second, `B ${tag}`, { hierarchyRole: "CHILD", parentRequestBranchId: first.requestBranchId }),
+      ])
+      expect(response.status).toBe(400)
+      expect(await branchNamed(`A ${tag}`)).toBeNull()
+    })
+
+    it("keeps the type through an edit that sends none, changes it when one is sent, and refuses a parent removed under its child", async () => {
+      const tag = unique().toUpperCase()
+      const stored = await submitAccepted(signup({ branches: [
+        { crc: `PAR-${tag}`, name: `Hub ${tag}`, ...KARACHI, hierarchyRole: "PARENT" },
+        { crc: `KID-${tag}`, name: `Kid ${tag}`, ...KARACHI, hierarchyRole: "CHILD", parentCrc: `PAR-${tag}` },
+      ] }))
+      const { item } = await review(stored.id)
+      const types = async () => (await requestRows(stored.id)).map((row) => [row.costCenterId, row.requestedHierarchyRole, row.requestedParentCrc])
+      const before = await types()
+
+      expect((await patch(stored.id, { update: editFrom(item) })).status).toBe(200)
+      expect(await types()).toEqual(before)
+
+      // Dropping the parent while the child still names it is refused, and nothing changes.
+      const dangling = await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc: `KID-${tag}` }] } })
+      expect(dangling.status).toBe(400)
+      expect(await types()).toEqual(before)
+
+      // The edit form makes the child Standalone when its parent is removed.
+      const retyped = await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc: `KID-${tag}`, hierarchyRole: "STANDALONE" }] } })
+      expect(retyped.status, JSON.stringify(await retyped.clone().json())).toBe(200)
+      expect(await types()).toEqual([[`KID-${tag}`, "STANDALONE", null]])
+
+      const foreign = await patch(stored.id, { update: { ...editFrom(item), branches: [{ crc: `KID-${tag}`, hierarchyRole: "CHILD", parentBranchId: foreignParentBranchId }] } })
+      expect(foreign.status).toBe(400)
+    })
+
+    it("lets the database refuse a type on an existing branch's row, a child without one parent, and another tenant's parent", async () => {
+      const stored = await submitAccepted(signup())
+      const insert = (values: Partial<typeof organizationJoinRequestBranches.$inferInsert>) => db
+        .insert(organizationJoinRequestBranches)
+        .values({ requestId: stored.id, organizationId: fixtures.organizationId, ...values })
+      const failure = async (attempt: Promise<unknown>) => {
+        try {
+          await attempt
+          return null
+        } catch (caughtError: any) {
+          const cause = caughtError?.cause ?? caughtError
+          return [String(cause?.code), String(cause?.constraint)]
+        }
+      }
+      const crc = () => `IT-H-${unique()}`.toUpperCase()
+      const otherBranchId = await newBranch({ name: `Typed ${unique()}` })
+      const hierarchyCheck = ["23514", "organization_join_request_branches_hierarchy_ck"]
+      expect(await failure(insert({ existingBranchId: otherBranchId, requestedHierarchyRole: "PARENT" }))).toEqual(hierarchyCheck)
+      expect(await failure(insert({ costCenterId: crc(), requestedHierarchyRole: "CHILD" }))).toEqual(hierarchyCheck)
+      expect(await failure(insert({ costCenterId: crc(), requestedHierarchyRole: "CHILD", requestedParentBranchId: parentBranchId, requestedParentCrc: "X" })))
+        .toEqual(hierarchyCheck)
+      expect(await failure(insert({ costCenterId: crc(), requestedHierarchyRole: "PARENT", requestedParentCrc: "X" }))).toEqual(hierarchyCheck)
+      expect(await failure(insert({ costCenterId: crc(), requestedHierarchyRole: "SIBLING" }))).toEqual(hierarchyCheck)
+      const own = crc()
+      expect(await failure(insert({ costCenterId: own, requestedHierarchyRole: "CHILD", requestedParentCrc: own }))).toEqual(hierarchyCheck)
+      expect(await failure(insert({ costCenterId: crc(), requestedHierarchyRole: "CHILD", requestedParentBranchId: foreignParentBranchId })))
+        .toEqual(["23503", "organization_join_request_branches_parent_org_fk"])
+      expect(await failure(insert({ costCenterId: crc(), requestedHierarchyRole: "CHILD", requestedParentBranchId: parentBranchId }))).toBeNull()
     })
   })
 

@@ -18,6 +18,7 @@ import {
 } from "@/lib/server/analytics-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { orderSelectColumns } from "@/lib/order-select"
+import { parsePaymentStatusFilter } from "@/lib/payment-status"
 import { ORDER_REPORT_PRICE_SORT_KEYS, ORDER_REPORT_SORT_KEYS, sortKeysForCaller, type OrderReportSortKey } from "@/lib/list-sort-keys"
 import { parseSortParams } from "@/lib/table-sort"
 import { orderBySortSql } from "@/lib/server/sort-sql"
@@ -60,6 +61,7 @@ const ORDER_REPORT_SORT_SQL: Record<OrderReportSortKey, SQL | AnyColumn> = {
     deliveryStatus: orderSelectColumns.fulfillmentStatus,
     paymentStatus: orderSelectColumns.paymentStatus,
     approvalLevel: orders.approvalLevel,
+    financialApproverLevel: approverUsers.orderApprovalLevel,
     approver: sql`LOWER(${approverUsers.fullName})`,
     quantityOrdered: quantityOrderedSql,
     quantityDelivered: sql`(${quantityOrderedSql} - ${quantityRefundedSql})`,
@@ -148,6 +150,10 @@ function addSummaryStatusCondition(conditions: any[], status: string | null) {
     conditions.push(status.toUpperCase() === "REJECTED"
         ? sql`UPPER(${orders.status}) IN ('REJECTED', 'CANCELLED')`
         : eq(sql`UPPER(${orders.status})`, status.toUpperCase()))
+}
+
+function addSummaryPaymentStatusCondition(conditions: any[], paymentStatus: "PAID" | "UNPAID" | null) {
+    if (paymentStatus) conditions.push(eq(orderSelectColumns.paymentStatus, paymentStatus))
 }
 
 function addSelectedSummaryScope(conditions: any[], context: any) {
@@ -287,6 +293,8 @@ export async function GET(req: NextRequest) {
     const groupId = url.searchParams.get("groupId")
     const groupIdsRaw = url.searchParams.get("groupIds")
     const statusParam = url.searchParams.get("status")
+    const paymentStatusParam = parsePaymentStatusFilter(url.searchParams.get("paymentStatus"))
+    if (!paymentStatusParam.ok) return NextResponse.json({ error: paymentStatusParam.message }, { status: 400 })
     const searchParam = url.searchParams.get("q")
     const compare = url.searchParams.get("compare") === "true"
     const compareStartDateParam = url.searchParams.get("compareStartDate")
@@ -323,6 +331,7 @@ export async function GET(req: NextRequest) {
 
     // Status filter
     addSummaryStatusCondition(conditions, statusParam)
+    addSummaryPaymentStatusCondition(conditions, paymentStatusParam.status)
 
     // Security: RBAC
     const normalizedRole = (roleName || "").toUpperCase().replace(/\s+/g, '_')
@@ -394,6 +403,10 @@ export async function GET(req: NextRequest) {
         // so each needs its own join rather than reusing the creator row.
         approverName: approverUsers.fullName,
         approverDesignation: approverUsers.designation,
+        // This is the approving Financial Approver's assigned level. It is
+        // intentionally separate from the order's routed approval level below:
+        // the latter is historical, while this reflects the approver record.
+        financialApproverLevel: approverUsers.orderApprovalLevel,
         // The band the order was decided at, never the approver's current
         // level, which may have changed since. Null for an unlevelled order.
         approvalLevel: orders.approvalLevel,

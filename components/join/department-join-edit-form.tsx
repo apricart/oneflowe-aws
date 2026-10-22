@@ -15,9 +15,11 @@ import {
   crcBranchKey,
   departmentJoinEditErrors,
   draftFromReview,
+  editBranchHierarchyText,
   existingBranchKey,
   newBranchDraftError,
   newBranchLabel,
+  removeEditBranch,
   toDepartmentJoinUpdatePayload,
 } from "@/lib/join-department-edit"
 import {
@@ -182,13 +184,18 @@ export function DepartmentJoinEditForm({
         <ul className="space-y-1.5">
           {draft.branches.map((entry) => (
             <li key={entry.key} className="flex items-center justify-between gap-2 rounded-md border border-slate-200 px-3 py-1.5 text-sm">
-              <span>{entry.label}</span>
+              <span>
+                {entry.label}
+                {editBranchHierarchyText(entry, draft.branches) && (
+                  <span className="ml-1 text-xs text-slate-500">· {editBranchHierarchyText(entry, draft.branches)}</span>
+                )}
+              </span>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 aria-label={`Remove ${entry.label}`}
-                onClick={() => patch({ branches: draft.branches.filter((other) => other.key !== entry.key) })}
+                onClick={() => patch({ branches: removeEditBranch(draft.branches, entry.key) })}
               >
                 <X className="h-4 w-4" />
               </Button>

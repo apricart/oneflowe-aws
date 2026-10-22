@@ -77,7 +77,19 @@ export type ExecutiveApprovalOrder = {
   canApprove: boolean
   canReject: boolean
   canReturn: boolean
-  items: { id: number; productName: string; productCode: string | null; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    productName: string
+    productCode: string | null
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The Order Desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually?: boolean
+    cataloguePriceCents?: number | null
+    /** False when the branch did not carry the product when it was ordered. */
+    inBranchCatalogue?: boolean
+  }[]
 }
 
 type ApprovalPage = {
@@ -159,6 +171,11 @@ function ApprovalCard({
                   With the desk for correction
                 </span>
               )}
+              {order.items.some((item) => item.priceEnteredManually) && (
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-900 dark:bg-indigo-950 dark:text-indigo-100">
+                  Custom prices
+                </span>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">
               Entered {displayDate(order.createdAt)} by {order.enteredBy ?? "—"}
@@ -200,9 +217,26 @@ function ApprovalCard({
             <tbody className="divide-y">
               {order.items.map((item) => (
                 <tr key={item.id}>
-                  <td className="py-1.5 pr-3">{item.productName}</td>
+                  <td className="py-1.5 pr-3">
+                    {item.productName}
+                    {item.inBranchCatalogue === false && (
+                      <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+                        Not in branch catalogue
+                      </span>
+                    )}
+                  </td>
                   <td className="whitespace-nowrap py-1.5 pr-3 text-right tabular-nums">{formatQuantity(item.quantity)} {item.unit ?? ""}</td>
-                  <td className="whitespace-nowrap py-1.5 pr-3 text-right tabular-nums">{formatPKR(item.priceCents / 100)}</td>
+                  <td className="whitespace-nowrap py-1.5 pr-3 text-right tabular-nums">
+                    {formatPKR(item.priceCents / 100)}
+                    {item.priceEnteredManually && (
+                      <span className="block text-xs font-normal text-indigo-700 dark:text-indigo-300">
+                        Price set by Order Desk
+                        {typeof item.cataloguePriceCents === "number"
+                          ? <> · catalogue <span className="line-through">{formatPKR(item.cataloguePriceCents / 100)}</span></>
+                          : " · no catalogue price"}
+                      </span>
+                    )}
+                  </td>
                   <td className="whitespace-nowrap py-1.5 text-right tabular-nums">{formatPKR(calculateLineCents(item.priceCents, item.quantity) / 100)}</td>
                 </tr>
               ))}

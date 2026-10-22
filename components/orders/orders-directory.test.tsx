@@ -274,6 +274,44 @@ describe("OrdersDirectory", () => {
     expect(screen.queryByText("Organization", { selector: "span" })).toBeNull()
   })
 
+  it("renders Apricart Support as cross-tenant view only even if capabilities are mistakenly present", async () => {
+    render(
+      <OrdersDirectory
+        orders={[{
+          id: 52,
+          tid: "ORD-SUPPORT",
+          organizationName: "Acme Organization",
+          status: "PENDING",
+          branchId: 8,
+          branchName: "North Branch",
+          createdAt: "2026-07-28T10:00:00.000Z",
+          totalCents: 125000,
+          approvalToken: "MUST-NOT-RENDER",
+        }]}
+        userRole="APRICART_SUPPORT"
+        isSuperAdmin={false}
+        isBranchAdmin={false}
+        readOnly
+        showOrganization
+        showInvoiceLink={false}
+        canDecideOrders
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    const table = within(screen.getByRole("table"))
+    const headers = table.getAllByRole("columnheader").map((header) => header.textContent)
+    expect(headers).toContain("Organization")
+    expect(headers).not.toContain("Fulfillment Token")
+    expect(headers).not.toContain("Action")
+    expect(screen.queryByText("MUST-NOT-RENDER")).toBeNull()
+
+    fireEvent.click(screen.getByText("ORD-SUPPORT"))
+    const drawer = await screen.findByRole("dialog", { name: "Order details" })
+    expect(within(drawer).queryByRole("button", { name: "Approve" })).toBeNull()
+    expect(within(drawer).queryByRole("button", { name: "Reject" })).toBeNull()
+  })
+
   it.each(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER"])(
     "shows partial delivery to the %s role",
     (role) => {

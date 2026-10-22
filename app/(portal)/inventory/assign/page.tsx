@@ -4,6 +4,10 @@ import { OrganizationPricePropagationDialog, type PropagationChoice } from "@/co
 import { useAppContext } from "@/components/context/app-context"
 import { OrganizationProductsExport } from "@/components/inventory/organization-products-export"
 import { ProductNameCell } from "@/components/inventory/product-name-cell"
+import {
+    AlertDialog,AlertDialogAction,AlertDialogCancel,AlertDialogContent,AlertDialogDescription,
+    AlertDialogFooter,AlertDialogHeader,AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
@@ -15,7 +19,7 @@ import { Tabs,TabsContent,TabsList,TabsTrigger } from "@/components/ui/tabs"
 import { useToast } from "@/hooks/use-toast"
 import { organizationProductsFilterDescription } from "@/lib/organization-products-export"
 import { cn,formatPKR } from "@/lib/utils"
-import { Building2,Check,Edit,Package,Plus,RefreshCw,Search } from "lucide-react"
+import { Building2,Check,Edit,Package,Plus,RefreshCw,Search,Trash2 } from "lucide-react"
 import { useMemo,useState } from "react"
 import useSWR from "swr"
 
@@ -74,11 +78,13 @@ export default function AssignProductPage() {
     const [propagationOpen, setPropagationOpen] = useState(false)
     const [selectedProduct, setSelectedProduct] = useState<GlobalProduct | null>(null)
     const [selectedAssignment, setSelectedAssignment] = useState<AssignedProduct | null>(null)
+    const [assignmentToUnassign, setAssignmentToUnassign] = useState<AssignedProduct | null>(null)
     const [categoryFilter, setCategoryFilter] = useState("all")
     const [subCategoryFilter, setSubCategoryFilter] = useState("all")
     const [price, setPrice] = useState("")
     const [isActive, setIsActive] = useState(true)
     const [saving, setSaving] = useState(false)
+    const [unassigning, setUnassigning] = useState(false)
 
     // Use context org if available, otherwise use local selection
     const selectedOrgId = contextOrgId || localOrgId
@@ -167,6 +173,34 @@ export default function AssignProductPage() {
         setPrice(assignment.customPrice ? (assignment.customPrice / 100).toString() : "")
         setIsActive(assignment.isActive)
         setEditDialogOpen(true)
+    }
+
+    const handleUnassignProduct = async () => {
+        if (!assignmentToUnassign) return
+
+        setUnassigning(true)
+        try {
+            const res = await fetch(
+                `/api/v1/admin/organization-assignments?id=${assignmentToUnassign.id}`,
+                { method: "DELETE" },
+            )
+            const data = await res.json().catch(() => ({}))
+            if (!res.ok) {
+                throw new Error(data.error || "Failed to unassign product")
+            }
+
+            toast({ title: "Success", description: "Product unassigned successfully" })
+            setAssignmentToUnassign(null)
+            void mutateAssignments()
+        } catch (error) {
+            toast({
+                title: "Error",
+                description: error instanceof Error ? error.message : "Failed to unassign product",
+                variant: "destructive",
+            })
+        } finally {
+            setUnassigning(false)
+        }
     }
 
     const handleAssignProduct = async () => {
@@ -384,7 +418,7 @@ export default function AssignProductPage() {
                                               if (productsLoading) {
                                                 return (
                                                 <TableRow>
-                                                    <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                                                    <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                                                         Loading products...
                                                     </TableCell>
                                                 </TableRow>
@@ -393,7 +427,7 @@ export default function AssignProductPage() {
                                               if (filteredNotAssigned.length === 0) {
                                                 return (
                                                 <TableRow>
-                                                    <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                                                    <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                                                         {allProducts.length === 0 && hasActiveSearchOrFilters
                                                             ? "No products match your search."
                                                             : "Product is already assigned. Please check assigned product tab."}
@@ -458,7 +492,7 @@ export default function AssignProductPage() {
                                               if (assignmentsLoading) {
                                                 return (
                                                 <TableRow>
-                                                    <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                                                    <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                                                         Loading assignments...
                                                     </TableCell>
                                                 </TableRow>
@@ -467,7 +501,7 @@ export default function AssignProductPage() {
                                               if (filteredAssigned.length === 0) {
                                                 return (
                                                 <TableRow>
-                                                    <TableCell colSpan={5} className="py-10 text-center text-sm text-muted-foreground">
+                                                    <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
                                                         No products assigned yet.
                                                     </TableCell>
                                                 </TableRow>
@@ -500,16 +534,27 @@ export default function AssignProductPage() {
                                                                 {assignment.globalStatus === "active" ? "Active" : "Inactive"}
                                                             </Badge>
                                                         </TableCell>
-                                                        <TableCell className="text-right">
-                                                            <Button
-                                                                variant="outline"
-                                                                size="sm"
-                                                                onClick={() => handleEditClick(assignment)}
-                                                                className="gap-1"
-                                                            >
-                                                                <Edit className="h-3 w-3" />
-                                                                Edit Price
-                                                            </Button>
+                                                        <TableCell>
+                                                            <div className="flex justify-end gap-2">
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    onClick={() => handleEditClick(assignment)}
+                                                                    className="gap-1"
+                                                                >
+                                                                    <Edit className="h-3 w-3" />
+                                                                    Edit Price
+                                                                </Button>
+                                                                <Button
+                                                                    variant="destructive"
+                                                                    size="sm"
+                                                                    onClick={() => setAssignmentToUnassign(assignment)}
+                                                                    className="gap-1"
+                                                                >
+                                                                    <Trash2 className="h-3 w-3" />
+                                                                    Unassign
+                                                                </Button>
+                                                            </div>
                                                         </TableCell>
                                                     </TableRow>
                                                 ))
@@ -645,6 +690,37 @@ export default function AssignProductPage() {
                 onCancel={() => setPropagationOpen(false)}
                 onConfirm={(choice) => { void savePrice(choice) }}
             />
+
+            <AlertDialog
+                open={assignmentToUnassign !== null}
+                onOpenChange={(open) => {
+                    if (!open && !unassigning) setAssignmentToUnassign(null)
+                }}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Unassign this product?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {assignmentToUnassign
+                                ? `${assignmentToUnassign.productName} will be removed from ${assignmentToUnassign.organizationName} and its assigned branches.`
+                                : "This product will be removed from the organization and its assigned branches."}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={unassigning}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            disabled={unassigning}
+                            onClick={(event) => {
+                                event.preventDefault()
+                                void handleUnassignProduct()
+                            }}
+                            className="bg-destructive text-white hover:bg-destructive/90"
+                        >
+                            {unassigning ? "Unassigning..." : "Unassign product"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     )
 }

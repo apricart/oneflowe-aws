@@ -268,6 +268,8 @@ export function HeadOfficeDashboard() {
   const totalOrders = perfData?.totalOrders ?? 0
   const pendingCount = perfData?.statusCounts?.pendingCount ?? 0
   const fulfilledCount = perfData?.statusCounts?.fulfilledCount ?? 0
+  const fulfilledPaidCount = perfData?.statusCounts?.fulfilledPaidCount ?? 0
+  const fulfilledUnpaidCount = perfData?.statusCounts?.fulfilledUnpaidCount ?? 0
 
   const refundedCount = perfData?.statusCounts?.refundedCount ?? 0
   const rejectedCount = perfData?.statusCounts?.rejectedCount ?? 0
@@ -400,6 +402,10 @@ export function HeadOfficeDashboard() {
           trendValue={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.value}
           comparisonValue={buildTrend(fulfilledCount, perfData?.comparison?.fulfilledCount)?.label}
           comparisonLabel="VS LAST"
+          details={[
+            { label: "Paid", value: fulfilledPaidCount.toLocaleString(), align: "left" },
+            { label: "Unpaid", value: fulfilledUnpaidCount.toLocaleString(), align: "right" },
+          ]}
           isLoading={!perfData}
         />
         <BankingKPICard

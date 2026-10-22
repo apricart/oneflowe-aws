@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Dialog,DialogContent,DialogHeader,DialogTitle,DialogFooter,DialogDescription } from "@/components/ui/dialog"
-import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,PackageCheck,ArrowDownUp,X,SlidersHorizontal,LifeBuoy } from "lucide-react"
+import { ShoppingBag,Search,Plus,Minus,Trash2,Home,CheckCircle,Clock,AlertTriangle,DollarSign,Zap,Package,TrendingDown,Grid,ArrowRight,ArrowLeft,Calendar,MapPin,RefreshCw,Building2,Copy,Send,Pencil,Loader2,PackageCheck,ArrowDownUp,X,SlidersHorizontal,LifeBuoy,Route } from "lucide-react"
 import { OrderCorrectionNotice, ResubmitOrderDialog } from "@/components/orders/order-correction"
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -44,6 +44,7 @@ import { formatAddonValidUntil } from "@/lib/budget-addon-expiry"
 import { MAX_PO_NUMBER_LENGTH, PO_NUMBER_HINT, normalizePoNumberInput } from "@/lib/purchase-order"
 import { DeliveryAddressRequestDialog, type RequestableBranch } from "@/components/delivery-addresses/delivery-address-request-dialog"
 import { describeDeliveryAddress } from "@/lib/delivery-address"
+import { formatBranchAddress } from "@/lib/branch-address"
 import { ReceiptIconButton } from "@/components/receipts/receipt-icon-button"
 import { PendingInvoiceAlert } from "@/components/orders/pending-invoice-alert"
 import { NotificationBell } from "@/components/notifications/notification-center"
@@ -629,6 +630,13 @@ export default function OrderPortalPage() {
 
   const activeBranchName = useMemo(() => {
     return branchesData?.items?.find((b: any) => b.id === activeBranchId)?.name || "Loading..."
+  }, [branchesData, activeBranchId])
+
+  const defaultDeliveryAddressLabel = useMemo(() => {
+    const branch = branchesData?.items?.find((item: any) => item.id === activeBranchId)
+    const address = formatBranchAddress(branch)
+
+    return address ? `${address} (default)` : "Branch's own address (default)"
   }, [branchesData, activeBranchId])
 
   const shopInventoryItems = useMemo(() => {
@@ -1327,6 +1335,15 @@ export default function OrderPortalPage() {
 
             {isOrderPortal && <NotificationBell />}
 
+            {isOrderPortal && (
+              <Button asChild variant="outline" size="sm" className="gap-2" title="Track an order">
+                <Link href="/shop/tracking">
+                  <Route className="h-4 w-4" />
+                  <span className="hidden sm:inline">Track order</span>
+                </Link>
+              </Button>
+            )}
+
             {/* The direct channel to Apricart. Shared with every other portal,
                 which is why it lives at /support rather than under /shop. */}
             <Button asChild variant="ghost" size="icon" title="Support - raise a query with Apricart">
@@ -1834,6 +1851,14 @@ export default function OrderPortalPage() {
                             <RefreshCw className="h-4 w-4" />
                             View Details
                           </Button>
+                          {isOrderPortal && (
+                            <Button asChild variant="outline" size="sm" className="flex-1 gap-2">
+                              <Link href={`/shop/tracking?reference=${encodeURIComponent(order.tid)}`}>
+                                <Route className="h-4 w-4" />
+                                Track
+                              </Link>
+                            </Button>
+                          )}
                           {isOrderPortal && order.status?.toUpperCase() === "PENDING" && (
                             <Button
                               onClick={() => { void beginEditOrder(order) }}
@@ -2582,7 +2607,7 @@ export default function OrderPortalPage() {
                   {/* The branch's own address, which is where an order with no
                       delivery address goes — the behaviour every order has had
                       until now, kept as the default. */}
-                  <SelectItem value="branch-default">Branch&apos;s own address (default)</SelectItem>
+                  <SelectItem value="branch-default">{defaultDeliveryAddressLabel}</SelectItem>
                   {approvedDeliveryAddresses.map((address: any) => (
                     <SelectItem key={address.id} value={String(address.id)}>
                       {describeDeliveryAddress(address)}
