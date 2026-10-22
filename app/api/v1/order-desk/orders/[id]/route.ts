@@ -47,11 +47,12 @@ export async function PUT(req: Request, props: { params: Promise<{ id: string }>
 
     const outcome = await editDeskOrder({
       orderId,
+      // Each line names a global product and carries the price the desk
+      // entered, tax-inclusive — required on every line.
       items: parsed.data.items.map((item) => ({
-        organizationInventoryId: item.organizationInventoryId,
+        globalProductId: item.globalProductId,
         quantity: roundQuantity(Number(item.quantity)),
-        // The desk's own price for this line, when it typed one.
-        ...(item.unitPriceCents === undefined ? {} : { unitPriceCents: item.unitPriceCents }),
+        unitPriceCents: item.unitPriceCents,
       })),
       notes: parsed.data.notes,
       poNumber: parsed.data.poNumber,

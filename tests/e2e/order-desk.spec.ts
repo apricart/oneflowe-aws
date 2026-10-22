@@ -50,6 +50,8 @@ const AGENT = names.username("agent")
 const NEWCOMER = names.username("newcomer")
 const EXECUTIVE = names.username("exec")
 const PRODUCT = "E2E Desk Rice"
+/** The price box on the product's row; the unit is the tenant fixture's. */
+const PRICE_LABEL = new RegExp(`^Price per .+ of ${PRODUCT}, in rupees including tax$`)
 
 let tenant: Tenant
 let agentId: string
@@ -120,7 +122,7 @@ async function deskOrderThroughApi(page: Page, reference: string, quantity = 1):
   const body = await expectStatus(await post(page, "/api/v1/orders", {
     organizationId: tenant.organizationId,
     branchId: tenant.branches.main.id,
-    items: [{ organizationInventoryId: tenant.products.RICE.organizationInventoryId, quantity }],
+    items: [{ globalProductId: tenant.products.RICE.globalProductId, quantity, unitPriceCents: 1_500 }],
     intakeChannel: "EMAIL",
     intakeReference: reference,
     intakeAttachmentKey: await stageScreenshot(),
@@ -273,8 +275,15 @@ test.describe.serial("the Order Desk", () => {
     await page.getByLabel("Branch").click()
     await page.getByRole("option", { name: new RegExp(tenant.branches.main.name) }).click()
 
+    // The picker lists all of Apricart's products, so find this one first.
+    await page.getByLabel("Search products").fill(PRODUCT)
     await page.getByRole("button", { name: `Increase Quantity of ${PRODUCT}` }).click({ timeout: 120_000 })
     await page.getByRole("button", { name: `Increase Quantity of ${PRODUCT}` }).click()
+    // The price box starts empty and must be filled, including tax.
+    const price = page.getByLabel(PRICE_LABEL)
+    await expect(price).toHaveValue("")
+    await expect(page.getByText("Price required")).toBeVisible()
+    await price.fill("15")
     // Exact: the screenshot picker's label also mentions WhatsApp.
     await page.getByRole("button", { name: "WhatsApp", exact: true }).click()
     await page.getByLabel("Reference").fill("E2E customer, WhatsApp 10:14")
@@ -302,7 +311,8 @@ test.describe.serial("the Order Desk", () => {
       intake_reference: "E2E customer, WhatsApp 10:14",
       total_cents: "3000",
     })
-    expect(await heldAtMain()).toBe(heldBefore + 3_000)
+    // A desk order takes no budget (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md).
+    expect(await heldAtMain()).toBe(heldBefore)
 
     // The next order starts from a clean draft.
     await page.getByRole("button", { name: "Create another order" }).click()
@@ -319,11 +329,14 @@ test.describe.serial("the Order Desk", () => {
     const edited = orderCard(page, "E2E customer, WhatsApp 10:14")
     await edited.getByRole("button", { name: "Edit" }).click()
     const editDialog = page.getByRole("dialog", { name: /^Edit / })
-    await editDialog.getByLabel(`Quantity for ${PRODUCT}`).fill("3")
+    // Opens on the order's own lines, its price kept.
+    await expect(editDialog.getByLabel(PRICE_LABEL)).toHaveValue("15.00")
+    await editDialog.getByLabel(`Quantity of ${PRODUCT}`).fill("3")
+    await editDialog.getByLabel(`Quantity of ${PRODUCT}`).press("Enter")
     await editDialog.getByRole("button", { name: "Save changes" }).click()
     await expect(editDialog).toBeHidden({ timeout: 150_000 })
     await expect.poll(async () => (await deskOrders())[0].total_cents, { timeout: 60_000 }).toBe("4500")
-    expect(await heldAtMain()).toBe(heldBefore + 1_500)
+    expect(await heldAtMain()).toBe(heldBefore)
 
     await orderCard(page, "E2E cancel me").getByRole("button", { name: "Cancel order" }).click()
     const cancelDialog = page.getByRole("dialog", { name: /^Cancel / })
@@ -426,7 +439,7 @@ test.describe.serial("the Order Desk", () => {
       const refused = await post(desk.page, "/api/v1/orders", {
         organizationId: tenant.organizationId,
         branchId: tenant.branches.main.id,
-        items: [{ organizationInventoryId: tenant.products.RICE.organizationInventoryId, quantity: 1 }],
+        items: [{ globalProductId: tenant.products.RICE.globalProductId, quantity: 1, unitPriceCents: 1_500 }],
         intakeChannel: "EMAIL",
         intakeReference: "after the switch",
         intakeAttachmentKey: await stageScreenshot(),

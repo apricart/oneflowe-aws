@@ -1,9 +1,9 @@
 "use client"
 
-import { useMemo, useState } from "react"
-import useSWR from "swr"
+import { useState } from "react"
 import { Loader2 } from "lucide-react"
 
+import { DeskProductPicker } from "@/components/order-desk/desk-product-picker"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -17,8 +17,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "@/hooks/use-toast"
-import { fetcher } from "@/lib/fetcher"
-import { formatPriceInput } from "@/lib/group-price-input"
 import type { FulfillmentStatus } from "@/lib/fulfillment-status"
 import type { PaymentStatus } from "@/lib/payment-status"
 import { ORDER_CORRECTION_TEXT_MAX_LENGTH } from "@/lib/order-correction"
@@ -26,11 +24,13 @@ import { CANCELLATION_REASON_MAX_LENGTH, type IntakeChannel } from "@/lib/order-
 import {
   buildDeskEditRequest,
   buildDeskRefundRequest,
+  deskLinesFromOrder,
   estimateDraftTotalCents,
   NOTES_MAX_LENGTH,
-  parseDeskPriceInput,
-  unavailableDraftLines,
-  type DeskCatalogueItem,
+  withLinePrice,
+  withLineQuantity,
+  type DeskLineProduct,
+  type DeskLines,
 } from "@/lib/order-desk-draft"
 import { MAX_PO_NUMBER_LENGTH } from "@/lib/purchase-order"
 import { formatQuantity } from "@/lib/quantity"
@@ -72,8 +72,13 @@ export type DeskOrder = {
   cancellationReason: string | null
   items: {
     id: number
+    /** Null when the product was outside the branch catalogue when it was ordered. */
     organizationInventoryId: number | null
+    globalProductId: number
     productName: string
+    productCode: string | null
+    allowDecimalQuantity: boolean
+    quantityStep: number
     quantity: number
     unit: string | null
     priceCents: number
@@ -84,8 +89,6 @@ export type DeskOrder = {
 }
 
 type DialogProps = Readonly<{ order: DeskOrder; onClose: () => void; onSaved: () => void }>
-
-type CatalogueItem = DeskCatalogueItem & { productCode: string; unit: string; stockQuantity: number }
 
 async function sendJson(url: string, method: string, body: unknown): Promise<{ ok: boolean; message: string }> {
   try {
@@ -103,50 +106,32 @@ async function sendJson(url: string, method: string, body: unknown): Promise<{ o
 }
 
 /**
- * Change the lines, notes or PO number of a pending order. Every product the
- * branch may order is listed, prefilled with what the order holds now — a line
- * the desk priced keeps its price in the box, so saving does not drop it; a
- * blank price is re-priced at today's catalogue. The server re-prices and
- * re-checks stock and budget.
+ * Change the lines, notes or PO number of a pending order. It opens on the
+ * order's own lines, each keeping the price it is charged now; any Apricart
+ * product can be added from "All products", with its price typed in, including
+ * tax. Every line needs a price. The server re-prices, re-checks stock and
+ * re-checks the desk's reach.
  */
 export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
-  const [quantities, setQuantities] = useState<Record<number, string>>(() => Object.fromEntries(
-    order.items
-      .filter((item) => item.organizationInventoryId !== null)
-      .map((item) => [item.organizationInventoryId as number, String(item.quantity)]),
-  ))
-  const [prices, setPrices] = useState<Record<number, string>>(() => Object.fromEntries(
-    order.items
-      .filter((item) => item.organizationInventoryId !== null && item.priceEnteredManually)
-      .map((item) => [item.organizationInventoryId as number, formatPriceInput(item.priceCents)]),
-  ))
+  const [lines, setLines] = useState<DeskLines>(() => deskLinesFromOrder(order.items))
   const [notes, setNotes] = useState(order.notes ?? "")
   const [poNumber, setPoNumber] = useState(order.poNumber ?? "")
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const estimate = estimateDraftTotalCents(lines)
 
-  const { data, error, isLoading } = useSWR<{ items: CatalogueItem[] }>(
-    order.organizationId ? `/api/v1/order-desk/catalogue?organizationId=${order.organizationId}&branchId=${order.branchId}` : null,
-    fetcher,
-  )
-  const catalogue = useMemo(() => data?.items ?? [], [data])
-  const estimate = estimateDraftTotalCents({ quantities, prices }, catalogue)
-  // Lines of this order the branch no longer offers. Judged only once the
-  // catalogue has loaded, or every line would look unavailable meanwhile.
-  const unavailable = data
-    ? unavailableDraftLines(quantities, catalogue).map((id) => ({
-      id,
-      name: order.items.find((item) => item.organizationInventoryId === id)?.productName ?? "A product",
-    }))
-    : []
-  const removeLine = (inventoryId: number) => {
+  const setQuantity = (product: DeskLineProduct, quantity: string) => {
     setFormError(null)
-    setQuantities((current) => ({ ...current, [inventoryId]: "" }))
+    setLines((current) => withLineQuantity(current, product, quantity))
+  }
+  const setPrice = (product: DeskLineProduct, price: string) => {
+    setFormError(null)
+    setLines((current) => withLinePrice(current, product, price))
   }
 
   const save = async () => {
     if (saving) return
-    const built = buildDeskEditRequest({ quantities, prices, notes, poNumber }, catalogue)
+    const built = buildDeskEditRequest({ lines, notes, poNumber })
     if (!built.ok) {
       setFormError(built.error)
       return
@@ -169,82 +154,22 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
         <DialogHeader>
           <DialogTitle>Edit {order.tid}</DialogTitle>
           <DialogDescription>
-            {order.organizationName} · {order.branchName}. A blank price is charged at today&apos;s catalogue price; a typed one (including tax) is charged as typed.
+            {order.organizationName} · {order.branchName}. Every product needs a price, including tax; it is charged as typed.
           </DialogDescription>
         </DialogHeader>
 
-        {error && <p role="alert" className="text-sm text-destructive">Could not load this branch&apos;s products.</p>}
-        {isLoading && (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading products…</p>
-        )}
-        {catalogue.length > 0 && (
-          <div className="max-h-[320px] overflow-auto rounded-md border">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-muted/80 text-left text-xs uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2">Product</th>
-                  <th className="w-36 px-3 py-2 text-right">Price (Rs)</th>
-                  <th className="w-32 px-3 py-2">Quantity</th>
-                </tr>
-              </thead>
-              <tbody>
-                {catalogue.map((item) => (
-                  <tr key={item.organizationInventoryId} className="border-t">
-                    <td className="px-3 py-2">
-                      <div className="font-medium">{item.name}</div>
-                      <div className="text-xs text-muted-foreground">{item.productCode} · per {item.unit}</div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <Input
-                        aria-label={`Price per ${item.unit} of ${item.name}, in rupees including tax`}
-                        aria-invalid={parseDeskPriceInput(prices[item.organizationInventoryId], item.name).kind === "invalid"}
-                        inputMode="decimal"
-                        className="text-right tabular-nums"
-                        placeholder={item.priceCents === null ? "Price" : formatPriceInput(item.priceCents)}
-                        value={prices[item.organizationInventoryId] ?? ""}
-                        disabled={saving}
-                        onChange={(event) => {
-                          setFormError(null)
-                          setPrices((current) => ({ ...current, [item.organizationInventoryId]: event.target.value }))
-                        }}
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <Input
-                        aria-label={`Quantity for ${item.name}`}
-                        type="number"
-                        inputMode="decimal"
-                        min={0}
-                        step={item.allowDecimalQuantity ? item.quantityStep : 1}
-                        value={quantities[item.organizationInventoryId] ?? ""}
-                        disabled={saving}
-                        onChange={(event) => {
-                          setFormError(null)
-                          setQuantities((current) => ({ ...current, [item.organizationInventoryId]: event.target.value }))
-                        }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {unavailable.length > 0 && (
-          <div role="alert" className="space-y-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-            <p>No longer available for this branch. Remove these lines to save the order:</p>
-            <ul className="space-y-1">
-              {unavailable.map((line) => (
-                <li key={line.id} className="flex items-center justify-between gap-2">
-                  <span className="font-medium">{line.name}</span>
-                  <Button size="sm" variant="outline" disabled={saving} onClick={() => removeLine(line.id)}>
-                    Remove {line.name}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          </div>
+        {order.organizationId ? (
+          <DeskProductPicker
+            organizationId={order.organizationId}
+            branchId={order.branchId}
+            lines={lines}
+            initialView="selected"
+            disabled={saving}
+            onQuantity={setQuantity}
+            onPrice={setPrice}
+          />
+        ) : (
+          <p role="alert" className="text-sm text-destructive">This order has no organization and cannot be edited.</p>
         )}
 
         <div className="grid gap-3 sm:grid-cols-2">
@@ -258,12 +183,12 @@ export function EditDeskOrderDialog({ order, onClose, onSaved }: DialogProps) {
           </div>
         </div>
 
-        <p className="text-sm">Estimated total: <span className="font-semibold">{formatPKR(estimate / 100)}</span></p>
+        <p className="text-sm">Estimated total (incl. tax): <span className="font-semibold">{formatPKR(estimate / 100)}</span></p>
         {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Close</Button>
-          <Button onClick={() => { void save() }} disabled={saving || catalogue.length === 0}>
+          <Button onClick={() => { void save() }} disabled={saving || !order.organizationId}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Save changes
           </Button>

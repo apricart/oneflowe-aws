@@ -8,6 +8,7 @@ import {
   globalProductUpdateSchema,
   moneyBudgetUpdateSchema,
   orderCreateSchema,
+  deskOrderCreateSchema,
   orderDeskEditSchema,
   orderUpdateSchema,
   organizationProductUpdateSchema,
@@ -15,6 +16,7 @@ import {
   userAccessUpdateSchema,
   userCreateSchema,
   userProfileUpdateSchema,
+  validationMessage,
 } from "@/lib/server/mutation-validation"
 import {
   canAssignRole,
@@ -146,25 +148,60 @@ describe("strict mutation schemas", () => {
     }
   })
 
-  it("accepts a line price only where the Order Desk may send one, and bounds it", () => {
-    // plans/OF-ORDER-DESK-line-price-entry.md. Who may send it is the route's
-    // check (`orderLinePriceFailure`); the shape only bounds it.
-    const pricedLine = { organizationInventoryId: 10, quantity: 2, unitPriceCents: 5_500 }
-    expect(orderCreateSchema.safeParse({ items: [pricedLine] }).success).toBe(true)
-    expect(orderDeskEditSchema.safeParse({ items: [pricedLine] }).success).toBe(true)
+  describe("the Order Desk's lines", () => {
+    // plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md.
+    // Who may send them is the route's check; the shape requires and bounds them.
+    const deskLine = { globalProductId: 10, quantity: 2, unitPriceCents: 5_500 }
+    const deskBody = (line: Record<string, unknown>) => ({
+      organizationId: 1,
+      branchId: 2,
+      items: [line],
+      intakeChannel: "EMAIL",
+      intakeReference: "x",
+      intakeAttachmentKey: "k",
+    })
 
-    for (const unitPriceCents of [0, -1, 10.5, "5500", 2_000_000_001]) {
-      expect(orderCreateSchema.safeParse({ items: [{ ...pricedLine, unitPriceCents }] }).success).toBe(false)
-    }
+    it("name a global product and carry a price, on create and on the desk's edit", () => {
+      expect(deskOrderCreateSchema.safeParse(deskBody(deskLine)).success).toBe(true)
+      expect(orderDeskEditSchema.safeParse({ items: [deskLine] }).success).toBe(true)
+    })
 
-    // The requester edit never accepts a line price, whoever sends it.
-    expect(orderUpdateSchema.safeParse({ items: [pricedLine] }).success).toBe(false)
-    // Nor may a line smuggle the stored columns in.
-    for (const field of ["priceCents", "priceEnteredManually", "cataloguePriceCents"]) {
-      expect(orderCreateSchema.safeParse({
-        items: [{ organizationInventoryId: 10, quantity: 2, [field]: field === "priceEnteredManually" ? true : 1 }],
-      }).success).toBe(false)
-    }
+    it("require the price on every line", () => {
+      const missing = deskOrderCreateSchema.safeParse(deskBody({ globalProductId: 10, quantity: 2 }))
+      expect(missing.success).toBe(false)
+      expect(missing.error && validationMessage(missing.error)).toBe("Enter a price for every product")
+      expect(orderDeskEditSchema.safeParse({ items: [{ globalProductId: 10, quantity: 2, unitPriceCents: null }] }).success).toBe(false)
+    })
+
+    it.each([
+      ["zero", 0, "A price must be more than zero"],
+      ["negative", -1, "A price must be more than zero"],
+      ["a fraction of a paisa", 10.5, "A price must be a whole number of paisa"],
+      ["a string", "5500", "A price must be a number of paisa"],
+      ["over the ceiling", 2_000_000_001, "A price is too large"],
+    ])("refuse a price that is %s", (_label, unitPriceCents, message) => {
+      const result = deskOrderCreateSchema.safeParse(deskBody({ ...deskLine, unitPriceCents }))
+      expect(result.success).toBe(false)
+      expect(result.error && validationMessage(result.error)).toBe(message)
+    })
+
+    it("refuse the same product twice, a catalogue-entry line, and the stored columns", () => {
+      expect(orderDeskEditSchema.safeParse({ items: [deskLine, { ...deskLine, quantity: 1 }] }).success).toBe(false)
+      expect(deskOrderCreateSchema.safeParse(deskBody({ organizationInventoryId: 10, quantity: 2, unitPriceCents: 5_500 })).success).toBe(false)
+      for (const field of ["organizationInventoryId", "priceCents", "priceEnteredManually", "cataloguePriceCents", "budgetTracked"]) {
+        expect(deskOrderCreateSchema.safeParse(deskBody({ ...deskLine, [field]: field === "priceEnteredManually" || field === "budgetTracked" ? false : 1 })).success, field).toBe(false)
+      }
+      // A budget exemption is never something a request can ask for.
+      expect(deskOrderCreateSchema.safeParse({ ...deskBody(deskLine), budgetTracked: false }).success).toBe(false)
+      expect(deskOrderCreateSchema.safeParse({ ...deskBody(deskLine), budgetExempt: true }).success).toBe(false)
+    })
+
+    it("are refused by every other order write", () => {
+      expect(orderCreateSchema.safeParse({ items: [deskLine] }).success).toBe(false)
+      expect(orderCreateSchema.safeParse({ items: [{ organizationInventoryId: 10, quantity: 2, unitPriceCents: 5_500 }] }).success).toBe(false)
+      expect(orderUpdateSchema.safeParse({ items: [deskLine] }).success).toBe(false)
+      expect(orderUpdateSchema.safeParse({ items: [{ organizationInventoryId: 10, quantity: 2, unitPriceCents: 5_500 }] }).success).toBe(false)
+    })
   })
 
   it("rejects server-maintained financial and approval fields", () => {

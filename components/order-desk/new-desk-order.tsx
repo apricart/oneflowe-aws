@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import useSWR from "swr"
 import {
   Building2,
@@ -10,13 +10,12 @@ import {
   Info,
   Loader2,
   PackageSearch,
-  Search,
   ShoppingBasket,
   Trash2,
   X,
 } from "lucide-react"
 
-import { QuantityStepper } from "@/components/group-portal/quantity-stepper"
+import { DeskProductPicker } from "@/components/order-desk/desk-product-picker"
 import { CHANNEL_META, StepHeading } from "@/components/order-desk/desk-theme"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -25,26 +24,28 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { fetcher } from "@/lib/fetcher"
-import { formatPriceInput } from "@/lib/group-price-input"
 import { INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH } from "@/lib/order-desk-access"
 import {
   buildDeskOrderRequest,
+  chosenLines,
   deskDraftChecklist,
   deskLineUnitPriceCents,
   estimateDraftTotalCents,
-  filledLines,
   isDeskPriceChanged,
-  parseDeskPriceInput,
   NOTES_MAX_LENGTH,
   SCREENSHOT_TYPES,
   screenshotFileError,
-  type DeskCatalogueItem,
-  unavailableDraftLines,
+  withLinePrice,
+  withLineQuantity,
+  withoutLine,
   type DeskDraft,
   type DeskDraftCheck,
+  type DeskDraftLine,
+  type DeskLineProduct,
+  type DeskLines,
 } from "@/lib/order-desk-draft"
 import { MAX_PO_NUMBER_LENGTH } from "@/lib/purchase-order"
-import { calculateLineCents, formatQuantity, parseQuantity, sanitizeQuantityStep } from "@/lib/quantity"
+import { calculateLineCents, formatQuantity, parseQuantity } from "@/lib/quantity"
 import { cn, formatPKR } from "@/lib/utils"
 
 type Target = {
@@ -54,22 +55,13 @@ type Target = {
   branches: { id: number; name: string; city: string | null }[]
 }
 
-type CatalogueItem = DeskCatalogueItem & {
-  productCode: string
-  unit: string
-  stockQuantity: number
-}
-
-type SummaryLine = { organizationInventoryId: number; raw: string; item: CatalogueItem }
-
 /** The order just created, shown until the desk user starts the next one. */
 type CreatedOrder = { tid: string; customer: string; totalCents: number | null }
 
 const EMPTY_DRAFT: DeskDraft = {
   organizationId: null,
   branchId: null,
-  quantities: {},
-  prices: {},
+  lines: {},
   intakeChannel: "",
   intakeReference: "",
   poNumber: "",
@@ -192,177 +184,47 @@ function CustomerStep({
   )
 }
 
-/**
- * The price the order charges for this product. Blank charges the catalogue
- * price (shown as the placeholder); anything typed is charged instead and shown
- * to the approving executive beside the catalogue price.
- */
-function LinePriceInput({
-  item,
-  rawPrice,
-  disabled,
-  onPrice,
-}: Readonly<{ item: CatalogueItem; rawPrice: string | undefined; disabled: boolean; onPrice: (raw: string) => void }>) {
-  const invalid = parseDeskPriceInput(rawPrice, item.name).kind === "invalid"
-  return (
-    <div className="relative w-28">
-      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground" aria-hidden="true">Rs</span>
-      <Input
-        aria-label={`Price per ${item.unit} of ${item.name}, in rupees including tax`}
-        aria-invalid={invalid}
-        inputMode="decimal"
-        placeholder={item.priceCents === null ? "Price" : formatPriceInput(item.priceCents)}
-        value={rawPrice ?? ""}
-        disabled={disabled}
-        onChange={(event) => onPrice(event.target.value)}
-        className={cn("h-9 pl-8 text-right tabular-nums", invalid && "border-rose-400 focus-visible:ring-rose-400")}
-      />
-    </div>
-  )
-}
-
-function ProductRow({
-  item,
-  raw,
-  rawPrice,
-  disabled,
-  onQuantity,
-  onPrice,
-}: Readonly<{
-  item: CatalogueItem
-  raw: string | undefined
-  rawPrice: string | undefined
-  disabled: boolean
-  onQuantity: (quantity: number) => void
-  onPrice: (raw: string) => void
-}>) {
-  const quantity = parseQuantity(raw || 0)
-  const selected = Number.isFinite(quantity) && quantity > 0
-  const outOfStock = item.stockQuantity <= 0
-  const changed = isDeskPriceChanged(item, rawPrice)
-  const price = item.priceCents === null ? "No catalogue price" : `${formatPKR(item.priceCents / 100)} per ${item.unit}`
-  return (
-    <li className={cn("flex flex-wrap items-center justify-between gap-3 px-3 py-2.5 transition-colors", selected && "bg-indigo-50/70 dark:bg-indigo-950/30")}>
-      <div className="min-w-0 flex-1">
-        <p className="truncate font-medium">{item.name}</p>
-        <p className="text-xs text-muted-foreground">
-          {item.productCode} · <span className={cn(changed && "line-through")}>{price}</span>
-          {changed && (
-            <span className="ml-1 font-medium text-indigo-700 dark:text-indigo-300">
-              Custom {formatPKR((deskLineUnitPriceCents(item, rawPrice) ?? 0) / 100)}
-            </span>
-          )}
-          {" "}·{" "}
-          <span className={cn(outOfStock && "font-medium text-amber-700 dark:text-amber-400")}>
-            {outOfStock ? "Out of stock" : `${formatQuantity(item.stockQuantity)} in stock`}
-          </span>
-        </p>
-      </div>
-      <div className="flex items-center gap-2">
-        <LinePriceInput item={item} rawPrice={rawPrice} disabled={disabled} onPrice={onPrice} />
-        <QuantityStepper
-          value={selected ? quantity : 0}
-          step={sanitizeQuantityStep(item.allowDecimalQuantity, item.quantityStep)}
-          label={`Quantity of ${item.name}`}
-          disabled={disabled}
-          onChange={onQuantity}
-        />
-      </div>
-    </li>
-  )
-}
-
 function ProductsStep({
-  catalogueUrl,
-  catalogue,
-  loading,
-  failed,
-  quantities,
-  prices,
+  organizationId,
+  branchId,
+  lines,
   disabled,
   onQuantity,
   onPrice,
 }: Readonly<{
-  catalogueUrl: string | null
-  catalogue: CatalogueItem[]
-  loading: boolean
-  failed: boolean
-  quantities: Readonly<Record<number, string>>
-  prices: Readonly<Record<number, string>>
+  organizationId: number | null
+  branchId: number | null
+  lines: DeskLines
   disabled: boolean
-  onQuantity: (inventoryId: number, quantity: number) => void
-  onPrice: (inventoryId: number, raw: string) => void
+  onQuantity: (product: DeskLineProduct, quantity: string) => void
+  onPrice: (product: DeskLineProduct, price: string) => void
 }>) {
-  const [search, setSearch] = useState("")
-  const visible = useMemo(() => {
-    const term = search.trim().toLowerCase()
-    if (!term) return catalogue
-    return catalogue.filter((item) => item.name.toLowerCase().includes(term) || item.productCode.toLowerCase().includes(term))
-  }, [catalogue, search])
-  const chosen = Object.values(quantities).filter((value) => value.trim() !== "").length
-
-  let body: React.ReactNode
-  if (!catalogueUrl) {
-    body = (
-      <div className="flex items-center gap-3 rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-        <PackageSearch className="h-5 w-5 shrink-0" aria-hidden="true" />
-        Choose the organization and branch first — the branch&apos;s own products and prices appear here.
-      </div>
-    )
-  } else if (failed) {
-    body = <p role="alert" className="text-sm text-destructive">Could not load this branch&apos;s products.</p>
-  } else if (loading) {
-    body = (
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Loading products…
-      </p>
-    )
-  } else if (catalogue.length === 0) {
-    body = <p className="text-sm text-muted-foreground">No products are assigned to this branch yet.</p>
-  } else {
-    body = (
-      <>
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-          <Input
-            aria-label="Search products"
-            placeholder="Search by product name or code"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="pl-9"
-          />
-        </div>
-        {visible.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No product matches &ldquo;{search}&rdquo;.</p>
-        ) : (
-          <ul className="max-h-[460px] divide-y overflow-auto rounded-md border">
-            {visible.map((item) => (
-              <ProductRow
-                key={item.organizationInventoryId}
-                item={item}
-                raw={quantities[item.organizationInventoryId]}
-                rawPrice={prices[item.organizationInventoryId]}
-                disabled={disabled}
-                onQuantity={(quantity) => onQuantity(item.organizationInventoryId, quantity)}
-                onPrice={(raw) => onPrice(item.organizationInventoryId, raw)}
-              />
-            ))}
-          </ul>
-        )}
-      </>
-    )
-  }
-
+  const chosen = chosenLines(lines)
   return (
     <Card>
       <CardContent className="space-y-4 p-5">
         <StepHeading
           number={2}
-          done={chosen > 0}
+          done={chosen.length > 0 && chosen.every((line) => deskLineUnitPriceCents(line) !== null)}
           title="Products"
-          description="Set a quantity for each product the customer asked for. Leave the price blank to charge the catalogue price, or type the price agreed with the customer (including tax)."
+          description="Any Apricart product can be ordered, whether or not the branch carries it. Set a quantity and type the price agreed with the customer, including tax, for every product."
         />
-        {body}
+        {organizationId && branchId ? (
+          <DeskProductPicker
+            key={`${organizationId}-${branchId}`}
+            organizationId={organizationId}
+            branchId={branchId}
+            lines={lines}
+            disabled={disabled}
+            onQuantity={onQuantity}
+            onPrice={onPrice}
+          />
+        ) : (
+          <div className="flex items-center gap-3 rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+            <PackageSearch className="h-5 w-5 shrink-0" aria-hidden="true" />
+            Choose the organization and branch first — Apricart&apos;s products appear here.
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -512,38 +374,37 @@ function OriginStep({
 
 function SummaryLines({
   lines,
-  prices,
   disabled,
   onRemove,
-}: Readonly<{ lines: SummaryLine[]; prices: Readonly<Record<number, string>>; disabled: boolean; onRemove: (inventoryId: number) => void }>) {
+}: Readonly<{ lines: DeskDraftLine[]; disabled: boolean; onRemove: (globalProductId: number) => void }>) {
   if (lines.length === 0) return <p className="text-sm text-muted-foreground">Nothing added yet.</p>
   return (
     <ul className="space-y-2">
-      {lines.map(({ organizationInventoryId, raw, item }) => {
-        const quantity = parseQuantity(raw)
-        const unitPriceCents = deskLineUnitPriceCents(item, prices[organizationInventoryId])
-        const changed = isDeskPriceChanged(item, prices[organizationInventoryId])
-        const lineTotal = unitPriceCents === null ? "—" : formatPKR(calculateLineCents(unitPriceCents, quantity) / 100)
+      {lines.map((line) => {
+        const quantity = parseQuantity(line.quantity)
+        const unitPriceCents = deskLineUnitPriceCents(line)
+        const lineTotal = unitPriceCents === null ? "Price needed" : formatPKR(calculateLineCents(unitPriceCents, quantity) / 100)
         return (
-          <li key={organizationInventoryId} className="flex items-start justify-between gap-2 text-sm">
+          <li key={line.product.globalProductId} className="flex items-start justify-between gap-2 text-sm">
             <div className="min-w-0">
-              <p className="truncate font-medium">{item.name}</p>
+              <p className="truncate font-medium">{line.product.name}</p>
               <p className="text-xs text-muted-foreground">
-                {formatQuantity(quantity)} {item.unit}
+                {formatQuantity(quantity)} {line.product.unit}
                 {unitPriceCents !== null && ` × ${formatPKR(unitPriceCents / 100)}`}
-                {changed && <span className="ml-1 font-medium text-indigo-700 dark:text-indigo-300">(custom price)</span>}
+                {!line.product.assignedToBranch && <span className="ml-1 font-medium text-amber-700 dark:text-amber-400">(not in branch catalogue)</span>}
+                {isDeskPriceChanged(line) && <span className="ml-1 font-medium text-indigo-700 dark:text-indigo-300">(differs from branch price)</span>}
               </p>
             </div>
             <div className="flex items-center gap-1">
-              <span className="whitespace-nowrap">{lineTotal}</span>
+              <span className={cn("whitespace-nowrap", unitPriceCents === null && "text-rose-600 dark:text-rose-400")}>{lineTotal}</span>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7 text-muted-foreground hover:text-rose-600"
-                aria-label={`Remove ${item.name}`}
+                aria-label={`Remove ${line.product.name}`}
                 disabled={disabled}
-                onClick={() => onRemove(organizationInventoryId)}
+                onClick={() => onRemove(line.product.globalProductId)}
               >
                 <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
               </Button>
@@ -571,52 +432,27 @@ function Checklist({ checks }: Readonly<{ checks: DeskDraftCheck[] }>) {
   )
 }
 
-/**
- * Products chosen earlier that the branch no longer offers (the catalogue was
- * refreshed after a product was hidden or unassigned). They have no row above,
- * so they are named here with a way out; otherwise the order can never be sent.
- */
-function UnavailableLines({ count, disabled, onRemove }: Readonly<{ count: number; disabled: boolean; onRemove: () => void }>) {
-  if (count === 0) return null
-  return (
-    <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
-      <span>
-        {count === 1 ? "1 product you chose is" : `${count} products you chose are`} no longer available for this branch.
-      </span>
-      <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={onRemove}>
-        Remove {count === 1 ? "it" : "them"}
-      </Button>
-    </div>
-  )
-}
-
 function SummaryPanel({
   organization,
   branchName,
   lines,
-  prices,
-  unavailableCount,
   estimatedCents,
   checks,
   formError,
   busy,
   submitting,
   onRemove,
-  onRemoveUnavailable,
   onSubmit,
 }: Readonly<{
   organization: Target | null
   branchName: string | null
-  lines: SummaryLine[]
-  prices: Readonly<Record<number, string>>
-  unavailableCount: number
+  lines: DeskDraftLine[]
   estimatedCents: number
   checks: DeskDraftCheck[]
   formError: string | null
   busy: boolean
   submitting: boolean
-  onRemove: (inventoryId: number) => void
-  onRemoveUnavailable: () => void
+  onRemove: (globalProductId: number) => void
   onSubmit: () => void
 }>) {
   const ready = checks.every((check) => check.done)
@@ -635,11 +471,10 @@ function SummaryPanel({
           </div>
           <div className="space-y-2">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Products ({lines.length})</p>
-            <SummaryLines lines={lines} prices={prices} disabled={busy} onRemove={onRemove} />
-            <UnavailableLines count={unavailableCount} disabled={busy} onRemove={onRemoveUnavailable} />
+            <SummaryLines lines={lines} disabled={busy} onRemove={onRemove} />
           </div>
           <div className="flex items-baseline justify-between border-t pt-3">
-            <span className="text-sm font-medium">Estimated total</span>
+            <span className="text-sm font-medium">Estimated total <span className="font-normal text-muted-foreground">(incl. tax)</span></span>
             <span className="text-lg font-semibold">{formatPKR(estimatedCents / 100)}</span>
           </div>
           <Checklist checks={checks} />
@@ -654,7 +489,7 @@ function SummaryPanel({
           </Button>
           <p className="flex items-start gap-2 text-xs text-muted-foreground">
             <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            An Apricart Executive approves the order before delivery, and sees any price you typed beside the catalogue price. The final total is calculated when it is created.
+            Prices you type include tax; nothing is added on top. The order does not use the customer&apos;s budget. An Apricart Executive approves it before delivery and sees each price beside the branch&apos;s catalogue price, where the branch has one.
           </p>
         </CardContent>
       </Card>
@@ -688,38 +523,26 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
   const organization = targets.find((target) => target.id === draft.organizationId) ?? null
   const branch = organization?.branches.find((candidate) => candidate.id === draft.branchId) ?? null
 
-  const catalogueUrl = draft.organizationId && draft.branchId
-    ? `/api/v1/order-desk/catalogue?organizationId=${draft.organizationId}&branchId=${draft.branchId}`
-    : null
-  const { data: catalogueData, error: catalogueError, isLoading: catalogueLoading } = useSWR<{ items: CatalogueItem[] }>(
-    catalogueUrl,
-    fetcher,
-  )
-  const catalogue = useMemo(() => catalogueData?.items ?? [], [catalogueData])
-  const byId = useMemo(() => new Map(catalogue.map((item) => [item.organizationInventoryId, item])), [catalogue])
-  const lines: SummaryLine[] = filledLines(draft).flatMap((line) => {
-    const item = byId.get(line.organizationInventoryId)
-    return item ? [{ ...line, item }] : []
-  })
-  // Judged only once the catalogue has loaded, or every line would look unavailable.
-  const unavailable = catalogueData ? unavailableDraftLines(draft.quantities, catalogue) : []
+  const lines = chosenLines(draft.lines)
 
   const update = (patch: Partial<DeskDraft>) => {
     setFormError(null)
     setDraft((current) => ({ ...current, ...patch }))
   }
 
-  const setQuantity = (inventoryId: number, quantity: number) => {
+  const setQuantity = (product: DeskLineProduct, quantity: string) => {
     setFormError(null)
-    setDraft((current) => ({
-      ...current,
-      quantities: { ...current.quantities, [inventoryId]: quantity > 0 ? String(quantity) : "" },
-    }))
+    setDraft((current) => ({ ...current, lines: withLineQuantity(current.lines, product, quantity) }))
   }
 
-  const setPrice = (inventoryId: number, raw: string) => {
+  const setPrice = (product: DeskLineProduct, price: string) => {
     setFormError(null)
-    setDraft((current) => ({ ...current, prices: { ...current.prices, [inventoryId]: raw } }))
+    setDraft((current) => ({ ...current, lines: withLinePrice(current.lines, product, price) }))
+  }
+
+  const removeLine = (globalProductId: number) => {
+    setFormError(null)
+    setDraft((current) => ({ ...current, lines: withoutLine(current.lines, globalProductId) }))
   }
 
   const replacePreview = (next: string | null) => {
@@ -764,7 +587,7 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
 
   const submit = async () => {
     if (submitting || uploading) return
-    const built = buildDeskOrderRequest(draft, catalogue)
+    const built = buildDeskOrderRequest(draft)
     if (!built.ok) {
       setFormError(built.error)
       return
@@ -811,17 +634,13 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
           disabled={submitting}
           // A new organization means a new branch and a new catalogue: nothing
           // chosen for the previous one may carry over.
-          onOrganization={(value) => update({ organizationId: Number(value), branchId: null, quantities: {}, prices: {} })}
-          onBranch={(value) => update({ branchId: Number(value), quantities: {}, prices: {} })}
+          onOrganization={(value) => update({ organizationId: Number(value), branchId: null, lines: {} })}
+          onBranch={(value) => update({ branchId: Number(value), lines: {} })}
         />
         <ProductsStep
-          key={catalogueUrl ?? "none"}
-          catalogueUrl={catalogueUrl}
-          catalogue={catalogue}
-          loading={catalogueLoading}
-          failed={Boolean(catalogueError)}
-          quantities={draft.quantities}
-          prices={draft.prices}
+          organizationId={draft.organizationId}
+          branchId={draft.branchId}
+          lines={draft.lines}
           disabled={submitting}
           onQuantity={setQuantity}
           onPrice={setPrice}
@@ -849,15 +668,12 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
         organization={organization}
         branchName={branch?.name ?? null}
         lines={lines}
-        prices={draft.prices}
-        unavailableCount={unavailable.length}
-        estimatedCents={estimateDraftTotalCents(draft, catalogue)}
+        estimatedCents={estimateDraftTotalCents(draft.lines)}
         checks={deskDraftChecklist(draft)}
         formError={formError}
         busy={submitting || uploading}
         submitting={submitting}
-        onRemove={(inventoryId) => setQuantity(inventoryId, 0)}
-        onRemoveUnavailable={() => { for (const inventoryId of unavailable) setQuantity(inventoryId, 0) }}
+        onRemove={removeLine}
         onSubmit={() => { void submit() }}
       />
     </div>

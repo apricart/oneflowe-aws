@@ -6,14 +6,28 @@ const route = readFileSync(
   resolve(process.cwd(), "app/api/v1/orders/[id]/route.ts"),
   "utf8",
 )
+const orderReadAccess = readFileSync(
+  resolve(process.cwd(), "lib/server/order-read-access.ts"),
+  "utf8",
+)
 const portal = readFileSync(resolve(process.cwd(), "app/shop/page.tsx"), "utf8")
 
 describe("order edit security contract", () => {
   it("scopes the fast single-order read to what the portal user may see", () => {
-    // The whole allowlist, not a fragment of it, so a role added here has to be
-    // added deliberately. GROUP_ORDER_PORTAL reads its assigned branches for
-    // its own read-only tab; the write allowlists below are unchanged by that.
-    expect(route).toContain('requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "GROUP_ORDER_PORTAL", "ORDER_PORTAL"], { viewerReadsAsHeadOffice: true })')
+    // The route and its attachments share one allowlist. Pin the whole policy,
+    // not only the constant's name, so widening order reads stays deliberate.
+    // GROUP_ORDER_PORTAL reads its assigned branches for its read-only tab;
+    // APRICART_SUPPORT reads through its separately checked support scope.
+    expect(route).toContain('requireApiRole([...ORDER_DETAIL_READ_ROLES], { viewerReadsAsHeadOffice: true })')
+    expect(orderReadAccess).toContain(`export const ORDER_DETAIL_READ_ROLES = [
+  "SUPER_ADMIN",
+  "HEAD_OFFICE",
+  "BRANCH_ADMIN",
+  "GROUP_USER",
+  "GROUP_ORDER_PORTAL",
+  "ORDER_PORTAL",
+  APRICART_SUPPORT_ROLE,
+] as const`)
     // A requester reads its own orders and the group orders raised for its
     // branch, which spend that branch's budget. The rule is the shared one
     // rather than an inline comparison, so this read and the store's list can
