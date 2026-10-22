@@ -15,6 +15,9 @@ import {
   hasInvoiceSequenceTable,
 } from "@/lib/invoice-number"
 import { shouldHidePricesForRole } from "@/lib/price-visibility"
+import { orderLinePriceFailure } from "@/lib/pricing-access"
+import type { z } from "zod"
+import { enteredPriceLines, resolveOrderLinePrice } from "@/lib/order-line-price"
 import { parseEndDateParam,parseStartDateParam } from "@/lib/date-range-params"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { isOrganizationBudgetEnabled, resolveOrderBudgetTracking } from "@/lib/server/organization-budget-policy"
@@ -648,17 +651,23 @@ function calculateLockedOrderItems(normalizedItems: any[], locked: any, orgTaxRa
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    const priceCents = resolveEffectivePriceCents({
-      groupPriceCents: locked.groupPriceByInventoryId?.get(inventoryItem.id),
-      organizationPriceCents: inventoryItem.customPrice,
-      basePriceCents: product.basePrice,
+    // The ladder's price, unless the Order Desk typed this line's own (refused
+    // for every other role before the transaction began).
+    const price = resolveOrderLinePrice({
+      cataloguePriceCents: resolveEffectivePriceCents({
+        groupPriceCents: locked.groupPriceByInventoryId?.get(inventoryItem.id),
+        organizationPriceCents: inventoryItem.customPrice,
+        basePriceCents: product.basePrice,
+      }),
+      enteredPriceCents: requestedItem.unitPriceCents,
     })
-    if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
+    if (!price.ok) throw new Error(`Pricing is unavailable for ${product.name}`)
     // Catalogue prices are tax-inclusive, so the line amount is the gross the
     // branch pays and the split below only records how much of it is tax. The
-    // order total stays exactly the sum of these gross amounts.
+    // order total stays exactly the sum of these gross amounts. An entered
+    // price is tax-inclusive in the same way.
     const taxRateBp = resolveTaxRateBp(product.taxRateBp, orgTaxRateBp)
-    const line = splitInclusiveCents(calculateLineCents(priceCents, validation.quantity), taxRateBp)
+    const line = splitInclusiveCents(calculateLineCents(price.priceCents, validation.quantity), taxRateBp)
     subtotal += line.netCents
     tax += line.taxCents
     total += line.grossCents
@@ -666,7 +675,9 @@ function calculateLockedOrderItems(normalizedItems: any[], locked: any, orgTaxRa
       organizationInventoryId: inventoryItem.id,
       globalProductId: product.id,
       quantity: validation.quantity,
-      priceCents,
+      priceCents: price.priceCents,
+      priceEnteredManually: price.priceEnteredManually,
+      cataloguePriceCents: price.cataloguePriceCents,
       taxRateBp,
       taxCents: line.taxCents,
       productName: product.name,
@@ -739,6 +750,11 @@ async function saveCreationLedgers(tx: any, context: any) {
   }
 }
 
+function enteredPriceAuditDetails(items: any[]) {
+  const enteredPrices = enteredPriceLines(items)
+  return enteredPrices.length === 0 ? {} : { enteredPrices }
+}
+
 async function logCreatedOrder(tx: any, context: any) {
   try {
     logOrderActivity("CREATE", { ...context.order, orderItems: context.items }, {
@@ -767,6 +783,9 @@ async function logCreatedOrder(tx: any, context: any) {
       // Why an order skipped approval when the creator, not the tenant's
       // policy, made it Active (an Order Desk entry).
       ...(context.approvalBasis ? { approvalBasis: context.approvalBasis } : {}),
+      // Lines the Order Desk priced by hand, with the catalogue price each
+      // replaced, so the trail says who charged what against what.
+      ...enteredPriceAuditDetails(context.items),
     },
     ipAddress: forwardedFor ? forwardedFor.split(",")[0] : "unknown",
     userAgent: headersList.get("user-agent"),
@@ -1103,12 +1122,16 @@ function calculateCreationItems(normalizedItems: any[], inventory: any) {
       label: `Quantity for ${product.name}`,
     })
     if (!validation.ok) throw new Error(validation.error)
-    const priceCents = resolveEffectivePriceCents({
-      groupPriceCents: inventory.groupPriceByInventoryId?.get(inventoryItem.id),
-      organizationPriceCents: inventoryItem.customPrice,
-      basePriceCents: product.basePrice,
+    const price = resolveOrderLinePrice({
+      cataloguePriceCents: resolveEffectivePriceCents({
+        groupPriceCents: inventory.groupPriceByInventoryId?.get(inventoryItem.id),
+        organizationPriceCents: inventoryItem.customPrice,
+        basePriceCents: product.basePrice,
+      }),
+      enteredPriceCents: requestedItem.unitPriceCents,
     })
-    if (priceCents === null || priceCents === undefined) throw new Error(`Price not found for item ${requestedItem.organizationInventoryId}. Custom: ${inventoryItem.customPrice}, Base: ${product.basePrice}`)
+    if (!price.ok) throw new Error(`Price not found for item ${requestedItem.organizationInventoryId}. Custom: ${inventoryItem.customPrice}, Base: ${product.basePrice}`)
+    const priceCents = price.priceCents
     subtotal += calculateLineCents(priceCents, validation.quantity)
     return {
       organizationInventoryId: requestedItem.organizationInventoryId,
@@ -1504,11 +1527,8 @@ export async function POST(req: NextRequest) {
       }, { status: 400 })
     }
 
-    const rawBody = await req.json().catch(() => null)
-    const parsedBody = orderCreateSchema.safeParse(rawBody)
-    if (!parsedBody.success) {
-      return NextResponse.json({ error: validationMessage(parsedBody.error) }, { status: 400 })
-    }
+    const parsedBody = parseOrderCreateBody(await req.json().catch(() => null), role)
+    if ("response" in parsedBody) return parsedBody.response
     const {
       items,
       branchId: branchIdInput,
@@ -1521,10 +1541,7 @@ export async function POST(req: NextRequest) {
       intakeAttachmentKey,
     } = parsedBody.data
 
-    const normalizedItems = items.map((item) => ({
-      organizationInventoryId: item.organizationInventoryId,
-      quantity: roundQuantity(Number(item.quantity)),
-    }))
+    const normalizedItems = normalizeOrderLines(items)
 
     // Validate quantities are positive
     if (normalizedItems.some(i => !Number.isFinite(i.quantity) || i.quantity <= 0)) {
@@ -1650,6 +1667,40 @@ export async function PUT(_: NextRequest) {
 
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/
 
+/** A requested line; `unitPriceCents` only on an Order Desk line the desk priced. */
+type NormalizedOrderLine = { organizationInventoryId: number; quantity: number; unitPriceCents?: number }
+
+/**
+ * The validated body, or the refusal to send. A line's own price is the Order
+ * Desk's alone (lib/pricing-access.ts): anyone else sending one is refused here,
+ * before anything is read.
+ */
+function parseOrderCreateBody(
+  rawBody: unknown,
+  role: unknown,
+): { data: z.infer<typeof orderCreateSchema> } | { response: NextResponse } {
+  const parsed = orderCreateSchema.safeParse(rawBody)
+  if (!parsed.success) {
+    return { response: NextResponse.json({ error: validationMessage(parsed.error) }, { status: 400 }) }
+  }
+  const linePriceFailure = orderLinePriceFailure(role, parsed.data.items)
+  if (linePriceFailure) {
+    return { response: NextResponse.json({ error: linePriceFailure.message }, { status: linePriceFailure.status }) }
+  }
+  return { data: parsed.data }
+}
+
+function normalizeOrderLines(
+  items: readonly { organizationInventoryId: number; quantity: number; unitPriceCents?: number }[],
+): NormalizedOrderLine[] {
+  return items.map((item) => ({
+    organizationInventoryId: item.organizationInventoryId,
+    quantity: roundQuantity(Number(item.quantity)),
+    // Present only when typed, so every other order's fingerprint is unchanged.
+    ...(item.unitPriceCents === undefined ? {} : { unitPriceCents: item.unitPriceCents }),
+  }))
+}
+
 function orderRequestFingerprint(input: {
   organizationId: number
   branchId: number
@@ -1659,7 +1710,7 @@ function orderRequestFingerprint(input: {
   intakeChannel?: string
   intakeReference?: string
   intakeAttachmentKey?: string
-  items: Array<{ organizationInventoryId: number; quantity: number }>
+  items: NormalizedOrderLine[]
 }) {
   const canonical = {
     organizationId: input.organizationId,

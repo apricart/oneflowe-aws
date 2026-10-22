@@ -3,6 +3,7 @@
 import { useEffect, useState, type SubmitEvent } from "react"
 import { Pencil, Save } from "lucide-react"
 
+import { BranchContactPhoneField, contactPhoneFieldValue } from "@/components/branches/branch-contact-phone-field"
 import { BranchHeadCountField, headCountFieldValue } from "@/components/branches/branch-head-count-field"
 import { BranchHierarchyField } from "@/components/branches/branch-hierarchy-field"
 import { Button } from "@/components/ui/button"
@@ -19,6 +20,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
+import { parseContactPhoneInput } from "@/lib/branch-contact-phone"
 import { parseHeadCountInput } from "@/lib/branch-head-count"
 import {
   branchHierarchyInputError,
@@ -47,6 +49,7 @@ export type EditableBranch = {
   address?: string | null
   costCenterId?: string | null
   headCount?: number | null
+  contactPhone?: string | null
   hierarchyRole?: string | null
   parentBranchId?: number | null
 }
@@ -64,6 +67,7 @@ function formFor(branch: EditableBranch) {
     address: branch.address ?? "",
     costCenterId: branch.costCenterId ?? "",
     headCount: headCountFieldValue(branch.headCount),
+    contactPhone: contactPhoneFieldValue(branch.contactPhone),
   }
 }
 
@@ -105,6 +109,7 @@ export function HeadOfficeEditBranchDialog({
   const address = form.address.trim()
   const costCenterId = form.costCenterId.trim()
   const headCount = parseHeadCountInput(form.headCount)
+  const contactPhone = parseContactPhoneInput(form.contactPhone)
 
   const lengthOk = (value: string, min: number, max: number) =>
     value === "" || (value.length >= min && value.length <= max)
@@ -114,6 +119,7 @@ export function HeadOfficeEditBranchDialog({
     && lengthOk(address, 5, 500)
     && costCenterId.length <= 128
     && headCount !== undefined
+    && contactPhone !== undefined
     && branchHierarchyInputError(hierarchy) === null
 
   const update = (field: keyof ReturnType<typeof formFor>, value: string) =>
@@ -130,6 +136,7 @@ export function HeadOfficeEditBranchDialog({
       address: textOrNull(address),
       costCenterId: textOrNull(costCenterId),
       headCount: headCount ?? null,
+      contactPhone: contactPhone ?? null,
     }
     const previous = {
       name: branch.name,
@@ -138,6 +145,7 @@ export function HeadOfficeEditBranchDialog({
       address: branch.address ?? null,
       costCenterId: branch.costCenterId ?? null,
       headCount: branch.headCount ?? null,
+      contactPhone: branch.contactPhone ?? null,
     }
     const changed: Record<string, unknown> = Object.fromEntries(
       (Object.keys(next) as (keyof typeof next)[])
@@ -260,6 +268,13 @@ export function HeadOfficeEditBranchDialog({
                 disabled={saving}
               />
             </div>
+
+            <BranchContactPhoneField
+              id="head-office-edit-branch-contact-phone"
+              value={form.contactPhone}
+              onChange={(value) => update("contactPhone", value)}
+              disabled={saving}
+            />
 
             <BranchHeadCountField
               id="head-office-edit-branch-head-count"

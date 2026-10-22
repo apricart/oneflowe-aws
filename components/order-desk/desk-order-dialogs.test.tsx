@@ -95,6 +95,50 @@ describe("editing a desk order", () => {
     expect(screen.queryByRole("alert")).toBeNull()
   })
 
+  it("keeps a hand-priced line's price, and sends a newly typed one", async () => {
+    // Rice was priced by the desk at Rs 700 against a catalogue Rs 750.
+    swr.catalogue = { items: [catalogueItem(3, "Rice", 75_000), catalogueItem(4, "Boxes")] }
+    const onSaved = vi.fn()
+    render(<EditDeskOrderDialog
+      order={order({
+        items: [
+          { id: 9, organizationInventoryId: 3, productName: "Rice", quantity: 2, unit: "kg", priceCents: 70_000, priceEnteredManually: true, cataloguePriceCents: 75_000 },
+          { id: 10, organizationInventoryId: 4, productName: "Boxes", quantity: 1, unit: "piece", priceCents: 1_000 },
+        ],
+      })}
+      onClose={vi.fn()}
+      onSaved={onSaved}
+    />)
+
+    const ricePrice = screen.getByLabelText("Price per piece of Rice, in rupees including tax") as HTMLInputElement
+    const boxPrice = screen.getByLabelText("Price per piece of Boxes, in rupees including tax") as HTMLInputElement
+    expect(ricePrice.value).toBe("700.00")
+    // A catalogue-priced line starts blank, showing the catalogue price as its placeholder.
+    expect(boxPrice.value).toBe("")
+    expect(boxPrice.placeholder).toBe("10.00")
+    expect(screen.getByText("Rs 1,410.00", { exact: false })).toBeTruthy()
+
+    fireEvent.change(boxPrice, { target: { value: "12.5" } })
+    respond(200, { message: "Order updated", totalCents: 141_250 })
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(sentBody().items).toEqual([
+      { organizationInventoryId: 3, quantity: 2, unitPriceCents: 70_000 },
+      { organizationInventoryId: 4, quantity: 1, unitPriceCents: 1_250 },
+    ])
+  })
+
+  it("refuses an invalid price without sending anything", async () => {
+    swr.catalogue = { items: [catalogueItem(3, "Rice", 75_000), catalogueItem(4, "Boxes")] }
+    render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={vi.fn()} />)
+    const boxPrice = screen.getByLabelText("Price per piece of Boxes, in rupees including tax")
+    fireEvent.change(boxPrice, { target: { value: "0" } })
+    expect(boxPrice.getAttribute("aria-invalid")).toBe("true")
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    expect(await screen.findByText("The price for Boxes must be more than zero")).toBeTruthy()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it("does not call a line unavailable while the catalogue is still loading", () => {
     render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={vi.fn()} />)
     expect(screen.queryByText(/No longer available/)).toBeNull()

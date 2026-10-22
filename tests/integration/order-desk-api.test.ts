@@ -487,6 +487,142 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
     })
   })
 
+  // plans/OF-ORDER-DESK-line-price-entry.md
+  describe("a price the desk types for a line", () => {
+    // Below the catalogue price by an amount that does not divide evenly, so a
+    // total computed from the catalogue price could not pass by accident.
+    const enteredPrice = ORDER_DESK_FIXTURE_PRICE_CENTS.base - 123
+
+    const linesOf = async (orderId: number) => db.select().from(orderItems).where(eq(orderItems.orderId, orderId))
+
+    it("is what the order, its hold and its approval charge, beside the catalogue price it replaced", async () => {
+      signIn(actor("desk"))
+      const heldBefore = (await budgetB1()).held
+      const created = await createOrder(bOrderBody(3, {
+        items: [{ organizationInventoryId: f.inventoryB, quantity: 3, unitPriceCents: enteredPrice }],
+      }))
+      expect(created.status).toBe(200)
+      const orderId = created.body.order.id
+
+      const row = await storedOrder(orderId)
+      expect(Number(row.totalCents)).toBe(3 * enteredPrice)
+      // Tax-inclusive, like a catalogue price: the split adds back to the total.
+      expect(Number(row.subtotalCents) + Number(row.taxCents)).toBe(3 * enteredPrice)
+      // The proforma receipt prints the entered price's total.
+      expect(row.receiptData?.totalAmount).toBe((3 * enteredPrice) / 100)
+      expect((await budgetB1()).held).toBe(heldBefore + 3 * enteredPrice)
+
+      const [line] = await linesOf(orderId)
+      expect(Number(line.priceCents)).toBe(enteredPrice)
+      expect(line.priceEnteredManually).toBe(true)
+      expect(Number(line.cataloguePriceCents)).toBe(ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+
+      const [log] = await db.select().from(systemLogs).where(and(
+        eq(systemLogs.action, "ORDER_CREATE"),
+        eq(systemLogs.resourceId, String(orderId)),
+      ))
+      expect(log.details).toMatchObject({
+        enteredPrices: [{ organizationInventoryId: f.inventoryB, priceCents: enteredPrice, cataloguePriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base }],
+      })
+
+      // The desk's list carries both figures, for its own edit form.
+      const listed = (await listDeskOrders()).body.items.find((item: any) => item.id === orderId)
+      expect(listed.items[0]).toMatchObject({ priceCents: enteredPrice, priceEnteredManually: true, cataloguePriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base })
+
+      // The executive approves the total it was shown, at the entered price.
+      await approveAsExecutive(orderId)
+      const approved = await storedOrder(orderId)
+      expect(approved.status).toBe("APPROVED")
+      expect(Number(approved.totalCents)).toBe(3 * enteredPrice)
+    })
+
+    it("is not flagged when it equals the catalogue price", async () => {
+      signIn(actor("desk"))
+      const created = await createOrder(bOrderBody(1, {
+        items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.base }],
+      }))
+      expect(created.status).toBe(200)
+      const [line] = await linesOf(created.body.order.id)
+      expect(line.priceEnteredManually).toBe(false)
+      expect(line.cataloguePriceCents).toBeNull()
+      const [log] = await db.select().from(systemLogs).where(and(
+        eq(systemLogs.action, "ORDER_CREATE"),
+        eq(systemLogs.resourceId, String(created.body.order.id)),
+      ))
+      expect(log.details).not.toHaveProperty("enteredPrices")
+    })
+
+    it("refuses a price that is zero, negative, fractional or not a number, and creates nothing", async () => {
+      signIn(actor("desk"))
+      const heldBefore = (await budgetB1()).held
+      for (const unitPriceCents of [0, -500, 99.5, "5000"]) {
+        const refused = await createOrder(bOrderBody(1, {
+          items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents }],
+        }))
+        expect(refused.status, String(unitPriceCents)).toBe(400)
+      }
+      expect((await budgetB1()).held).toBe(heldBefore)
+    })
+
+    it("is refused from every other role that can place an order, before anything is written", async () => {
+      const stockBefore = await stock()
+      for (const kind of ["portal", "head", "super"] as const) {
+        signIn(actor(kind))
+        const refused = await createOrder({
+          organizationId: f.organizationA,
+          branchId: f.branchA1,
+          items: [{ organizationInventoryId: f.inventoryA, quantity: 1, unitPriceCents: 1 }],
+        })
+        expect(refused.status, kind).toBe(403)
+        expect(refused.body.error, kind).toBe("Forbidden: only the Order Desk may set the price of an order line")
+      }
+      expect(await stock()).toBe(stockBefore)
+    })
+
+    it("changes the idempotency fingerprint, so a retry at another price is a different order", async () => {
+      signIn(actor("desk"))
+      const key = idempotencyKey()
+      const body = bOrderBody(1, { items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: enteredPrice }] })
+      expect((await createOrder(body, key)).status).toBe(200)
+      const repriced = await createOrder({ ...body, items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: enteredPrice + 1 }] }, key)
+      expect(repriced.status).toBe(409)
+    })
+
+    it("survives an edit that sends it again, and gives way to the catalogue when it is left out", async () => {
+      signIn(actor("desk"))
+      const created = await createOrder(bOrderBody(2, {
+        items: [{ organizationInventoryId: f.inventoryB, quantity: 2, unitPriceCents: enteredPrice }],
+      }))
+      const orderId = created.body.order.id
+      const heldAfterCreate = (await budgetB1()).held
+
+      const kept = await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 4, unitPriceCents: enteredPrice }] })
+      expect(kept.status).toBe(200)
+      expect(kept.body.totalCents).toBe(4 * enteredPrice)
+      expect((await budgetB1()).held).toBe(heldAfterCreate + 2 * enteredPrice)
+      let [line] = await linesOf(orderId)
+      expect(line.priceEnteredManually).toBe(true)
+      expect(Number(line.cataloguePriceCents)).toBe(ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+
+      const [audit] = await db.select().from(auditLogs).where(and(
+        eq(auditLogs.action, "ORDER_EDITED"),
+        eq(auditLogs.entityId, String(orderId)),
+      ))
+      expect(JSON.stringify(audit)).toContain(String(enteredPrice))
+
+      const reverted = await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 4 }] })
+      expect(reverted.status).toBe(200)
+      expect(reverted.body.totalCents).toBe(4 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+      expect((await budgetB1()).held).toBe(heldAfterCreate - 2 * enteredPrice + 4 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+      ;[line] = await linesOf(orderId)
+      expect(line.priceEnteredManually).toBe(false)
+      expect(line.cataloguePriceCents).toBeNull()
+      expect(Number(line.priceCents)).toBe(ORDER_DESK_FIXTURE_PRICE_CENTS.base)
+
+      expect((await editOrder(orderId, { items: [{ organizationInventoryId: f.inventoryB, quantity: 1, unitPriceCents: 0 }] })).status).toBe(400)
+    })
+  })
+
   describe("the customer's screenshot", () => {
     beforeAll(() => {
       process.env.S3_UPLOADS_BUCKET = "it-order-desk"

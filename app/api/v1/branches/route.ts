@@ -22,6 +22,16 @@ import {
   usesMultiBranchScope,
 } from "@/lib/server/multi-branch-scope"
 
+/**
+ * The most branches one list response carries. Super Admin's unfiltered list
+ * spans every tenant, and several screens (Organizations, Users, the context
+ * switcher) count and render it whole, so the bound sits well above the total
+ * rather than at a page size: at 500 the 2026-10-22 import (755 branches) made
+ * them silently drop the oldest tenants' branches. A response that hits the
+ * bound says so (`truncated`) instead of pretending to be complete.
+ */
+const BRANCH_LIST_LIMIT = 5_000
+
 type BranchCreateInput = ReturnType<typeof branchCreateSchema.parse>
 type RequestScope = NonNullable<Awaited<ReturnType<typeof getRequestScope>>>
 
@@ -218,6 +228,7 @@ export async function GET(req: Request) {
           groupId: branchesTable.groupId,
           adminUserId: branchesTable.adminUserId,
           headCount: branchesTable.headCount,
+          contactPhone: branchesTable.contactPhone,
           hierarchyRole: branchesTable.hierarchyRole,
           parentBranchId: branchesTable.parentBranchId,
           parentBranchName: parentBranchNameSql,
@@ -230,9 +241,13 @@ export async function GET(req: Request) {
         .from(branchesTable)
         .where(getBranchQueryCondition(scopedOrgIds, groupIds, scopedBranchId, assignedBranchIds))
         .orderBy(desc(branchesTable.createdAt))
-        .limit(500)
+        // One past the bound, so a cut-off list is detected rather than assumed complete.
+        .limit(BRANCH_LIST_LIMIT + 1)
 
-      return { items, count: items.length }
+      const truncated = items.length > BRANCH_LIST_LIMIT
+      if (truncated) logError(new Error(`Branch list truncated at ${BRANCH_LIST_LIMIT}`), 'BRANCHES_GET')
+      const page = truncated ? items.slice(0, BRANCH_LIST_LIMIT) : items
+      return { items: page, count: page.length, truncated }
     }
 
     const result = shouldRefresh
@@ -300,6 +315,7 @@ export async function POST(req: Request) {
         status,
         region: body.region ?? null,
         headCount: body.headCount ?? null,
+        contactPhone: body.contactPhone ?? null,
         hierarchy: hierarchyForNewBranch(body),
       },
       { userId: scope.userId, role: scope.role },

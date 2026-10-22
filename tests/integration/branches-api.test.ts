@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { and, desc, eq, inArray } from "drizzle-orm"
+import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import * as mockedNextAuth from "next-auth"
 
 import * as branchPerformanceRoute from "@/app/api/v1/analytics/branches/performance/route"
@@ -216,6 +216,30 @@ describe.skipIf(!hasTestDatabase)("branches API", () => {
       expect((await list()).status).toBe(403)
     })
 
+    it("lists every branch Super Admin can see in one response past the old 500 cap, and says it is complete", async () => {
+      // Enough throwaway branches that the table holds more than 500, the cap
+      // that silently hid the oldest tenants' branches after the 2026-10-22 import.
+      const tag = randomUUID().slice(0, 6)
+      const filler = await db.insert(branches).values(
+        Array.from({ length: 400 }, (_, i) => ({
+          organizationId: f.foreign, name: `Filler ${tag} ${i}`, code: `FIL-${tag}-${i}`, status: "active",
+        })),
+      ).returning({ id: branches.id })
+      try {
+        signIn({ id: f.superAdminId, role: "SUPER_ADMIN" })
+        const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(branches)
+        expect(total).toBeGreaterThan(500)
+        const all = await list()
+        expect(all.status).toBe(200)
+        expect(all.body.truncated).toBe(false)
+        expect(all.body.count).toBe(total)
+        // The oldest fixture branches are still there, not cut off by the newest.
+        expect(all.ids).toEqual(expect.arrayContaining([f.north, f.south, f.abroad]))
+      } finally {
+        await db.delete(branches).where(inArray(branches.id, filler.map((row) => row.id)))
+      }
+    })
+
     it("shows Super Admin the tenants it asks for", async () => {
       signIn({ id: f.superAdminId, role: "SUPER_ADMIN" })
       const both = await list(`&organizationId=${f.home},${f.foreign}`)
@@ -366,6 +390,70 @@ describe.skipIf(!hasTestDatabase)("branches API", () => {
       const [audit] = await db.select().from(auditLogs)
         .where(and(eq(auditLogs.action, "DEACTIVATE_BRANCH"), eq(auditLogs.entityId, String(f.south))))
       expect(audit.userId).toBe(f.superAdminId)
+    })
+  })
+
+  /**
+   * The branch's contact phone (plans/OF-BRANCH-contact-phone.md): written by
+   * exactly the roles that already write a branch, normalised, and audited.
+   */
+  describe("contact phone", () => {
+    it("is set on create, normalised, read back and audited", async () => {
+      signIn({ id: f.superAdminId, role: "SUPER_ADMIN" })
+      const created = await create({ ...validBranch(f.foreign, `Phone ${f.suffix}`), contactPhone: "  0300   1234567 " })
+      expect(created.status).toBe(201)
+      expect(created.body.item.contactPhone).toBe("0300 1234567")
+      expect((await getOne(created.body.item.id)).body.item.contactPhone).toBe("0300 1234567")
+
+      const [audit] = await db.select().from(auditLogs).where(and(
+        eq(auditLogs.action, "CREATE_BRANCH"),
+        eq(auditLogs.entityId, String(created.body.item.id)),
+      ))
+      expect(audit.metadata).toMatchObject({ contactPhone: "0300 1234567" })
+    })
+
+    it("defaults to not provided", async () => {
+      signIn({ id: f.headOfficeId, role: "HEAD_OFFICE" })
+      const created = await create(validBranch(f.home, `No Phone ${f.suffix}`))
+      expect(created.status).toBe(201)
+      expect(created.body.item.contactPhone).toBeNull()
+    })
+
+    it("lets Head Office set and clear it on its own branch, and lists it", async () => {
+      signIn({ id: f.headOfficeId, role: "HEAD_OFFICE" })
+      const set = await patchOne(f.north, { contactPhone: "042-35453651" })
+      expect(set.status).toBe(200)
+      expect(set.body.item.contactPhone).toBe("042-35453651")
+      const listed = await list()
+      expect(listed.body.items.find((item: { id: number }) => item.id === f.north)?.contactPhone).toBe("042-35453651")
+
+      const [audit] = await db.select().from(auditLogs)
+        .where(and(eq(auditLogs.action, "UPDATE_BRANCH"), eq(auditLogs.entityId, String(f.north))))
+        .orderBy(desc(auditLogs.id))
+        .limit(1)
+      expect(JSON.stringify(audit.metadata)).toContain("042-35453651")
+
+      const cleared = await patchOne(f.north, { contactPhone: null })
+      expect(cleared.status).toBe(200)
+      expect(cleared.body.item.contactPhone).toBeNull()
+    })
+
+    it("refuses something that is not a phone, and changes nothing", async () => {
+      signIn({ id: f.headOfficeId, role: "HEAD_OFFICE" })
+      expect((await patchOne(f.north, { contactPhone: "call the manager" })).status).toBe(400)
+      expect((await create({ ...validBranch(f.home, `Bad Phone ${f.suffix}`), contactPhone: "12" })).status).toBe(400)
+      const [row] = await db.select({ contactPhone: branches.contactPhone }).from(branches).where(eq(branches.id, f.north))
+      expect(row.contactPhone).toBeNull()
+    })
+
+    it("keeps Head Office off another tenant's branch and a Branch Admin off any", async () => {
+      signIn({ id: f.headOfficeId, role: "HEAD_OFFICE" })
+      expect((await patchOne(f.abroad, { contactPhone: "0300-1234567" })).status).toBe(403)
+      signIn({ id: f.branchAdminId, role: "BRANCH_ADMIN" })
+      expect((await patchOne(f.north, { contactPhone: "0300-1234567" })).status).toBe(403)
+      const rows = await db.select({ contactPhone: branches.contactPhone }).from(branches)
+        .where(inArray(branches.id, [f.abroad, f.north]))
+      expect(rows.every((row) => row.contactPhone === null)).toBe(true)
     })
   })
 

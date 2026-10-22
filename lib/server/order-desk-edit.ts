@@ -14,6 +14,7 @@ import {
 import { db } from "@/lib/db"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { isOrderDelivered } from "@/lib/fulfillment-status"
+import { enteredPriceLines, resolveOrderLinePrice } from "@/lib/order-line-price"
 import { orderSelectColumns } from "@/lib/order-select"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { calculateLineCents, formatQuantity, roundQuantity, validateProductQuantity } from "@/lib/quantity"
@@ -40,7 +41,9 @@ import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-n
  *   * the order, its lines, the branch and organization catalogue rows and every
  *     product touched are locked before anything is read for a decision;
  *   * every line is re-priced through the price ladder and re-taxed, exactly as
- *     creation does — an edited order is charged at today's prices;
+ *     creation does — an edited order is charged at today's prices — unless
+ *     the desk sends that line's own price, which it charges instead
+ *     (plans/OF-ORDER-DESK-line-price-entry.md);
  *   * stock moves by the difference only, and never below zero;
  *   * only an order that took a budget hold moves one (`orderTakesBudget`), on
  *     the row its own period names (`budgetPeriodOf`), after expired add-ons on
@@ -62,7 +65,8 @@ export type DeskEditOutcome =
 
 type EditInput = {
   orderId: number
-  items: { organizationInventoryId: number; quantity: number }[]
+  /** `unitPriceCents` only on a line the desk priced itself. */
+  items: { organizationInventoryId: number; quantity: number; unitPriceCents?: number }[]
   notes?: string
   /** `undefined` leaves it, `null` clears it. */
   poNumber?: string | null
@@ -168,8 +172,8 @@ async function editInTransaction(tx: any, input: EditInput): Promise<DeskEditOut
     actor: input.actor,
     organizationId,
     branchId,
-    before: { totalCents: order.totalCents, itemCount: inventory.existingItems.length },
-    after: { totalCents: priced.totalCents, itemCount: priced.items.length },
+    before: { totalCents: order.totalCents, itemCount: inventory.existingItems.length, ...enteredPriceDetails(inventory.existingItems) },
+    after: { totalCents: priced.totalCents, itemCount: priced.items.length, ...enteredPriceDetails(priced.items) },
     context: { tid: order.tid, via: "ORDER_DESK" },
   })
   await queueWarehouseOrderNotifications(tx, {
@@ -179,6 +183,16 @@ async function editInTransaction(tx: any, input: EditInput): Promise<DeskEditOut
   })
 
   return { kind: "updated", totalCents: priced.totalCents }
+}
+
+/** Hand-priced lines with the catalogue price each replaced; nothing when there are none. */
+function enteredPriceDetails(items: any[]) {
+  const enteredPrices = enteredPriceLines(items.map((item) => ({
+    ...item,
+    priceCents: Number(item.priceCents),
+    cataloguePriceCents: item.cataloguePriceCents === null || item.cataloguePriceCents === undefined ? null : Number(item.cataloguePriceCents),
+  })))
+  return enteredPrices.length === 0 ? {} : { enteredPrices }
 }
 
 type EditInventory = Awaited<ReturnType<typeof lockEditInventory>>
@@ -256,6 +270,8 @@ type PricedLine = {
   globalProductId: number
   quantity: number
   priceCents: number
+  priceEnteredManually: boolean
+  cataloguePriceCents: number | null
   taxRateBp: number
   taxCents: number
   productName: string
@@ -279,14 +295,16 @@ function priceEditedLines(items: EditInput["items"], inventory: EditInventory, o
       label: `Quantity for ${product.name}`,
     })
     if (!quantity.ok) throw new DeskEditRefusal(quantity.error)
-    const priceCents = resolveEffectivePriceCents({
-      groupPriceCents: inventory.groupPriceByInventoryId.get(inventoryRow.id),
-      organizationPriceCents: inventoryRow.customPrice,
-      basePriceCents: product.basePrice,
+    const price = resolveOrderLinePrice({
+      cataloguePriceCents: resolveEffectivePriceCents({
+        groupPriceCents: inventory.groupPriceByInventoryId.get(inventoryRow.id),
+        organizationPriceCents: inventoryRow.customPrice,
+        basePriceCents: product.basePrice,
+      }),
+      enteredPriceCents: requested.unitPriceCents,
     })
-    if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents < 0) {
-      throw new DeskEditRefusal(`Pricing is unavailable for ${product.name}`)
-    }
+    if (!price.ok) throw new DeskEditRefusal(`Pricing is unavailable for ${product.name}`)
+    const priceCents = price.priceCents
     // Stock this order already holds counts as available to it.
     const available = Number(product.stockQuantity) + (inventory.oldByProduct.get(product.id) ?? 0)
     if (quantity.quantity > available) {
@@ -302,6 +320,8 @@ function priceEditedLines(items: EditInput["items"], inventory: EditInventory, o
       globalProductId: product.id,
       quantity: quantity.quantity,
       priceCents,
+      priceEnteredManually: price.priceEnteredManually,
+      cataloguePriceCents: price.cataloguePriceCents,
       taxRateBp,
       taxCents: line.taxCents,
       productName: product.name,

@@ -15,6 +15,7 @@ import {
   resolveOrganizationByJoinCode,
 } from "@/lib/server/organization-join"
 import {
+  activeParentBranchIds,
   departmentSignupBands,
   loadDepartmentJoinSettings,
   usesDepartmentSignup,
@@ -83,7 +84,15 @@ export async function POST(req: Request) {
     // other organization's answer is exactly as before, plus `form`.
     const settings = await loadDepartmentJoinSettings(db, organization.organizationId)
     if (!settings || !usesDepartmentSignup(settings)) return ok({ ...options, form: "standard" })
-    return ok({ ...options, form: "department", approvalLevels: departmentSignupBands(settings) })
+    // Which listed branches are parents, so a new branch can be made a child
+    // of one (plans/OF-JOIN-new-branch-parent-child.md): a label on names
+    // already disclosed above, nothing more.
+    return ok({
+      ...options,
+      form: "department",
+      approvalLevels: departmentSignupBands(settings),
+      parentBranchIds: await activeParentBranchIds(db, organization.organizationId),
+    })
   } catch (caughtError) {
     const { message, status } = handleError(caughtError, "join lookup")
     return error(message, status)

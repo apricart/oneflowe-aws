@@ -240,6 +240,12 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   // So does choosing the organizations those cities apply to.
   // See plans/OF-WAREHOUSE-city-assignments-by-organization.md.
   { file: "app/api/v1/warehouse-team/[userId]/city-organizations/route.ts", module: "lib/server/warehouse-team.ts" },
+  // Apricart warehouses, their members and branch routes record inside each change.
+  // See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+  { file: "app/api/v1/apricart-warehouses/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  { file: "app/api/v1/apricart-warehouses/[id]/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  { file: "app/api/v1/apricart-warehouses/[id]/members/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  { file: "app/api/v1/apricart-warehouses/[id]/branches/route.ts", module: "lib/server/apricart-warehouses.ts" },
 ]
 
 /**

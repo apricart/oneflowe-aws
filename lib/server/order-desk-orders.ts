@@ -75,7 +75,17 @@ export type DeskOrderSummary = DeskOrderActions & {
   fulfilledAt: Date | null
   cancelledAt: Date | null
   cancellationReason: string | null
-  items: { id: number; organizationInventoryId: number | null; productName: string; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    organizationInventoryId: number | null
+    productName: string
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually: boolean
+    cataloguePriceCents: number | null
+  }[]
 }
 
 export type DeskOrderPage = {
@@ -187,6 +197,8 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
           quantity: orderItems.quantity,
           unit: orderItems.unit,
           priceCents: orderItems.priceCents,
+          priceEnteredManually: orderItems.priceEnteredManually,
+          cataloguePriceCents: orderItems.cataloguePriceCents,
         })
         .from(orderItems)
         .where(inArray(orderItems.orderId, orderIds)),
@@ -214,10 +226,11 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       hasAttachment: intakeAttachmentKey !== null,
       items: lineRows
         .filter((line) => line.orderId === row.id)
-        .map(({ orderId: _orderId, quantity, priceCents, ...line }) => ({
+        .map(({ orderId: _orderId, quantity, priceCents, cataloguePriceCents, ...line }) => ({
           ...line,
           quantity: Number(quantity),
           priceCents: Number(priceCents),
+          cataloguePriceCents: cataloguePriceCents === null ? null : Number(cataloguePriceCents),
         })),
     })),
     pagination: {

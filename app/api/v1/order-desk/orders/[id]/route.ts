@@ -3,6 +3,7 @@ import { NextResponse } from "next/server"
 import { readJson, requireApiRole } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { handleError } from "@/lib/error-handler"
+import { orderLinePriceFailure } from "@/lib/pricing-access"
 import { roundQuantity } from "@/lib/quantity"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { orderDeskEditSchema, validationMessage } from "@/lib/server/mutation-validation"
@@ -41,12 +42,16 @@ export async function PUT(req: Request, props: { params: Promise<{ id: string }>
 
     const parsed = orderDeskEditSchema.safeParse(await readJson<unknown>(req))
     if (!parsed.success) return NextResponse.json({ error: validationMessage(parsed.error) }, { status: 400 })
+    const linePriceFailure = orderLinePriceFailure(user.role, parsed.data.items)
+    if (linePriceFailure) return NextResponse.json({ error: linePriceFailure.message }, { status: linePriceFailure.status })
 
     const outcome = await editDeskOrder({
       orderId,
       items: parsed.data.items.map((item) => ({
         organizationInventoryId: item.organizationInventoryId,
         quantity: roundQuantity(Number(item.quantity)),
+        // The desk's own price for this line, when it typed one.
+        ...(item.unitPriceCents === undefined ? {} : { unitPriceCents: item.unitPriceCents }),
       })),
       notes: parsed.data.notes,
       poNumber: parsed.data.poNumber,

@@ -52,7 +52,7 @@ function getTextFieldUpdate(value: unknown, minimumLength: number, maximumLength
 }
 
 /**
- * Sets the group, region and head count a patch names, each already validated
+ * Sets the group, region, head count and contact phone a patch names, each already validated
  * by `branchUpdateSchema`. Only Super Admin and Head Office reach this handler,
  * which are exactly `HEAD_COUNT_DIRECT_WRITE_ROLES`.
  */
@@ -60,6 +60,8 @@ function applyReferencePatch(patch: any, body: any) {
   if (body.groupId !== undefined) patch.groupId = body.groupId === null ? null : Number(body.groupId)
   if (body.region !== undefined) patch.region = body.region
   if (body.headCount !== undefined) patch.headCount = body.headCount
+  // Already normalised by the schema; null clears it.
+  if (body.contactPhone !== undefined) patch.contactPhone = body.contactPhone
 }
 
 /**
@@ -152,6 +154,7 @@ export async function GET(
       groupId: branches.groupId,
       baselineBudgetCents: branches.baselineBudgetCents,
       headCount: branches.headCount,
+      contactPhone: branches.contactPhone,
       hierarchyRole: branches.hierarchyRole,
       parentBranchId: branches.parentBranchId,
       parentBranchName: parentBranchNameSql,

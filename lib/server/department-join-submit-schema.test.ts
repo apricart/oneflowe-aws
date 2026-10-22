@@ -68,3 +68,35 @@ describe("departmentJoinSubmitSchema — branches", () => {
     expect(parse({ ...valid, branches: [{ name: "x".repeat(100), crc: "AB-1", ...KARACHI }] }).success).toBe(true)
   })
 })
+
+describe("departmentJoinSubmitSchema — a new branch's type (plans/OF-JOIN-new-branch-parent-child.md)", () => {
+  const parentBranch = { name: "Gulshan Hub", crc: "PAR-1", ...KARACHI, hierarchyRole: "PARENT" }
+  const branchesOf = (...branches: Array<Record<string, unknown>>) => parse({ ...valid, branches })
+
+  it("accepts a parent and its child on the same request, and a child of an existing branch", () => {
+    const parsed = branchesOf(
+      parentBranch,
+      { name: "Gulshan Block 2", crc: "KID-1", ...KARACHI, hierarchyRole: "CHILD", parentCrc: " par-1 " },
+      { name: "North Kiosk", crc: "KID-2", ...KARACHI, hierarchyRole: "CHILD", parentBranchId: 7 },
+    )
+    expect(parsed.success).toBe(true)
+  })
+
+  it("still accepts a new branch sent without a type", () => {
+    expect(branchesOf({ name: "Korangi Depot", crc: "AB-1", ...KARACHI }).success).toBe(true)
+  })
+
+  it.each([
+    ["an unknown type", [{ ...parentBranch, hierarchyRole: "GRANDPARENT" }]],
+    ["a child with no parent", [{ ...parentBranch, hierarchyRole: "CHILD" }]],
+    ["a child with two parents", [parentBranch, { ...parentBranch, crc: "KID-1", name: "Kid", hierarchyRole: "CHILD", parentCrc: "PAR-1", parentBranchId: 7 }]],
+    ["a parent naming a parent", [{ ...parentBranch, parentBranchId: 7 }]],
+    ["a parent with no type", [{ name: "Kid", crc: "KID-1", ...KARACHI, parentBranchId: 7 }]],
+    ["a child of itself", [{ ...parentBranch, hierarchyRole: "CHILD", parentCrc: "PAR-1" }]],
+    ["a child of a CRC not on the request", [{ ...parentBranch, hierarchyRole: "CHILD", parentCrc: "ELSEWHERE" }]],
+    ["a child of a new branch not marked Parent", [{ ...parentBranch, hierarchyRole: "STANDALONE" }, { name: "Kid", crc: "KID-1", ...KARACHI, hierarchyRole: "CHILD", parentCrc: "PAR-1" }]],
+    ["a type on an existing branch", [{ branchId: 4, hierarchyRole: "PARENT" }]],
+  ])("refuses %s", (_case, branches) => {
+    expect(branchesOf(...branches).success).toBe(false)
+  })
+})

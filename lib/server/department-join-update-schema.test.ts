@@ -88,3 +88,16 @@ describe("departmentJoinUpdateSchema", () => {
     expect(parse({ ...valid, [field]: value }).success).toBe(false)
   })
 })
+
+describe("departmentJoinUpdateSchema — a new branch's type (plans/OF-JOIN-new-branch-parent-child.md)", () => {
+  it("accepts a type on a CRC entry, or none (the stored one is kept)", () => {
+    expect(parse({ ...valid, branches: [{ crc: "PAR-1", hierarchyRole: "PARENT" }, { crc: "KID-1", hierarchyRole: "CHILD", parentCrc: "PAR-1" }] }).success).toBe(true)
+    expect(parse({ ...valid, branches: [{ crc: "KID-1" }] }).success).toBe(true)
+  })
+
+  it("refuses a pairing that cannot stand on its own", () => {
+    expect(parse({ ...valid, branches: [{ crc: "KID-1", hierarchyRole: "CHILD" }] }).success).toBe(false)
+    expect(parse({ ...valid, branches: [{ crc: "KID-1", parentBranchId: 7 }] }).success).toBe(false)
+    expect(parse({ ...valid, branches: [{ branchId: 5, hierarchyRole: "PARENT" }] }).success).toBe(false)
+  })
+})

@@ -5,8 +5,11 @@ import { describe, expect, it } from "vitest"
 import { Permission, ROLE_TEMPLATES } from "@/lib/permissions"
 import {
   GLOBAL_PRICE_VIEW_ROLES,
+  ORDER_LINE_PRICE_ROLES,
   PRICE_MUTATION_ROLES,
   canMutatePrices,
+  canSetOrderLinePrice,
+  orderLinePriceFailure,
   canViewGlobalBasePrice,
   payloadTouchesPrice,
   priceMutationFailure,
@@ -51,6 +54,71 @@ describe("who may change a price", () => {
 
   it("lets a Super Admin through with no failure", () => {
     expect(priceMutationFailure("SUPER_ADMIN")).toBeNull()
+  })
+})
+
+describe("who may set the price of one order line", () => {
+  // plans/OF-ORDER-DESK-line-price-entry.md: an exception for one order line,
+  // never a catalogue tier.
+  const lines = [{ unitPriceCents: 5_500 }]
+
+  it("admits the Order Desk and nobody else", () => {
+    expect(ORDER_LINE_PRICE_ROLES).toEqual(["ORDER_DESK"])
+    expect(canSetOrderLinePrice("ORDER_DESK")).toBe(true)
+    expect(orderLinePriceFailure("ORDER_DESK", lines)).toBeNull()
+  })
+
+  it.each([...EVERY_OTHER_ROLE, "SUPER_ADMIN", "APRICART_EXECUTIVE", "WAREHOUSE", "VIEWER"])("refuses %s", (role) => {
+    expect(canSetOrderLinePrice(role)).toBe(false)
+    expect(orderLinePriceFailure(role, lines)).toEqual({
+      message: "Forbidden: only the Order Desk may set the price of an order line",
+      status: 403,
+    })
+  })
+
+  it.each([null, undefined, "", "order_desk", "ORDER_DESK "])("refuses %s rather than coercing it", (role) => {
+    expect(canSetOrderLinePrice(role)).toBe(false)
+  })
+
+  it("does not stand in the way of an order with no line price", () => {
+    expect(orderLinePriceFailure("ORDER_PORTAL", [{}, { unitPriceCents: undefined }, { unitPriceCents: null }])).toBeNull()
+  })
+
+  it("refuses the whole order when any one line carries a price", () => {
+    expect(orderLinePriceFailure("HEAD_OFFICE", [{}, { unitPriceCents: 1 }])).not.toBeNull()
+  })
+
+  it("carries no authority over the catalogue", () => {
+    // Setting one order's price is not setting a price: the desk is still
+    // refused every catalogue tier, and the two lists stay separate objects.
+    expect(canMutatePrices("ORDER_DESK")).toBe(false)
+    expect(ORDER_LINE_PRICE_ROLES).not.toBe(PRICE_MUTATION_ROLES)
+  })
+
+  it("is enforced by both routes that accept a line price", () => {
+    const create = source("app/api/v1/orders/route.ts")
+    expect(create).toContain("const linePriceFailure = orderLinePriceFailure(role, parsed.data.items)")
+    expect(create).toContain("const parsedBody = parseOrderCreateBody(await req.json().catch(() => null), role)")
+    const deskEdit = source("app/api/v1/order-desk/orders/[id]/route.ts")
+    expect(deskEdit).toContain('requireApiRole(["ORDER_DESK"])')
+    expect(deskEdit).toContain("const linePriceFailure = orderLinePriceFailure(user.role, parsed.data.items)")
+  })
+
+  it("is accepted by no other order write", () => {
+    // The requester edit and the group portal keep the strict lines that
+    // refuse the field outright.
+    const schemas = source("lib/server/mutation-validation.ts")
+    const pricedUses = schemas.match(/items: pricedOrderMutationItemsSchema/g) ?? []
+    expect(pricedUses).toHaveLength(2)
+    expect(schemas).toMatch(/export const orderCreateSchema = z\.object\(\{\s*items: pricedOrderMutationItemsSchema/)
+    expect(schemas).toMatch(/export const orderDeskEditSchema = z\.object\(\{\s*items: pricedOrderMutationItemsSchema/)
+  })
+
+  it("resolves the catalogue price through the ladder before the entered one is weighed", () => {
+    for (const path of ["app/api/v1/orders/route.ts", "lib/server/order-desk-edit.ts"]) {
+      const route = source(path)
+      expect(route).toMatch(/resolveOrderLinePrice\(\{\s*cataloguePriceCents: resolveEffectivePriceCents\(\{/)
+    }
   })
 })
 

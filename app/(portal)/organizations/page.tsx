@@ -1,5 +1,6 @@
 "use client"
 import { BranchHeadCountField, headCountFieldValue } from "@/components/branches/branch-head-count-field"
+import { BranchContactPhoneField, contactPhoneFieldValue } from "@/components/branches/branch-contact-phone-field"
 import { BranchRegionSelect } from "@/components/branches/branch-region-select"
 import { BranchHierarchyBadge } from "@/components/branches/branch-hierarchy-badge"
 import { BranchHierarchyField } from "@/components/branches/branch-hierarchy-field"
@@ -15,6 +16,7 @@ import {
   type BranchHierarchyFilter,
 } from "@/lib/branch-hierarchy"
 import { parseHeadCountInput } from "@/lib/branch-head-count"
+import { parseContactPhoneInput } from "@/lib/branch-contact-phone"
 import type { BranchRegion } from "@/lib/branch-region"
 import { useAppContext } from "@/components/context/app-context"
 import { BranchExcelExportButton } from "@/components/organizations/branch-excel-export-button"
@@ -310,6 +312,7 @@ type Branch = {
   address?: string | null
   costCenterId?: string | null
   headCount?: number | null
+  contactPhone?: string | null
   status?: "active" | "inactive"
   hierarchyRole?: string | null
   parentBranchId?: number | null
@@ -1723,13 +1726,16 @@ function CreateBranchDialog({
   const [address, setAddress] = useState("")
   const [costCenterId, setCostCenterId] = useState("")
   const [headCountText, setHeadCountText] = useState("")
+  const [contactPhoneText, setContactPhoneText] = useState("")
   const [hierarchy, setHierarchy] = useState<BranchHierarchy>({ hierarchyRole: DEFAULT_BRANCH_HIERARCHY_ROLE, parentBranchId: null })
   const [status, setStatus] = useState<boolean>(true)
   const [saving, setSaving] = useState(false)
   const headCount = parseHeadCountInput(headCountText)
+  const contactPhone = parseContactPhoneInput(contactPhoneText)
   const parentOptions = useMemo(() => parentBranchOptions(branches, orgId ? Number(orgId) : null), [branches, orgId])
   const canSubmit = Boolean(
     headCount !== undefined &&
+    contactPhone !== undefined &&
     branchHierarchyInputError(hierarchy) === null &&
     orgId &&
     name.trim() &&
@@ -1748,6 +1754,7 @@ function CreateBranchDialog({
       address: address.trim(),
       costCenterId: costCenterId.trim() || null,
       headCount: headCount ?? null,
+      contactPhone: contactPhone ?? null,
       hierarchyRole: hierarchy.hierarchyRole,
       parentBranchId: hierarchy.parentBranchId,
       status: status ? "active" : "inactive",
@@ -1774,6 +1781,7 @@ function CreateBranchDialog({
       setAddress("")
       setCostCenterId("")
       setHeadCountText("")
+      setContactPhoneText("")
       setHierarchy({ hierarchyRole: DEFAULT_BRANCH_HIERARCHY_ROLE, parentBranchId: null })
       setStatus(true)
       setOrgId(undefined)
@@ -1887,6 +1895,12 @@ function CreateBranchDialog({
                     maxLength={128}
                   />
                 </div>
+                <BranchContactPhoneField
+                  id="branch-contact-phone"
+                  value={contactPhoneText}
+                  onChange={setContactPhoneText}
+                  disabled={saving}
+                />
                 <BranchHeadCountField
                   id="branch-head-count"
                   value={headCountText}
@@ -2483,9 +2497,11 @@ function EditBranchDialog({
   const [address, setAddress] = useState(branch.address ?? "")
   const [costCenterId, setCostCenterId] = useState(branch.costCenterId ?? "")
   const [headCountText, setHeadCountText] = useState(headCountFieldValue(branch.headCount))
+  const [contactPhoneText, setContactPhoneText] = useState(contactPhoneFieldValue(branch.contactPhone))
   const [hierarchy, setHierarchy] = useState<BranchHierarchy>(hierarchyOf(branch))
   const [status, setStatus] = useState<boolean>(isActiveStatus(branch.status))
   const headCount = parseHeadCountInput(headCountText)
+  const contactPhone = parseContactPhoneInput(contactPhoneText)
 
   useEffect(() => {
     setHierarchy({
@@ -2503,8 +2519,9 @@ function EditBranchDialog({
     setAddress(branch.address ?? "")
     setCostCenterId(branch.costCenterId ?? "")
     setHeadCountText(headCountFieldValue(branch.headCount))
+    setContactPhoneText(contactPhoneFieldValue(branch.contactPhone))
     setStatus(isActiveStatus(branch.status))
-  }, [branch.name, branch.code, branch.province, branch.city, branch.region, branch.address, branch.costCenterId, branch.headCount, branch.status])
+  }, [branch.name, branch.code, branch.province, branch.city, branch.region, branch.address, branch.costCenterId, branch.headCount, branch.contactPhone, branch.status])
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -2571,6 +2588,11 @@ function EditBranchDialog({
                 maxLength={128}
               />
             </div>
+            <BranchContactPhoneField
+              id="branch-contact-phone-edit"
+              value={contactPhoneText}
+              onChange={setContactPhoneText}
+            />
             <BranchHeadCountField
               id="branch-head-count-edit"
               value={headCountText}
@@ -2611,13 +2633,14 @@ function EditBranchDialog({
                 address: address.trim() || null,
                 costCenterId: costCenterId.trim() || null,
                 headCount: headCount ?? null,
+                contactPhone: contactPhone ?? null,
                 hierarchyRole: hierarchy.hierarchyRole,
                 parentBranchId: hierarchy.parentBranchId,
                 status: status ? "active" : "inactive",
               })
               setOpen(false)
             }}
-            disabled={!name.trim() || headCount === undefined || branchHierarchyInputError(hierarchy) !== null}
+            disabled={!name.trim() || headCount === undefined || contactPhone === undefined || branchHierarchyInputError(hierarchy) !== null}
           >
             <Save className="h-4 w-4" />
             Save Changes

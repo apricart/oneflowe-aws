@@ -68,7 +68,7 @@ import type { ApprovalLevelBand } from "@/lib/order-approval-levels"
  */
 type JoinFormKind = "standard" | "department"
 
-type ResolvedOptions = JoinFormOptions & { form: JoinFormKind; approvalLevels: ApprovalLevelBand[] }
+type ResolvedOptions = JoinFormOptions & { form: JoinFormKind; approvalLevels: ApprovalLevelBand[]; parentBranchIds: number[] }
 
 type Step =
   | { kind: "code" }
@@ -81,6 +81,8 @@ type JoinLookupResult = Omit<JoinFormOptions, "emailDomain"> & {
   emailDomain: string | null
   form?: JoinFormKind
   approvalLevels?: ApprovalLevelBand[]
+  /** Which listed branches are parents (department sign-up only). */
+  parentBranchIds?: number[]
 }
 
 function PageShell({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -188,6 +190,7 @@ function CodeStep({ onResolved }: Readonly<{ onResolved: (code: string, options:
         emailDomain: result.emailDomain,
         form: result.form === "department" ? "department" : "standard",
         approvalLevels: Array.isArray(result.approvalLevels) ? result.approvalLevels : [],
+        parentBranchIds: Array.isArray(result.parentBranchIds) ? result.parentBranchIds : [],
       })
     } catch (caughtError: any) {
       setFailure(caughtError?.message || "We could not check that code. Please try again.")
