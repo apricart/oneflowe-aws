@@ -53,6 +53,7 @@ import {
   HEAD_COUNT_REQUESTS_AREA,
   HEAD_COUNT_REQUEST_READ_ROLES,
 } from "@/lib/branch-head-count-access"
+import { ORDERING_BLOCKS_AREA, ORDERING_BLOCKS_PAGE_ROLES } from "@/lib/ordering-blocks-access"
 
 const protectedPrefixes = [
   // The activity log was gated in ROLE_GATED_AREAS but missing here, so the
@@ -82,6 +83,8 @@ const protectedPrefixes = [
   "/invoices",
   "/join-requests",
   "/order-desk",
+  // Head Office's unpaid-invoice ordering blocks; gated in ROLE_GATED_AREAS.
+  ORDERING_BLOCKS_AREA,
   "/orders",
   "/organizations",
   "/products",
@@ -504,6 +507,10 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   // decides (lib/branch-head-count-access.ts). Both handlers re-check.
   // VIEWER: an organization-wide one reads the queue as Head Office does.
   { prefix: HEAD_COUNT_REQUESTS_AREA, roles: [...HEAD_COUNT_REQUEST_READ_ROLES, "VIEWER"], home: "/dashboard" },
+  // Head Office lets a branch blocked by unpaid invoices keep ordering. No
+  // Viewer: the page exists to grant and revoke. The list, grant and revoke
+  // handlers re-check.
+  { prefix: ORDERING_BLOCKS_AREA, roles: ORDERING_BLOCKS_PAGE_ROLES, home: "/dashboard" },
   // Creating desk users and granting their reach is Super Admin's alone.
   { prefix: DESK_TEAM_AREA, roles: ORDER_DESK_MANAGER_ROLES, home: "/dashboard" },
   // The desk's own workspace; no other role has a reason to render it.

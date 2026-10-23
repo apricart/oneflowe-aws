@@ -110,6 +110,7 @@ describe("the API allowlist", () => {
     ["GET", "/api/v1/orders/42/refunds"],
     ["GET", "/api/v1/orders/42/delivery-challan"],
     ["GET", "/api/v1/orders/42/delivery-challan/7/file"],
+    ["GET", "/api/v1/orders/42/intake-screenshot"],
     ["GET", "/api/v1/analytics/earliest-record"],
   ])("admits %s %s", (method, path) => {
     expect(isApricartSupportApiRequestAllowed(method, path)).toBe(true)
@@ -139,6 +140,8 @@ describe("the API allowlist", () => {
     ["POST", "/api/v1/orders/42/send-token-email"],
     ["POST", "/api/v1/orders/42/refunds"],
     ["POST", "/api/v1/orders/42/delivery-challan"],
+    ["POST", "/api/v1/orders/42/intake-screenshot"],
+    ["GET", "/api/v1/order-desk/orders/42/attachment"],
     ["GET", "/api/v1/orders/not-a-number"],
     ["GET", "/api/v1/receipts/42/download"],
     ["GET", "/api/v1/organizations"],

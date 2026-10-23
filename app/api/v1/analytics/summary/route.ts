@@ -99,15 +99,21 @@ function addSummarySearchCondition(conditions: any[], search: string | null) {
     if (normalized.length > 100) return "Search query must be at most 100 characters"
     const escaped = normalized.replace(/[\\%_]/g, String.raw`\$&`)
     const pattern = `%${escaped}%`
-    conditions.push(or(
+    const searchConditions: SQL[] = [
         ilike(orders.tid, pattern),
+        sql`${orders.receiptData} ->> 'invoiceNumber' ILIKE ${pattern}`,
         sql`CAST(${orders.createdByUserId} AS text) ILIKE ${pattern}`,
         sql`EXISTS (
             SELECT 1 FROM ${users} AS report_users
             WHERE report_users.id = ${orders.createdByUserId}
             AND (report_users.full_name ILIKE ${pattern} OR report_users.employee_id ILIKE ${pattern})
         )`,
-    ))
+    ]
+    const numericOrderId = Number(normalized)
+    if (/^\d+$/.test(normalized) && Number.isSafeInteger(numericOrderId)) {
+        searchConditions.push(eq(orders.id, numericOrderId))
+    }
+    conditions.push(or(...searchConditions))
     return null
 }
 

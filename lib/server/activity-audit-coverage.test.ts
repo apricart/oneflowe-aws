@@ -246,6 +246,8 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/apricart-warehouses/[id]/route.ts", module: "lib/server/apricart-warehouses.ts" },
   { file: "app/api/v1/apricart-warehouses/[id]/members/route.ts", module: "lib/server/apricart-warehouses.ts" },
   { file: "app/api/v1/apricart-warehouses/[id]/branches/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  // Moving one order to another warehouse records inside the move.
+  { file: "app/api/v1/orders/[id]/fulfillment-warehouse/route.ts", module: "lib/server/order-warehouse-transfer.ts" },
 ]
 
 /**

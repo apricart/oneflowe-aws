@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 
 import { describe, expect, it } from "vitest"
 
-import type { WarehouseOrderEvent } from "@/lib/warehouse-order-notifications"
+import { RECURRING_WAREHOUSE_ORDER_EVENTS, type WarehouseOrderEvent } from "@/lib/warehouse-order-notifications"
 
 /**
  * Every path that moves an order through a stage the warehouse is told about
@@ -30,6 +30,7 @@ const HOOKS: ReadonlyArray<{ path: string; events: WarehouseOrderEvent[] }> = [
   { path: "app/api/v1/admin/refunds/route.ts", events: ["REFUNDED"] },
   { path: "lib/server/order-fulfillment.ts", events: ["FULFILLED"] },
   { path: "app/api/v1/orders/cron/auto-fulfill/route.ts", events: ["FULFILLED"] },
+  { path: "lib/server/order-warehouse-transfer.ts", events: ["TRANSFERRED_OUT", "TRANSFERRED_IN"] },
 ]
 
 describe("warehouse notifications are queued on every order path", () => {
@@ -44,14 +45,14 @@ describe("warehouse notifications are queued on every order path", () => {
   it("covers every event at least once", () => {
     const covered = new Set(HOOKS.flatMap((hook) => hook.events))
     expect([...covered].sort()).toEqual(
-      ["APPROVED", "CANCELLED", "CREATED", "EDITED", "FULFILLED", "REFUNDED", "REJECTED", "RESUBMITTED", "RETURNED"],
+      ["APPROVED", "CANCELLED", "CREATED", "EDITED", "FULFILLED", "REFUNDED", "REJECTED", "RESUBMITTED", "RETURNED", "TRANSFERRED_IN", "TRANSFERRED_OUT"],
     )
   })
 
   it("names the occurrence of every recurring event, so a second one is not swallowed", () => {
     for (const { path, events } of HOOKS) {
       const source = read(path)
-      for (const event of events.filter((name) => ["EDITED", "RETURNED", "RESUBMITTED", "REFUNDED"].includes(name))) {
+      for (const event of events.filter((name) => RECURRING_WAREHOUSE_ORDER_EVENTS.includes(name))) {
         expect(source, `${path} ${event}`).toMatch(new RegExp(`event: "${event}",?\\s*occurrence:`))
       }
     }
@@ -83,14 +84,22 @@ describe("delivery and reading", () => {
     const dispatcher = read("lib/server/order-notifications.ts")
     expect(dispatcher).toContain("if (isWarehouseEmailTemplate(row.template)) return deliverClaimedWarehouseEmail(row)")
     const deliverer = read("lib/server/warehouse-order-notifications.ts")
-    expect(deliverer).toMatch(/loadWarehouseReach\(db, row\.recipientUserId, \{ branchId: row\.branchId \}\)/)
+    // Order by order, so a transferred order is judged by its warehouse, not its branch.
+    expect(deliverer).toContain("isOrderInWarehouseReach(row.recipientUserId, row.orderId)")
+  })
+
+  it("tells the operators of a transferred order's warehouse, not the branch's accounts", () => {
+    const source = read("lib/server/warehouse-order-notifications.ts")
+    expect(source).toContain("if (fulfillmentWarehouseId !== null) {")
+    expect(source).toContain('eq(apricartWarehouseMemberships.responsibility, "WAREHOUSE_OPERATOR")')
   })
 
   it("lists notices through the warehouse's own endpoint, fenced to the current reach", () => {
     const route = read("app/api/v1/warehouse/notifications/route.ts")
     expect(route).toContain('requireApiRole(["WAREHOUSE"])')
-    expect(route).toContain("loadWarehouseReach(db, user.id)")
-    expect(route).toContain("inArray(notifications.branchId, reach)")
+    expect(route).toContain("loadWarehouseOrderReach(db, user.id)")
+    expect(route).toContain("inArray(notifications.branchId, [...reach.branchIds])")
+    expect(route).toContain("inArray(orders.fulfillmentWarehouseId, [...reach.warehouseIds])")
     expect(route).toContain("eq(notifications.userId, userId)")
     // The shared notification route still knows nothing of the role.
     expect(read("app/api/v1/notifications/route.ts")).not.toContain("WAREHOUSE")

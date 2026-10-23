@@ -133,6 +133,11 @@ asserts the reach of every account is the same after configuration as before.
 
 ### Phase 2 — ownership (not built; needs decisions 1–3)
 
+*Still not built as described here.* Phase 3 below was built first, in a form
+that needs none of decisions 1–3 (2026-10-23). Phase 2 — stamping every new
+order from its branch's route and switching reads to membership — remains the
+later, separate step, and still needs the decisions.
+
 * Migration: `orders.fulfillment_warehouse_id` (nullable, FK, no cascade,
   partial index on `(fulfillment_warehouse_id, status)`), written only when set
   so every other INSERT is unchanged, and read defensively in
@@ -147,7 +152,67 @@ asserts the reach of every account is the same after configuration as before.
   catalogue stay on branch reach.
 * Executive decision authority per decision 2.
 
-### Phase 3 — transfer (not built)
+### Phase 3 — transfer (built 2026-10-23, without phase 2)
+
+The requirement is to move **one order**, never a branch: an order meant for
+Karachi is delivered from Lahore, and every other order at that branch stays
+where it is. That needs ownership only on the orders that are moved, so phase
+3 was built on its own, as an override that changes nothing for any order
+nobody transfers:
+
+* `orders.fulfillment_warehouse_id` (nullable, FK, partial index on
+  `(fulfillment_warehouse_id, status)`) — **null on every order until Super
+  Admin transfers it**, and null means "worked by whoever serves its branch",
+  exactly as before. Nothing stamps it at creation; routes stay configuration.
+* The one rule, `isOrderInWarehouseOrderReach` (`lib/order-warehouse-transfer.ts`):
+  a transferred order is the work of its warehouse's **active operator
+  members** only; any other order is the work of the branch reach. Its SQL
+  form is `warehouseOrderReachCondition` (`lib/server/warehouse-order-reach.ts`),
+  and the per-account input is `loadWarehouseOrderReach` (branch reach +
+  `loadWarehouseMemberships`). Every order-specific warehouse read and write
+  (finding 2) goes through it: queue, picking sheet, invoice, challans, intake
+  screenshot, upload, progress, challan-add, workload, timeline, notice
+  recipients, the send-time re-check and the notice list. Support and the
+  catalogue fence stay on branch reach (finding 3).
+* `transferOrderWarehouse` (`lib/server/order-warehouse-transfer.ts`), behind
+  `GET`/`POST /api/v1/orders/[id]/fulfillment-warehouse`, Super Admin only.
+  Body `{ targetWarehouseId | null, expectedWarehouseId | null, reason }`
+  (strict). Null hands the order back to the branch's accounts. Order `FOR
+  UPDATE`; target warehouse `FOR SHARE`, must be `ACTIVE` with at least one
+  active operator (409); handing back needs an account serving the branch
+  (409). Allowed while `PENDING`, or `APPROVED` at `NOT_STARTED`/`IN_PROCESS`
+  (`orderWarehouseTransferRefusal`); never once out for delivery or terminal.
+  `expectedWarehouseId` must match the row (409 stale). Status, stage,
+  `approved_at`, invoice, budget and `updated_at` are untouched — the last so
+  an executive approving a pending desk order (`expectedUpdatedAt`) is not
+  refused by a transfer that changed nothing it approved.
+* In the same transaction: an `order_warehouse_transfers` row, the
+  `ORDER_WAREHOUSE_TRANSFERRED` audit row (from/to, reason, TID), and notices
+  `WAREHOUSE_ORDER_TRANSFERRED_OUT` to the accounts that lost the order and
+  `WAREHOUSE_ORDER_TRANSFERRED_IN` to the ones that gained it (anyone in both
+  is told nothing). Both are recurring, keyed on the transfer id.
+* Races: every warehouse write guard (`isOrderInWarehouseReach`, `lock`) takes
+  the order row `FOR UPDATE` and the reach rows `FOR SHARE`, so a stage move
+  and a transfer of one order have one winner. Removing a warehouse's last
+  active operator, or deactivating it, is refused (409) while it holds an open
+  (pending or approved) transferred order; both take the warehouse `FOR
+  UPDATE`, which a transfer onto it waits on.
+* Decision 2 is not needed: executives are not involved, and who approves a
+  desk order is unchanged. Decision 1 is not needed: only transferred orders
+  read membership, and only the target's. Decision 3 is not needed: an order
+  with no warehouse is read by branch reach.
+* UI: a "Fulfilment warehouse" card on Super Admin's order page
+  (`components/orders/order-warehouse-panel.tsx`) shows the current warehouse
+  or "served by the branch's warehouse accounts", the branch's default route
+  for information, who works it now, the transfer history, and a Transfer
+  dialog. The warehouse's picking sheet says when an order was transferred to it.
+* Migration `20261101120000_order_warehouse_transfers` (FK added `NOT VALID`,
+  then validated). Tests: `lib/order-warehouse-transfer.test.ts`,
+  `tests/integration/order-warehouse-transfer.test.ts` (role matrix, refusals,
+  both sides' queues/sheets/progress/workload, notices, strand guards,
+  hand-back); the warehouse isolation and write sweeps call the new handlers.
+
+Originally planned as:
 
 `transferOrderWarehouse`: order `FOR UPDATE`, actor and memberships re-read,
 `{ targetWarehouseId, reason, expectedWarehouseId, expectedUpdatedAt }`
@@ -181,6 +246,12 @@ executive transfer after decision 2.
 2. Super Admin creates warehouses, adds members, and routes branches, working
    from the coverage report until nothing is `AMBIGUOUS` or `UNMAPPED`.
 3. Business decisions 1–3, then phase 2.
+
+Phase 3 rollout: apply `20261101120000` (`npm run db:migrate:prod`), then
+deploy. Add at least one active operator to a warehouse before moving orders
+onto it. Rollback: transfer every open order back (`targetWarehouseId: null`),
+redeploy the previous code, then drop `order_warehouse_transfers` and
+`orders.fulfillment_warehouse_id` (statements in the migration header).
 
 Rollback: hide the section by redeploying the previous code; then
 `DROP TABLE branch_fulfillment_routes, apricart_warehouse_memberships,

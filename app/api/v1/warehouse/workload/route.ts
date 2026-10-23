@@ -7,7 +7,7 @@ import { parseDeliveryDashboardQuery } from "@/lib/delivery-dashboard"
 import { handleError } from "@/lib/error-handler"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { loadDeliveryDashboard } from "@/lib/server/delivery-dashboard"
-import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
+import { loadWarehouseOrderReach } from "@/lib/server/warehouse-scope"
 
 export const dynamic = "force-dynamic"
 
@@ -31,7 +31,7 @@ export async function GET(req: Request) {
     const parsed = parseDeliveryDashboardQuery(new URL(req.url).searchParams, now)
     if (!parsed.ok) return error(parsed.message, 400)
 
-    const reach = await loadWarehouseReach(db, user.id)
+    const reach = await loadWarehouseOrderReach(db, user.id)
     const dashboard = await loadDeliveryDashboard(parsed.filters, now, reach, "newest")
     return NextResponse.json(dashboard, { headers: { "Cache-Control": "private, no-store" } })
   } catch (caught) {

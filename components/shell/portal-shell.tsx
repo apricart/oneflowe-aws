@@ -8,6 +8,7 @@ import { OrgBranchProvider } from "@/components/context/org-branch-context"
 import { Toaster } from "@/components/ui/toaster"
 import { SessionGuard } from "@/components/shell/session-guard"
 import { RoleRenameNotice } from "@/components/shell/role-rename-notice"
+import { UnpaidInvoiceAlerts } from "@/components/payment-control/unpaid-invoice-alerts"
 
 /**
  * The portal chrome — sidebar, topbar, and the providers the two depend on.
@@ -42,7 +43,10 @@ export function PortalShell({
             <Sidebar />
             <div className="min-w-0 flex-1 grid grid-rows-[auto_1fr] bg-background dark:bg-slate-950">
               <Topbar />
-              <main className="min-w-0 p-4 bg-background dark:bg-slate-950">{children}</main>
+              <main className="min-w-0 p-4 bg-background dark:bg-slate-950">
+                <UnpaidInvoiceAlerts />
+                {children}
+              </main>
             </div>
           </div>
           <Toaster />

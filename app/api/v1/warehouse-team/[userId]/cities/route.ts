@@ -5,8 +5,12 @@ import { readJson, requireApiRole } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { handleError } from "@/lib/error-handler"
 import { withRateLimit } from "@/lib/rate-limiter"
-import { validationMessage, warehouseCityAssignmentUpdateSchema } from "@/lib/server/mutation-validation"
-import { setWarehouseCity } from "@/lib/server/warehouse-team"
+import {
+  validationMessage,
+  warehouseCityAssignmentBulkUpdateSchema,
+  warehouseCityAssignmentUpdateSchema,
+} from "@/lib/server/mutation-validation"
+import { setWarehouseCities, setWarehouseCity } from "@/lib/server/warehouse-team"
 import { WAREHOUSE_CITY_MAX_PER_USER } from "@/lib/warehouse-access"
 
 /**
@@ -17,9 +21,24 @@ import { WAREHOUSE_CITY_MAX_PER_USER } from "@/lib/warehouse-access"
  * `lib/server/warehouse-team.ts`, inside the change. See
  * plans/OF-WAREHOUSE-city-assignments.md and
  * plans/OF-WAREHOUSE-city-assignments-by-organization.md.
+ *
+ * A body naming `cities` instead changes several at once, in one transaction —
+ * the dialog's "Assign all" / "Unassign all" (plans/OF-WAREHOUSE-city-bulk-select.md).
  */
 
 const userIdSchema = z.uuid()
+
+const isBulkBody = (body: unknown): boolean =>
+  typeof body === "object" && body !== null && "cities" in body
+
+function refusal(outcome: { kind: "not-found" } | { kind: "invalid"; message: string } | { kind: "limit" }): NextResponse {
+  if (outcome.kind === "not-found") return NextResponse.json({ error: "User not found" }, { status: 404 })
+  if (outcome.kind === "invalid") return NextResponse.json({ error: outcome.message }, { status: 400 })
+  return NextResponse.json(
+    { error: `A warehouse user can be assigned at most ${WAREHOUSE_CITY_MAX_PER_USER} cities` },
+    { status: 409 },
+  )
+}
 
 export async function PUT(req: Request, props: { params: Promise<{ userId: string }> }) {
   try {
@@ -36,7 +55,23 @@ export async function PUT(req: Request, props: { params: Promise<{ userId: strin
       return NextResponse.json({ error: "User not found" }, { status: 404 })
     }
 
-    const parsed = warehouseCityAssignmentUpdateSchema.safeParse(await readJson<unknown>(req))
+    const body = await readJson<unknown>(req)
+    if (isBulkBody(body)) {
+      const bulk = warehouseCityAssignmentBulkUpdateSchema.safeParse(body)
+      if (!bulk.success) return NextResponse.json({ error: validationMessage(bulk.error) }, { status: 400 })
+      const outcome = await setWarehouseCities({
+        userId,
+        cities: bulk.data.cities,
+        assigned: bulk.data.assigned,
+        actor: { id: user.id, role: user.role, email: user.email },
+      })
+      if (outcome.kind !== "updated") return refusal(outcome)
+      return NextResponse.json({
+        item: { userId, assigned: outcome.assigned, changedKeys: outcome.changed, cityKeys: outcome.after },
+      })
+    }
+
+    const parsed = warehouseCityAssignmentUpdateSchema.safeParse(body)
     if (!parsed.success) return NextResponse.json({ error: validationMessage(parsed.error) }, { status: 400 })
 
     const outcome = await setWarehouseCity({
@@ -46,14 +81,7 @@ export async function PUT(req: Request, props: { params: Promise<{ userId: strin
       actor: { id: user.id, role: user.role, email: user.email },
     })
 
-    if (outcome.kind === "not-found") return NextResponse.json({ error: "User not found" }, { status: 404 })
-    if (outcome.kind === "invalid") return NextResponse.json({ error: outcome.message }, { status: 400 })
-    if (outcome.kind === "limit") {
-      return NextResponse.json(
-        { error: `A warehouse user can be assigned at most ${WAREHOUSE_CITY_MAX_PER_USER} cities` },
-        { status: 409 },
-      )
-    }
+    if (outcome.kind !== "updated") return refusal(outcome)
     return NextResponse.json({
       item: { userId, city: outcome.city, assigned: outcome.assigned, branchCount: outcome.branchCount },
     })

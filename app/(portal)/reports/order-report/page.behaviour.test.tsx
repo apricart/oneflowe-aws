@@ -125,8 +125,8 @@ describe("Order Report", () => {
     fireEvent.click(screen.getAllByText("Pending Approval").find((node) => node.tagName === "BUTTON")!)
     await waitFor(() => expect(callsTo("/api/v1/analytics/summary").some((call) => call.url.includes("status=pending"))).toBe(true))
 
-    fireEvent.change(screen.getByPlaceholderText("Search Transaction..."), { target: { value: "TID-0002" } })
-    await waitFor(() => expect(callsTo("/api/v1/analytics/summary").some((call) => call.url.includes("q=TID-0002"))).toBe(true), { timeout: 3000 })
+    fireEvent.change(screen.getByPlaceholderText("Search by transaction ID, invoice number, or order ID..."), { target: { value: "INV-0002" } })
+    await waitFor(() => expect(callsTo("/api/v1/analytics/summary").some((call) => call.url.includes("q=INV-0002"))).toBe(true), { timeout: 3000 })
   })
 
   it("exports every page of the filtered orders, not only the visible one", async () => {

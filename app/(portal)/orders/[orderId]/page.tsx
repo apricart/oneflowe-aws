@@ -7,6 +7,9 @@ import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useState } from "react"
 import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
+import { OrderIntakeScreenshot } from "@/components/orders/order-intake-screenshot"
+import { OrderWarehousePanel } from "@/components/orders/order-warehouse-panel"
+import { canTransferOrderWarehouse } from "@/lib/order-warehouse-transfer"
 import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -24,7 +27,7 @@ import { calculateLineCents,formatQuantity } from "@/lib/quantity"
 import { buildStatusTimeline } from "@/lib/order-utils"
 import { getOrderDerivedStatus,hasPartialRefund } from "@/lib/order-status"
 import { PAYMENT_STATUS_LABELS,normalizePaymentStatus } from "@/lib/payment-status"
-import { ArrowLeft,Clock,CheckCircle,CornerUpLeft,RefreshCw,Package,Ban,Copy,User,XCircle } from "lucide-react"
+import { ArrowLeft,Clock,CheckCircle,CornerUpLeft,RefreshCw,Package,Ban,Copy,User,XCircle,ImageIcon } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { RefundManagement } from "@/components/refund-management"
 import {
@@ -89,6 +92,8 @@ type OrderDetail = {
   pricesHidden?: boolean
   /** Entered by Apricart's Order Desk: an Apricart Executive decides it. */
   decidedByApricart?: boolean
+  /** The Order Desk attached the customer's screenshot to this order. */
+  hasIntakeScreenshot?: boolean
   /** plans/OF-APPROVAL-LEVELS-route-orders-by-level.md */
   approvalLevel?: number | null
   levelDecisionLocked?: boolean
@@ -346,6 +351,21 @@ export default function SuperAdminOrderDetailsPage() {
       {order && <OrderCorrectionState order={order} />}
       {order && normalizeFulfillmentStatus(order.fulfillmentStatus) === "DELIVERED" && (
         <DeliveryChallanPanel orderId={order.id} orderTid={order.tid} canReplace={isSuperAdmin} />
+      )}
+      {order && canTransferOrderWarehouse(userRole) && <OrderWarehousePanel orderId={order.id} />}
+      {order?.hasIntakeScreenshot === true && (
+        <Card className="space-y-3 rounded-2xl border-0 bg-white p-4 shadow-md dark:border-slate-800 dark:bg-slate-900">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+              <ImageIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              Customer&apos;s order screenshot
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Attached by Apricart&apos;s Order Desk when it entered this order from the customer&apos;s message.
+            </p>
+          </div>
+          <OrderIntakeScreenshot src={`/api/v1/orders/${order.id}/intake-screenshot`} orderTid={order.tid} className="max-w-xl" />
+        </Card>
       )}
 
       {order && (

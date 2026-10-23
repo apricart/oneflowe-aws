@@ -75,6 +75,21 @@ afterEach(() => {
 })
 
 describe("the warehouse picking sheet", () => {
+  it("shows the customer's screenshot on an Order Desk order, from its own route", () => {
+    swr.sheet = sheet({ hasIntakeScreenshot: true })
+    render(<WarehouseOrderSheet orderId={7} onClose={() => {}} onChanged={() => {}} />)
+    expect(screen.getByText("Customer's order screenshot")).toBeTruthy()
+    const image = screen.getByRole("img", { name: /customer's message for order T-777/ })
+    expect(image.getAttribute("src")).toBe("/api/v1/warehouse/orders/7/intake-screenshot")
+  })
+
+  it("shows no screenshot section on any other order", () => {
+    swr.sheet = sheet()
+    render(<WarehouseOrderSheet orderId={7} onClose={() => {}} onChanged={() => {}} />)
+    expect(screen.queryByText("Customer's order screenshot")).toBeNull()
+    expect(screen.queryByRole("img")).toBeNull()
+  })
+
   it("shows the picking lines, the destination, the notes and the invoice figures", () => {
     swr.sheet = sheet()
     render(<WarehouseOrderSheet orderId={7} onClose={() => {}} onChanged={() => {}} />)

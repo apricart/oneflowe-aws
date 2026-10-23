@@ -7,7 +7,7 @@ import { handleError } from "@/lib/error-handler"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { addDeliveryChallanToDeliveredOrder, listDeliveryChallans } from "@/lib/server/delivery-challan"
 import { validationMessage, warehouseChallanAttachSchema } from "@/lib/server/mutation-validation"
-import { isOrderBranchInWarehouseReach, loadWarehouseOrderInReach } from "@/lib/server/warehouse-scope"
+import { isOrderInWarehouseReach, loadWarehouseOrderInReach } from "@/lib/server/warehouse-scope"
 import { parseRouteId } from "@/lib/warehouse-orders"
 
 export const dynamic = "force-dynamic"
@@ -65,7 +65,7 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
       orderId,
       challanId: parsed.data.deliveryChallanId,
       actor: { id: user.id, role: user.role, email: user.email },
-      guardInTransaction: (tx, order) => isOrderBranchInWarehouseReach(user.id, order, { client: tx, lock: true }),
+      guardInTransaction: (tx) => isOrderInWarehouseReach(user.id, orderId, { client: tx, lock: true }),
     })
 
     switch (outcome.kind) {

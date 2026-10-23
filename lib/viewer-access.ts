@@ -229,6 +229,7 @@ export const VIEWER_ORGANIZATION_READ_ROUTES: readonly string[] = [
   "app/api/v1/orders/[id]/refunds/route.ts",
   "app/api/v1/orders/[id]/delivery-challan/route.ts",
   "app/api/v1/orders/[id]/delivery-challan/[challanId]/file/route.ts",
+  "app/api/v1/orders/[id]/intake-screenshot/route.ts",
   "app/api/v1/receipts/[orderId]/route.ts",
   "app/api/v1/receipts/[orderId]/download/route.ts",
   "app/api/v1/receipts/[orderId]/credit-notes/[creditNoteId]/download/route.ts",

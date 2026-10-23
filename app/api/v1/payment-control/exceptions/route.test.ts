@@ -197,6 +197,16 @@ describe("POST /api/v1/payment-control/exceptions — grant", () => {
     expect((await POST(post({ branchId: 99 }))).status).toBe(404)
   })
 
+  it("an organization that does not block ordering on unpaid invoices is a 409 and nothing is granted", async () => {
+    mocks.grantPaymentControlException.mockResolvedValue({ kind: "block_disabled" })
+    const response = await POST(post({ branchId: 5 }))
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: "This organization does not block ordering on unpaid invoices, so there is nothing to make an exception to",
+    })
+    expect(mocks.resolveBranchPaymentControl).not.toHaveBeenCalled()
+  })
+
   it("a second live exception is a 409 that shows the one in force", async () => {
     mocks.grantPaymentControlException.mockResolvedValue({ kind: "conflict", exception: exceptionRecord() })
     const response = await POST(post({ branchId: 5 }))

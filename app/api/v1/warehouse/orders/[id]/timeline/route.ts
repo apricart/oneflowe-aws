@@ -6,7 +6,7 @@ import { db } from "@/lib/db"
 import { handleError } from "@/lib/error-handler"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { loadDeliveryTimeline } from "@/lib/server/delivery-dashboard"
-import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
+import { loadWarehouseOrderReach } from "@/lib/server/warehouse-scope"
 import { parseRouteId } from "@/lib/warehouse-orders"
 
 export const dynamic = "force-dynamic"
@@ -29,7 +29,7 @@ export async function GET(_req: Request, props: { params: Promise<{ id: string }
     const rateLimited = await withRateLimit("search", user.id)
     if (rateLimited) return rateLimited
 
-    const reach = await loadWarehouseReach(db, user.id)
+    const reach = await loadWarehouseOrderReach(db, user.id)
     const timeline = await loadDeliveryTimeline(orderId, new Date(), reach)
     if (!timeline) return error("Order not found", 404)
     return NextResponse.json(timeline, { headers: { "Cache-Control": "private, no-store" } })

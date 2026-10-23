@@ -78,6 +78,13 @@ export const WAREHOUSE_CITY_MAX_PER_USER = 200
 export const WAREHOUSE_CITY_MAX_LENGTH = 100
 
 /**
+ * Most cities one bulk request may name. Fifty of the longest cities is about
+ * 5.3 KB of JSON, under the production WAF's 8 KB body limit; the dialog sends
+ * a longer list in batches of this size. See plans/OF-WAREHOUSE-city-bulk-select.md.
+ */
+export const WAREHOUSE_CITY_BULK_MAX = 50
+
+/**
  * Bounds on one replacement: one organization's branches at a time, so the
  * body stays far under the WAF's 8 KB limit however many branches a warehouse
  * serves overall.
@@ -140,6 +147,12 @@ export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
     route: `${ORDERS_ROUTE}/[id]/delivery-challan/[challanId]/file/route.ts`,
     methods: ["GET"],
     pattern: /^\/api\/v1\/warehouse\/orders\/\d+\/delivery-challan\/\d+\/file$/,
+  },
+  // The customer's screenshot on an Order Desk order it serves.
+  {
+    route: `${ORDERS_ROUTE}/[id]/intake-screenshot/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/orders\/\d+\/intake-screenshot$/,
   },
   { route: "app/api/v1/warehouse/workload/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/workload$/ },
   // The user's own order-stage notices and mark-all-read

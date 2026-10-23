@@ -682,7 +682,8 @@ function OrdersManagementContent() {
                 <div className="group relative w-full min-w-0 sm:w-[280px] sm:shrink-0">
                   <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-indigo-500" />
                   <Input
-                    placeholder="Search by transaction ID, order ID, or cost center..."
+                    placeholder="Search by transaction ID, invoice number, order ID, or cost center..."
+                    aria-label="Search orders by transaction ID, invoice number, order ID, or cost center"
                     className="pl-9 h-8 text-[11px] font-bold bg-white dark:bg-slate-900/50 border-slate-200 dark:border-slate-800 rounded-xl focus:ring-1 focus:ring-indigo-500/30 transition-all shadow-sm"
                     value={searchQuery}
                     onChange={(e) => {

@@ -544,7 +544,8 @@ function CoveragePanel({ configuration, team }: Readonly<{ configuration: Config
  * Super Admin's Apricart warehouses: the places orders will be fulfilled from,
  * who works at each, and the default warehouse of each branch — with the
  * coverage report that maps today's account-based reach onto them.
- * Configuration only. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ * Members who are operators fulfil the orders transferred to their warehouse;
+ * routes are configuration only. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
  */
 export function ApricartWarehousesCard() {
   const { data, error, isLoading, mutate } = useSWR<Configuration>(APRICART_WAREHOUSES_KEY, fetcher)
@@ -561,8 +562,9 @@ export function ApricartWarehousesCard() {
         <div className="space-y-1.5">
           <CardTitle className="text-base">Warehouses</CardTitle>
           <CardDescription>
-            Apricart&apos;s warehouses, who works at each, and the default warehouse of each branch. Recorded for the
-            move to orders owned by a warehouse — this does not yet change what any warehouse user or executive sees.
+            Apricart&apos;s warehouses, who works at each, and the default warehouse of each branch. A warehouse&apos;s
+            operators fulfil the orders Super Admin transfers to it from the order page; every other order is still
+            worked by the accounts serving its branch, and default warehouses do not move any order.
           </CardDescription>
         </div>
         <Button size="sm" onClick={() => setEditing("new")}>New warehouse</Button>
