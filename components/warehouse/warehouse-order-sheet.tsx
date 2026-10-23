@@ -3,9 +3,10 @@
 import { useRef, useState } from "react"
 import useSWR from "swr"
 import { format } from "date-fns"
-import { CheckCircle2, Clock, Download, FileText, Loader2, MapPin, Package, Receipt, StickyNote, Truck, Upload, X } from "lucide-react"
+import { CheckCircle2, Clock, Download, FileText, ImageIcon, Loader2, MapPin, Package, Receipt, StickyNote, Truck, Upload, X } from "lucide-react"
 
 import { uploadDeliveryChallan } from "@/components/orders/delivery-challan"
+import { OrderIntakeScreenshot } from "@/components/orders/order-intake-screenshot"
 import { healthStyle, paymentStyle } from "@/components/warehouse/delivery-health-styles"
 import { Button } from "@/components/ui/button"
 import {
@@ -49,6 +50,8 @@ export type WarehouseOrderSheetData = {
     health: string | null
     healthLabel: string | null
     promisedAt: string | null
+    /** An Order Desk order carrying the customer's screenshot. */
+    hasIntakeScreenshot?: boolean
   }
   destination: {
     label: string | null
@@ -476,6 +479,18 @@ export function WarehouseOrderSheet({
                     <p className="mt-0.5 whitespace-pre-wrap text-amber-900/90 dark:text-amber-100">{order.notes}</p>
                   </div>
                 </div>
+              )}
+
+              {order.hasIntakeScreenshot && (
+                <Section icon={ImageIcon} title="Customer's order screenshot">
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    Attached by Apricart&apos;s Order Desk when it entered this order from the customer&apos;s message.
+                  </p>
+                  <OrderIntakeScreenshot
+                    src={`/api/v1/warehouse/orders/${order.id}/intake-screenshot`}
+                    orderTid={order.tid}
+                  />
+                </Section>
               )}
 
               <Section

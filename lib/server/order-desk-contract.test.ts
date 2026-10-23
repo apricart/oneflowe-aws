@@ -175,6 +175,29 @@ describe("the customer's screenshot", () => {
     expect(helper).toContain("if (!isOrderIntakeAttachmentKey(key)) return NextResponse.json")
   })
 
+  it("is shown to whoever may read the order, under that reader's own rule, and only for a desk order", () => {
+    // The order readers through the order detail's rule; the warehouse through
+    // its branch reach and work status. Both read the key only after that
+    // check, only for an order the desk entered, and stream it through the
+    // same helper.
+    const readers = source("app/api/v1/orders/[id]/intake-screenshot/route.ts")
+    expect(readers).toContain("requireApiRole([...ORDER_DETAIL_READ_ROLES], { viewerReadsAsHeadOffice: true })")
+    expect(readers).toContain("if (!await canReadOrderDetail({ orderId, scope, viewerReadsAsHeadOffice: true })) return error(\"Not found\", 404)")
+    const warehouse = source("app/api/v1/warehouse/orders/[id]/intake-screenshot/route.ts")
+    expect(warehouse).toContain('requireApiRole(["WAREHOUSE"])')
+    expect(warehouse).toContain("if (!await loadWarehouseOrderInReach(db, user.id, orderId)) return error(\"Not found\", 404)")
+    for (const route of [readers, warehouse]) {
+      expect(route).toContain("intakeAttachmentResponse(await loadDeskOrderIntakeAttachmentKey(orderId))")
+      expect(route).not.toContain("getImage(")
+    }
+    const helper = source("lib/server/order-desk-attachments.ts")
+    expect(helper).toContain("eq(orders.createdByRole, ORDER_DESK_ROLE)")
+    // The payloads carry a flag, never the key.
+    expect(source("app/api/v1/orders/[id]/route.ts")).toContain("hasIntakeScreenshot: hasDeskIntakeScreenshot(item)")
+    expect(source("app/api/v1/orders/[id]/route.ts")).toContain("intakeAttachmentKey: _intakeAttachmentKey,")
+    expect(source("lib/server/warehouse-orders.ts")).toContain("hasIntakeScreenshot: hasDeskIntakeScreenshot(row)")
+  })
+
   it("is required, and bound to its uploader and to one order when the order is created", () => {
     const route = source("app/api/v1/orders/route.ts")
     // Checked on every desk order, never only when a key happens to be sent.

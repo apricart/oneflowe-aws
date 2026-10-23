@@ -123,6 +123,7 @@ import { orderUpdateSchema, validationMessage } from "@/lib/server/mutation-vali
 import { DELIVERY_ADDRESS_UNAVAILABLE } from "@/lib/delivery-address"
 import { loadApprovedDeliveryAddress } from "@/lib/server/delivery-addresses"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { hasDeskIntakeScreenshot } from "@/lib/order-desk-access"
 import { decisionCapabilitiesForOrder, isDeskEnteredOrder } from "@/lib/order-desk-approval"
 import { loadOrderCorrectionHistory } from "@/lib/server/order-correction"
 import {
@@ -664,6 +665,7 @@ export async function GET(
       // on which orders came from a Group Order Portal submission.
       groupOrderId: orders.groupOrderId,
       createdByRole: orders.createdByRole,
+      intakeAttachmentKey: orders.intakeAttachmentKey,
       branchName: branches.name,
       branchOrganizationId: branches.organizationId,
       creatorName: sql<string | null>`COALESCE(
@@ -722,6 +724,7 @@ export async function GET(
     branchOrganizationId: _branchOrganizationId,
     groupOrderId: _groupOrderId,
     createdByRole: _createdByRole,
+    intakeAttachmentKey: _intakeAttachmentKey,
     ...detailItem
   } = item
   // Same derived, read-only flag the list returns; the envelope id stays here.
@@ -734,6 +737,9 @@ export async function GET(
       ...detailItem,
       placedByGroupPortal: isGroupPortalOrder(item),
       decidedByApricart,
+      // Served by GET /api/v1/orders/{id}/intake-screenshot under this same
+      // read rule; the key itself stays server-side.
+      hasIntakeScreenshot: hasDeskIntakeScreenshot(item),
       // plans/OF-APPROVAL-LEVELS-route-orders-by-level.md, R10.
       ...levelledViewFlags(levelledView, item),
     },

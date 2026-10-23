@@ -13,6 +13,7 @@ import {
   orderDeskAccessChangeError,
   orderDeskRequiresExecutiveApproval,
   orderDeskUserShapeError,
+  hasDeskIntakeScreenshot,
   orderIntakeError,
   resolveDeskReach,
   type DeskReachInput,
@@ -232,6 +233,17 @@ describe("orders the desk enters", () => {
     expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "   ", intakeAttachmentKey: key })).toMatch(/intakeReference/)
     expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "subject" })).toMatch(/screenshot/)
     expect(orderIntakeError("ORDER_DESK", { intakeChannel: "EMAIL", intakeReference: "subject", intakeAttachmentKey: null })).toMatch(/screenshot/)
+  })
+
+  it("shows the screenshot to an order's readers only on a desk order holding a well-formed key", () => {
+    const key = "order-intake/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4.png"
+    expect(hasDeskIntakeScreenshot({ createdByRole: "ORDER_DESK", intakeAttachmentKey: key })).toBe(true)
+    expect(hasDeskIntakeScreenshot({ createdByRole: "ORDER_DESK", intakeAttachmentKey: null })).toBe(false)
+    expect(hasDeskIntakeScreenshot({ createdByRole: "ORDER_DESK" })).toBe(false)
+    expect(hasDeskIntakeScreenshot({ createdByRole: "ORDER_DESK", intakeAttachmentKey: "products/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4.png" })).toBe(false)
+    for (const createdByRole of ["ORDER_PORTAL", "HEAD_OFFICE", "SUPER_ADMIN", null, undefined]) {
+      expect(hasDeskIntakeScreenshot({ createdByRole, intakeAttachmentKey: key }), String(createdByRole)).toBe(false)
+    }
   })
 
   it("accepts a screenshot key only in the shape the upload route generates", () => {

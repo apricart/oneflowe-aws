@@ -14,6 +14,7 @@ import { db } from "@/lib/db"
 import { DELIVERY_HEALTH_LABELS, assessDelivery } from "@/lib/delivery-sla"
 import { FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { FULFILLED_ORDER_STATUSES } from "@/lib/order-delivery-status"
+import { hasDeskIntakeScreenshot } from "@/lib/order-desk-access"
 import { escapeLikePattern } from "@/lib/utils"
 import { lineAmountCents, parseRouteId, warehouseNextStage, type WarehouseOrderListQuery } from "@/lib/warehouse-orders"
 import { listDeliveryChallans } from "@/lib/server/delivery-challan"
@@ -334,6 +335,8 @@ export async function loadWarehouseOrder(userId: string, orderId: number, now: D
       deliveryAddressProvince: branchDeliveryAddresses.province,
       deliveryContactPerson: branchDeliveryAddresses.contactPerson,
       deliveryContactPhone: branchDeliveryAddresses.contactPhone,
+      createdByRole: orders.createdByRole,
+      intakeAttachmentKey: orders.intakeAttachmentKey,
     })
     .from(orders)
     .innerJoin(branches, eq(branches.id, orders.branchId))
@@ -365,6 +368,9 @@ export async function loadWarehouseOrder(userId: string, orderId: number, now: D
       approvedAt: row.approvedAt?.toISOString() ?? null,
       deliveredAt: row.deliveredAt?.toISOString() ?? null,
       fulfilledAt: row.fulfilledAt?.toISOString() ?? null,
+      // The customer's screenshot on an Order Desk order, served by
+      // GET /api/v1/warehouse/orders/{id}/intake-screenshot. Never the key.
+      hasIntakeScreenshot: hasDeskIntakeScreenshot(row),
       ...presentDelivery(row, now),
     },
     destination: {

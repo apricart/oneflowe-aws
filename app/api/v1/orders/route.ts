@@ -1464,6 +1464,9 @@ export async function GET(req: NextRequest) {
         )`,
         createdByUserId: orders.createdByUserId,
         createdByRole: orders.createdByRole,
+        // Whether the order detail can show the customer's screenshot; the
+        // key itself never leaves the server.
+        hasIntakeScreenshot: sql<boolean>`(${orders.createdByRole} = 'ORDER_DESK' AND ${orders.intakeAttachmentKey} IS NOT NULL)`,
         groupOrderId: orders.groupOrderId,
         approvedByUserId: orders.approvedByUserId,
         approvalToken: orders.approvalToken, // Will be filtered before return

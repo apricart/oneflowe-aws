@@ -141,6 +141,12 @@ export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
     methods: ["GET"],
     pattern: /^\/api\/v1\/warehouse\/orders\/\d+\/delivery-challan\/\d+\/file$/,
   },
+  // The customer's screenshot on an Order Desk order it serves.
+  {
+    route: `${ORDERS_ROUTE}/[id]/intake-screenshot/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/warehouse\/orders\/\d+\/intake-screenshot$/,
+  },
   { route: "app/api/v1/warehouse/workload/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/warehouse\/workload$/ },
   // The user's own order-stage notices and mark-all-read
   // (plans/OF-WAREHOUSE-order-stage-notifications.md). The shared
