@@ -3,7 +3,7 @@
 import { useRef, useState } from "react"
 import useSWR from "swr"
 import { format } from "date-fns"
-import { CheckCircle2, Clock, Download, FileText, ImageIcon, Loader2, MapPin, Package, Receipt, StickyNote, Truck, Upload, X } from "lucide-react"
+import { ArrowRightLeft, CheckCircle2, Clock, Download, FileText, ImageIcon, Loader2, MapPin, Package, Receipt, StickyNote, Truck, Upload, X } from "lucide-react"
 
 import { uploadDeliveryChallan } from "@/components/orders/delivery-challan"
 import { OrderIntakeScreenshot } from "@/components/orders/order-intake-screenshot"
@@ -52,6 +52,8 @@ export type WarehouseOrderSheetData = {
     promisedAt: string | null
     /** An Order Desk order carrying the customer's screenshot. */
     hasIntakeScreenshot?: boolean
+    /** Set when Super Admin transferred the order to a warehouse this user operates. */
+    transferredToWarehouse?: { code: string; name: string } | null
   }
   destination: {
     label: string | null
@@ -470,6 +472,15 @@ export function WarehouseOrderSheet({
                   <Fact label="Delivered on" value={when(order.deliveredAt)} />
                 </dl>
               </Section>
+
+              {order.transferredToWarehouse && (
+                <div className="flex gap-3 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm dark:border-indigo-900 dark:bg-indigo-950/40">
+                  <ArrowRightLeft className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" aria-hidden="true" />
+                  <p className="text-indigo-900 dark:text-indigo-100">
+                    Transferred to {order.transferredToWarehouse.code} — {order.transferredToWarehouse.name}. Your warehouse fulfils this order.
+                  </p>
+                </div>
+              )}
 
               {order.notes && (
                 <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/40">

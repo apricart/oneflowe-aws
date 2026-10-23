@@ -53,27 +53,53 @@ export type OverduePaymentSource = (
   now: Date,
 ) => Promise<OverduePaymentSummary>
 
-export const overduePaymentSource: OverduePaymentSource = async (client, scope) => {
+/**
+ * The organization's unpaid-invoice block, or null while it is switched off.
+ * The threshold is the one the gate applies, out-of-bounds falling back to
+ * the default.
+ */
+export async function loadUnpaidInvoiceBlockConfig(
+  client: DbClient,
+  organizationId: number,
+): Promise<{ threshold: number } | null> {
   const [organization] = await client
     .select({
       enabled: organizations.blockOrderingOnUnpaidInvoices,
       threshold: organizations.unpaidInvoiceBlockThreshold,
     })
     .from(organizations)
-    .where(eq(organizations.id, scope.organizationId))
+    .where(eq(organizations.id, organizationId))
     .limit(1)
-  if (organization?.enabled !== true) return NOT_CONFIGURED_OVERDUE_SUMMARY
-  const blockThreshold = orderingBlockThresholdOrDefault(organization.threshold)
-  const itemsLimit = Math.max(UNPAID_INVOICE_ITEMS_LIMIT, blockThreshold)
+  if (organization?.enabled !== true) return null
+  return { threshold: orderingBlockThresholdOrDefault(organization.threshold) }
+}
 
-  const unpaidInvoiceOfBranch = and(
-    eq(orders.organizationId, scope.organizationId),
-    eq(orders.branchId, scope.branchId),
+/**
+ * The SQL twin of `isUnpaidInvoiceOrder`, fenced to one organization. The
+ * gate's per-branch count and the unpaid-invoice alerts
+ * (plans/OF-PAYMENT-CONTROL-unpaid-invoice-alerts.md) both count through this,
+ * so the alerts and the block cannot disagree.
+ */
+export function unpaidInvoiceOrdersOf(organizationId: number) {
+  return and(
+    eq(orders.organizationId, organizationId),
     eq(orders.status, UNPAID_INVOICE_ORDER_STATUS),
     eq(orders.fulfillmentStatus, UNPAID_INVOICE_FULFILLMENT_STATUS),
     eq(orders.paymentStatus, UNPAID_INVOICE_PAYMENT_STATUS),
     isNotNull(orders.receiptData),
     orderStillOwesSql,
+  )
+}
+
+export const overduePaymentSource: OverduePaymentSource = async (client, scope) => {
+  const config = await loadUnpaidInvoiceBlockConfig(client, scope.organizationId)
+  if (!config) return NOT_CONFIGURED_OVERDUE_SUMMARY
+  const blockThreshold = config.threshold
+  const itemsLimit = Math.max(UNPAID_INVOICE_ITEMS_LIMIT, blockThreshold)
+
+  const unpaidInvoiceOfBranch = and(
+    unpaidInvoiceOrdersOf(scope.organizationId),
+    eq(orders.branchId, scope.branchId),
   )
 
   const [{ total }] = await client

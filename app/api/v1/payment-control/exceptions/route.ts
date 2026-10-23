@@ -21,7 +21,8 @@ const NO_STORE = { headers: { "Cache-Control": "private, no-store, max-age=0" } 
  * policy's window (one month from now) although it is over the overdue
  * limit. Super Admin and Head Office only; Head Office inside its own
  * tenant, pinned from the session. The window is the policy's, never the
- * body's. One live exception per branch — a second is a 409. The grant and
+ * body's. One live exception per branch — a second is a 409, and so is a
+ * grant in an organization whose unpaid-invoice block is off. The grant and
  * its audit row commit together (lib/server/payment-control.ts).
  */
 export async function POST(req: NextRequest) {
@@ -51,6 +52,9 @@ export async function POST(req: NextRequest) {
     }))
 
     if (result.kind === "branch_not_found") return error("Branch not found", 404)
+    if (result.kind === "block_disabled") {
+      return error("This organization does not block ordering on unpaid invoices, so there is nothing to make an exception to", 409)
+    }
     if (result.kind === "conflict") {
       return NextResponse.json({
         error: "An exception is already in force for this branch",

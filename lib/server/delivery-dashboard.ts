@@ -34,7 +34,9 @@ import {
 } from "@/lib/delivery-sla"
 import { FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { FULFILLED_ORDER_STATUSES } from "@/lib/order-delivery-status"
+import type { WarehouseOrderReach } from "@/lib/order-warehouse-transfer"
 import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
+import { warehouseOrderReachCondition, warehouseReachBranchCondition } from "@/lib/server/warehouse-order-reach"
 
 /**
  * The management delivery dashboard's reads. See
@@ -46,18 +48,21 @@ import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
  * dashboard's population (approved since the cutoff, never a legacy import),
  * and never an amount or a person.
  *
- * The warehouse reads the same dashboard fenced to its branches: every read
- * here takes an optional `reach` (branch ids). Null — the management
- * readers — is unfenced; an array, even an empty one, is a fence
- * (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md).
+ * The warehouse reads the same dashboard fenced to its work: every read here
+ * takes an optional `reach` — the orders naming no warehouse at the branches it
+ * serves, and those transferred to a warehouse it operates
+ * (`warehouseOrderReachCondition`). Null — the management readers — is
+ * unfenced; a reach, even an empty one, is a fence
+ * (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md,
+ * plans/OF-WAREHOUSE-order-ownership-and-transfer.md).
  */
 
-/** Branch ids the read is fenced to, or null for management's unfenced read. */
-export type DeliveryReach = readonly number[] | null
+/** The warehouse reach the read is fenced to, or null for management's unfenced read. */
+export type DeliveryReach = WarehouseOrderReach | null
 
 function reachCondition(reach: DeliveryReach): SQL | undefined {
   if (reach === null) return undefined
-  return reach.length === 0 ? sql`FALSE` : inArray(orders.branchId, [...reach])
+  return warehouseOrderReachCondition(reach)
 }
 
 const orderStatus = sql`UPPER(${orders.status})`
@@ -149,7 +154,7 @@ async function loadDeliveryRows(
 
 async function loadFilterOptions(organizationId: number | null, reach: DeliveryReach) {
   // A fenced reader is offered only the organizations and branches it reaches.
-  const branchFence = reach === null ? undefined : reach.length === 0 ? sql`FALSE` : inArray(branches.id, [...reach])
+  const branchFence = reach === null ? undefined : warehouseReachBranchCondition(reach)
   const organizationRows = reach === null
     ? await db
       .select({ id: organizations.id, name: organizations.name })

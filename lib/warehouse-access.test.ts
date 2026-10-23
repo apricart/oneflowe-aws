@@ -11,7 +11,9 @@ import {
   systemRoleSchema,
   warehouseBranchAssignmentsUpdateSchema,
   warehouseChallanAttachSchema,
+  warehouseCityAssignmentBulkUpdateSchema,
   warehouseCityAssignmentUpdateSchema,
+  warehouseCityOrganizationBulkUpdateSchema,
   warehouseCityOrganizationUpdateSchema,
   warehouseProgressSchema,
 } from "@/lib/server/mutation-validation"
@@ -20,7 +22,9 @@ import {
   WAREHOUSE_API_RULES,
   WAREHOUSE_AREAS,
   WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION,
+  WAREHOUSE_CITY_BULK_MAX,
   WAREHOUSE_CITY_MAX_LENGTH,
+  WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER,
   WAREHOUSE_HOME,
   WAREHOUSE_ROLE,
   canManageWarehouse,
@@ -235,6 +239,33 @@ describe("request bodies", () => {
     expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationId: 7 }).success).toBe(false)
     expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationIds: [7], assigned: true }).success).toBe(false)
     expect(warehouseCityOrganizationUpdateSchema.safeParse({ organizationId: 7, assigned: true, city: "Karachi" }).success).toBe(false)
+  })
+
+  it("change several cities or organizations at once, bounded, and nothing else", () => {
+    expect(warehouseCityAssignmentBulkUpdateSchema.parse({ cities: [" Karachi ", "lahore"], assigned: true }))
+      .toEqual({ cities: ["Karachi", "lahore"], assigned: true })
+    expect(warehouseCityAssignmentBulkUpdateSchema.safeParse({ cities: [], assigned: true }).success).toBe(false)
+    expect(warehouseCityAssignmentBulkUpdateSchema.safeParse({ cities: ["  "], assigned: true }).success).toBe(false)
+    expect(warehouseCityAssignmentBulkUpdateSchema.safeParse({ cities: ["Karachi"] }).success).toBe(false)
+    expect(warehouseCityAssignmentBulkUpdateSchema.safeParse({ cities: ["Karachi"], assigned: true, city: "Lahore" }).success).toBe(false)
+    expect(warehouseCityAssignmentBulkUpdateSchema.safeParse({
+      cities: Array.from({ length: WAREHOUSE_CITY_BULK_MAX + 1 }, (_, index) => `City ${index}`),
+      assigned: true,
+    }).success).toBe(false)
+    // The largest body the schema admits still fits under the WAF's 8 KB.
+    const largest = { cities: Array.from({ length: WAREHOUSE_CITY_BULK_MAX }, () => "x".repeat(WAREHOUSE_CITY_MAX_LENGTH)), assigned: false }
+    expect(warehouseCityAssignmentBulkUpdateSchema.safeParse(largest).success).toBe(true)
+    expect(JSON.stringify(largest).length).toBeLessThan(8 * 1024)
+
+    expect(warehouseCityOrganizationBulkUpdateSchema.parse({ organizationIds: [7, 3], assigned: false }))
+      .toEqual({ organizationIds: [7, 3], assigned: false })
+    expect(warehouseCityOrganizationBulkUpdateSchema.safeParse({ organizationIds: [], assigned: true }).success).toBe(false)
+    expect(warehouseCityOrganizationBulkUpdateSchema.safeParse({ organizationIds: [7, 7], assigned: true }).success).toBe(false)
+    expect(warehouseCityOrganizationBulkUpdateSchema.safeParse({ organizationIds: ["7"], assigned: true }).success).toBe(false)
+    expect(warehouseCityOrganizationBulkUpdateSchema.safeParse({ organizationIds: [0], assigned: true }).success).toBe(false)
+    expect(warehouseCityOrganizationBulkUpdateSchema.safeParse({ organizationIds: [7], assigned: true, organizationId: 7 }).success).toBe(false)
+    const tooMany = Array.from({ length: WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER + 1 }, (_, index) => index + 1)
+    expect(warehouseCityOrganizationBulkUpdateSchema.safeParse({ organizationIds: tooMany, assigned: true }).success).toBe(false)
   })
 })
 
@@ -479,7 +510,7 @@ describe("the API allowlist", () => {
         expect(source, rule.route).toContain('requireApiRole(["WAREHOUSE"])')
         if (!WAREHOUSE_CATALOG_ROUTES.includes(rule.route)) {
           // Every order read or write is fenced to the user's branches.
-          expect(source, rule.route).toMatch(/loadWarehouseReach\(|loadWarehouseOrderInReach\(|isOrderBranchInWarehouseReach\(|listWarehouseOrders\(|loadWarehouseOrder\(|loadWarehouseCatalogFence\(/)
+          expect(source, rule.route).toMatch(/loadWarehouseReach\(|loadWarehouseOrderInReach\(|isOrderInWarehouseReach\(|loadWarehouseOrderReach\(|listWarehouseOrders\(|loadWarehouseOrder\(|loadWarehouseCatalogFence\(/)
         }
         for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
           const exported = new RegExp(`export async function ${method}\\b`).test(source)

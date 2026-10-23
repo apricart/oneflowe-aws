@@ -28,6 +28,10 @@ export const WAREHOUSE_ORDER_EVENTS = [
   "CANCELLED",
   "REFUNDED",
   "FULFILLED",
+  // Super Admin moved the order between warehouses: IN to the warehouse that
+  // now works it, OUT to the accounts that did (plans/OF-WAREHOUSE-order-ownership-and-transfer.md).
+  "TRANSFERRED_IN",
+  "TRANSFERRED_OUT",
 ] as const
 
 export type WarehouseOrderEvent = (typeof WAREHOUSE_ORDER_EVENTS)[number]
@@ -42,7 +46,14 @@ export const WAREHOUSE_NOTIFICATION_ROLE = "WAREHOUSE" as const
  * the occurrence (edit time, correction request, refund), or the unique key of
  * the first would silently swallow the second.
  */
-export const RECURRING_WAREHOUSE_ORDER_EVENTS: readonly WarehouseOrderEvent[] = ["EDITED", "RETURNED", "RESUBMITTED", "REFUNDED"]
+export const RECURRING_WAREHOUSE_ORDER_EVENTS: readonly WarehouseOrderEvent[] = [
+  "EDITED",
+  "RETURNED",
+  "RESUBMITTED",
+  "REFUNDED",
+  "TRANSFERRED_IN",
+  "TRANSFERRED_OUT",
+]
 
 export function warehouseOrderTemplate(event: WarehouseOrderEvent): WarehouseOrderTemplate {
   return `WAREHOUSE_ORDER_${event}`
@@ -214,6 +225,24 @@ export function warehouseOrderCopy(event: WarehouseOrderEvent, payload: Warehous
         accent: GREEN,
         opensQueue: true,
       }
+    case "TRANSFERRED_IN":
+      return {
+        title: "Order transferred to your warehouse",
+        message: `${order} (${where}) was transferred to your warehouse — you now fulfil it.`,
+        subject: `${order} was transferred to your warehouse`,
+        intro: "Super Admin moved an order to your warehouse. Your warehouse now picks, dispatches and delivers it.",
+        accent: INDIGO,
+        opensQueue: true,
+      }
+    case "TRANSFERRED_OUT":
+      return {
+        title: "Order moved to another warehouse",
+        message: `${order} (${where}) was moved to another warehouse. Do not pick or dispatch it.`,
+        subject: `${order} was moved to another warehouse`,
+        intro: "Super Admin moved an order you were fulfilling to another warehouse. It has left your queue.",
+        accent: SLATE,
+        opensQueue: false,
+      }
   }
 }
 
@@ -240,6 +269,8 @@ export const WAREHOUSE_NOTIFICATION_TITLES: Record<WarehouseOrderEvent, string> 
   CANCELLED: "Order cancelled",
   REFUNDED: "Refund approved",
   FULFILLED: "Order fulfilled",
+  TRANSFERRED_IN: "Order transferred to you",
+  TRANSFERRED_OUT: "Order moved to another warehouse",
 }
 
 /** The only change a warehouse user may make to its notices: mark them all read. */
@@ -259,7 +290,9 @@ export type WarehouseNotificationItem = {
 /**
  * One stored notice as the bell shows it. The link is decided by the order's
  * status **now**, not when the notice was written: an order that was approved
- * and later cancelled no longer opens the queue, where it would read as 404.
+ * and later cancelled no longer opens the queue, where it would read as 404 —
+ * and neither does one transferred to a warehouse this user does not operate
+ * (`orderInReach` false).
  */
 export function toWarehouseNotificationItem(row: {
   id: number
@@ -268,6 +301,8 @@ export function toWarehouseNotificationItem(row: {
   createdAt: Date | null
   readAt: Date | null
   orderStatus: string | null
+  /** Whether the order is this user's work now; omitted where the caller does not know. */
+  orderInReach?: boolean | null
 }): WarehouseNotificationItem | null {
   if (!isWarehouseOrderTemplate(row.type)) return null
   const event = warehouseOrderEventOf(row.type)
@@ -278,6 +313,8 @@ export function toWarehouseNotificationItem(row: {
     message: row.message,
     createdAt: row.createdAt ? row.createdAt.toISOString() : null,
     read: row.readAt !== null,
-    href: row.orderStatus && isWarehouseWorkStatus(row.orderStatus) ? `${WAREHOUSE_HOME}#orders` : null,
+    href: row.orderStatus && isWarehouseWorkStatus(row.orderStatus) && row.orderInReach !== false
+      ? `${WAREHOUSE_HOME}#orders`
+      : null,
   }
 }

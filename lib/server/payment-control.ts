@@ -12,7 +12,7 @@ import {
   type PaymentControlStatus,
 } from "@/lib/payment-control-policy"
 
-import { overduePaymentSource } from "./overdue-payment-source"
+import { loadUnpaidInvoiceBlockConfig, overduePaymentSource } from "./overdue-payment-source"
 
 type DbClient = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
@@ -113,12 +113,17 @@ export type GrantExceptionResult =
   | { kind: "granted"; exception: PaymentControlExceptionRecord; stateBefore: BranchPaymentControl }
   | { kind: "conflict"; exception: PaymentControlExceptionRecord }
   | { kind: "branch_not_found" }
+  | { kind: "block_disabled" }
 
 /**
  * Grant a Head Office exception for one branch, for the policy's window from
  * `now`. The branch row is locked first so two simultaneous grants cannot
  * both pass the "one live exception" check. The audit row commits with the
- * grant or not at all.
+ * grant or not at all. An organization that does not block ordering on
+ * unpaid invoices has nothing to make an exception to, so nothing is granted
+ * there (plans/OF-PAYMENT-CONTROL-head-office-ordering-blocks-page.md) — an
+ * exception recorded while the block is off would otherwise switch on
+ * unseen the moment Super Admin turned the block on.
  */
 export async function grantPaymentControlException(
   tx: Tx,
@@ -139,6 +144,7 @@ export async function grantPaymentControlException(
     .for("update")
   if (!branch) return { kind: "branch_not_found" }
   if (input.organizationId !== null && branch.organizationId !== input.organizationId) return { kind: "branch_not_found" }
+  if (!(await loadUnpaidInvoiceBlockConfig(tx, branch.organizationId))) return { kind: "block_disabled" }
 
   const live = await loadLiveException(tx, branch.id, now)
   if (live) return { kind: "conflict", exception: live }

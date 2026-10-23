@@ -8,7 +8,7 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { validationMessage, warehouseProgressSchema } from "@/lib/server/mutation-validation"
 import { progressOrderFulfillment } from "@/lib/server/order-fulfillment-progress"
 import { db } from "@/lib/db"
-import { isOrderBranchInWarehouseReach, loadWarehouseOrderInReach } from "@/lib/server/warehouse-scope"
+import { isOrderInWarehouseReach, loadWarehouseOrderInReach } from "@/lib/server/warehouse-scope"
 import { parseRouteId } from "@/lib/warehouse-orders"
 
 /**
@@ -18,8 +18,9 @@ import { parseRouteId } from "@/lib/warehouse-orders"
  * Everything after authorization is `progressOrderFulfillment`, which Super
  * Admin's route shares, so a delivery recorded here has exactly the same
  * effects (delivered_at written once, a waiting token hand-off settled, the
- * audit row). The differences are two: the reach is this user's branches,
- * re-read inside the writing transaction under FOR SHARE; and a delivery
+ * audit row). The differences are two: the reach is this user's — its
+ * branches, or for a transferred order its warehouse — re-read inside the
+ * writing transaction with the order FOR UPDATE and the reach FOR SHARE; and a delivery
  * challan is optional (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md).
  *
  * Anything outside the reach is 404, never 403, so this cannot be used to
@@ -51,8 +52,8 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
       deliveryChallanId: parsed.data.deliveryChallanId ?? null,
       challanRequired: false,
       actor: { id: user.id, role: user.role },
-      authorize: (order) => isOrderBranchInWarehouseReach(user.id, order),
-      guardInTransaction: (tx, order) => isOrderBranchInWarehouseReach(user.id, order, { client: tx, lock: true }),
+      authorize: () => isOrderInWarehouseReach(user.id, orderId),
+      guardInTransaction: (tx) => isOrderInWarehouseReach(user.id, orderId, { client: tx, lock: true }),
     })
 
     switch (outcome.kind) {

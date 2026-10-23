@@ -50,7 +50,12 @@ import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import { CANCELLATION_REASON_MAX_LENGTH, INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH } from "@/lib/order-desk-access"
 import { GROUP_ORDER_CANCEL_REASON_MAX_LENGTH } from "@/lib/group-order-cancel"
 import { APRICART_EXECUTIVE_ASSIGNMENT_MAX } from "@/lib/apricart-executive-access"
-import { WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION, WAREHOUSE_CITY_MAX_LENGTH } from "@/lib/warehouse-access"
+import {
+  WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION,
+  WAREHOUSE_CITY_BULK_MAX,
+  WAREHOUSE_CITY_MAX_LENGTH,
+  WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER,
+} from "@/lib/warehouse-access"
 import {
   APRICART_WAREHOUSE_ADDRESS_MAX_LENGTH,
   APRICART_WAREHOUSE_CITY_MAX_LENGTH,
@@ -62,6 +67,10 @@ import {
   BRANCH_ROUTE_MAX_PER_ORGANIZATION,
   normalizeWarehouseCode,
 } from "@/lib/apricart-warehouses"
+import {
+  ORDER_WAREHOUSE_TRANSFER_REASON_MAX_LENGTH,
+  ORDER_WAREHOUSE_TRANSFER_REASON_MIN_LENGTH,
+} from "@/lib/order-warehouse-transfer"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import { MAX_APPROVAL_LEVELS, approvalLevelsError } from "@/lib/order-approval-levels"
 import { USERNAME_BASE_MAX_LENGTH } from "@/lib/username-prefix"
@@ -730,6 +739,29 @@ export const warehouseCityOrganizationUpdateSchema = z.object({
 }).strict()
 
 /**
+ * "Select all" / "Unselect all" in the dialog: the same change as
+ * `warehouseCityAssignmentUpdateSchema` for several cities at once, applied in
+ * one transaction. Bounded so the body stays under the WAF's 8 KB.
+ * See plans/OF-WAREHOUSE-city-bulk-select.md.
+ */
+export const warehouseCityAssignmentBulkUpdateSchema = z.object({
+  cities: z.array(z.string().trim().min(1).max(WAREHOUSE_CITY_MAX_LENGTH)).min(1).max(WAREHOUSE_CITY_BULK_MAX),
+  assigned: z.boolean(),
+}).strict()
+
+/**
+ * The same change as `warehouseCityOrganizationUpdateSchema` for several
+ * organizations at once, applied in one transaction. JSON integers, no repeats.
+ */
+export const warehouseCityOrganizationBulkUpdateSchema = z.object({
+  organizationIds: z.array(z.number().int().positive().max(2_147_483_647))
+    .min(1)
+    .max(WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
+  assigned: z.boolean(),
+}).strict()
+
+/**
  * An optional free-text field of a warehouse: trimmed, and an empty string
  * clears it (stored as null).
  */
@@ -777,6 +809,22 @@ export const branchFulfillmentRoutesUpdateSchema = z.object({
   branchIds: z.array(z.number().int().positive().max(2_147_483_647))
     .max(BRANCH_ROUTE_MAX_PER_ORGANIZATION)
     .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
+}).strict()
+
+const warehouseIdOrNull = z.number().int().positive().max(2_147_483_647).nullable()
+
+/**
+ * Super Admin moves one order to another Apricart warehouse, or (null) hands
+ * it back to the accounts serving its branch. `expectedWarehouseId` is the
+ * warehouse the screen showed, so a transfer made meanwhile is not overwritten.
+ * See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ */
+export const orderWarehouseTransferSchema = z.object({
+  targetWarehouseId: warehouseIdOrNull,
+  expectedWarehouseId: warehouseIdOrNull,
+  reason: z.string().trim()
+    .min(ORDER_WAREHOUSE_TRANSFER_REASON_MIN_LENGTH, { message: "Give a reason for the transfer" })
+    .max(ORDER_WAREHOUSE_TRANSFER_REASON_MAX_LENGTH),
 }).strict()
 
 /** Replacing a delivered order's challan with another uploaded one. */

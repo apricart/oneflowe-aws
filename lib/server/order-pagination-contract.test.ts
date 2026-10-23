@@ -22,6 +22,7 @@ describe("order-list pagination contract", () => {
 
     expect(page).toContain('params.set("q", debouncedSearchQuery)')
     expect(route).toContain("FROM ${orderItems}")
+    expect(route).toContain("${orders.receiptData} ->> 'invoiceNumber' ILIKE")
     expect(route).toContain("searchConditions.push(eq(orders.id, numericOrderId))")
   })
 

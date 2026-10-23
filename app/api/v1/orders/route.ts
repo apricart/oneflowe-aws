@@ -244,13 +244,15 @@ function addOrderSearchCondition(conditions: any[], query: string | undefined) {
   if (normalized.length > 100) return "Search query must be at most 100 characters"
   if (!normalized) return null
   const escaped = normalized.replace(/[\\%_]/g, String.raw`\$&`)
+  const pattern = `%${escaped}%`
   const searchConditions: any[] = [
-    ilike(orders.tid, `%${escaped}%`),
-    ilike(branches.costCenterId, `%${escaped}%`),
+    ilike(orders.tid, pattern),
+    sql`${orders.receiptData} ->> 'invoiceNumber' ILIKE ${pattern}`,
+    ilike(branches.costCenterId, pattern),
     sql`EXISTS (
       SELECT 1 FROM ${orderItems}
       WHERE ${orderItems.orderId} = ${orders.id}
-      AND ${orderItems.productName} ILIKE ${("%" + String(escaped) + "%")}
+      AND ${orderItems.productName} ILIKE ${pattern}
     )`,
   ]
   const numericOrderId = Number(normalized)

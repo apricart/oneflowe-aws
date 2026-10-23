@@ -35,7 +35,7 @@ describe("order delivery date contracts", () => {
     expect(progressRoute).toContain("progressOrderFulfillment({")
     expect(warehouseRoute).toContain("progressOrderFulfillment({")
     expect(warehouseRoute).toContain('requireApiRole(["WAREHOUSE"])')
-    expect(warehouseRoute).toContain("isOrderBranchInWarehouseReach(user.id, order, { client: tx, lock: true })")
+    expect(warehouseRoute).toContain("isOrderInWarehouseReach(user.id, orderId, { client: tx, lock: true })")
     expect(progressModule).toContain("transitionOrderFulfillmentStatusColumn")
     expect(orderSelect).toContain("WHEN ${nextStatus} = 'DELIVERED'")
     expect(orderSelect).toContain('COALESCE("delivered_at", NOW())')

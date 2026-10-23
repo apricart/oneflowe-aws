@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, asc, count, eq, inArray, isNull } from "drizzle-orm"
+import { and, asc, count, eq, inArray, isNull, ne, sql } from "drizzle-orm"
 
 import {
   apricartExecutiveAssignments,
@@ -8,6 +8,7 @@ import {
   apricartWarehouses,
   branches,
   branchFulfillmentRoutes,
+  orders,
   organizations,
   roles,
   users,
@@ -30,6 +31,7 @@ import {
   type BranchCoverageKind,
   type WarehouseResponsibility,
 } from "@/lib/apricart-warehouses"
+import { WAREHOUSE_ROLE } from "@/lib/warehouse-access"
 import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
 import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
 
@@ -37,11 +39,13 @@ import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
  * Super Admin's configuration of Apricart's warehouses: the warehouses, who
  * works at each, and which warehouse each branch's new orders default to.
  *
- * Configuration only. Nothing here is read by an order, a warehouse account's
- * reach, a notification or a decision — `loadWarehouseReach` and
- * `loadExecutiveApprovalReach` are unchanged — so no existing user's access
- * moves when a warehouse is configured. The coverage report compares the two
- * models for the rollout. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ * Routes and the coverage report are configuration only. Membership is read
+ * for one thing: an order Super Admin transferred to a warehouse is worked by
+ * that warehouse's active operators (`lib/server/order-warehouse-transfer.ts`).
+ * So the two writes that could strand such an order — deactivating the
+ * warehouse, removing its last active operator — are refused while it holds an
+ * open one. Configuring a warehouse moves no other order and no account's
+ * branch reach. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
  */
 
 type Actor = AuditActor & { id: string }
@@ -348,6 +352,9 @@ export async function updateApricartWarehouse(input: {
       if (routed > 0) {
         return { kind: "conflict", message: "Move this warehouse's branches to another warehouse before deactivating it" }
       }
+      if (await countOpenTransferredOrders(tx, input.warehouseId) > 0) {
+        return { kind: "conflict", message: "Orders transferred to this warehouse are still open — transfer them elsewhere before deactivating it" }
+      }
     }
 
     const changes = {
@@ -379,6 +386,18 @@ export async function updateApricartWarehouse(input: {
 
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
+/** Orders transferred to this warehouse that still need it: pending or approved, not yet fulfilled. */
+async function countOpenTransferredOrders(tx: Transaction, warehouseId: number): Promise<number> {
+  const [{ open }] = await tx
+    .select({ open: count() })
+    .from(orders)
+    .where(and(
+      eq(orders.fulfillmentWarehouseId, warehouseId),
+      sql`UPPER(${orders.status}) IN ('PENDING', 'APPROVED')`,
+    ))
+  return Number(open)
+}
+
 async function addMember(tx: Transaction, input: {
   warehouseId: number
   userId: string
@@ -397,7 +416,35 @@ async function addMember(tx: Transaction, input: {
   return "changed"
 }
 
-async function removeMember(tx: Transaction, input: { warehouseId: number; userId: string }): Promise<"changed" | "unchanged"> {
+/**
+ * Whether removing this account leaves the warehouse's open transferred orders
+ * with no active operator. Checked under the warehouse's FOR UPDATE, which a
+ * transfer onto the warehouse waits on (it takes FOR SHARE).
+ */
+async function strandsTransferredOrders(tx: Transaction, input: { warehouseId: number; userId: string }): Promise<boolean> {
+  const [{ others }] = await tx
+    .select({ others: count() })
+    .from(apricartWarehouseMemberships)
+    .innerJoin(users, eq(users.id, apricartWarehouseMemberships.userId))
+    .innerJoin(roles, eq(roles.id, users.roleId))
+    .where(and(
+      eq(apricartWarehouseMemberships.warehouseId, input.warehouseId),
+      eq(apricartWarehouseMemberships.responsibility, "WAREHOUSE_OPERATOR"),
+      ne(apricartWarehouseMemberships.userId, input.userId),
+      eq(roles.name, WAREHOUSE_ROLE),
+      eq(users.isActive, true),
+      isNull(users.deletedAt),
+    ))
+  return Number(others) === 0 && await countOpenTransferredOrders(tx, input.warehouseId) > 0
+}
+
+async function removeMember(tx: Transaction, input: { warehouseId: number; userId: string }): Promise<"changed" | "unchanged" | WarehouseMemberOutcome> {
+  if (await strandsTransferredOrders(tx, input)) {
+    return {
+      kind: "conflict",
+      message: "This is the last active operator of a warehouse with open transferred orders — add another operator or transfer the orders first",
+    }
+  }
   const removed = await tx.delete(apricartWarehouseMemberships)
     .where(and(
       eq(apricartWarehouseMemberships.warehouseId, input.warehouseId),
@@ -413,6 +460,7 @@ export type WarehouseMemberOutcome =
   | { kind: "account-not-found" }
   | { kind: "invalid"; message: string }
   | { kind: "limit" }
+  | { kind: "conflict"; message: string }
 
 /**
  * Add or remove one account at a warehouse. The account must be an undeleted

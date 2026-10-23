@@ -6,12 +6,13 @@
  * executives) are its members, and each customer branch may name one default
  * warehouse for its new orders (a route).
  *
- * **Configuration only, for now.** Nothing here decides what anyone may see or
- * do: a warehouse account still reaches the branches assigned to it
+ * **Mostly configuration.** The one thing membership decides: an order Super
+ * Admin transferred to a warehouse is worked by its active operators
+ * (`lib/order-warehouse-transfer.ts`). Otherwise a warehouse account still reaches the branches assigned to it
  * (`lib/warehouse-access.ts`) and an executive the organizations assigned to it
  * (`lib/apricart-executive-access.ts`). The coverage report below compares the
- * two models so Super Admin can map one onto the other before orders are ever
- * owned by a warehouse. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ * two models so Super Admin can map one onto the other before every order is
+ * owned by a warehouse (phase 2). See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
  *
  * Pure, so the routes, the server module and the page read the same rules.
  */

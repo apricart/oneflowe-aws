@@ -26,6 +26,8 @@ describe("order-report pagination contract", () => {
     expect(page).toContain('reportParams.set("status", statusFilter)')
     expect(route).toContain("FROM ${users} AS report_users")
     expect(route).toContain("report_users.employee_id ILIKE")
+    expect(route).toContain("${orders.receiptData} ->> 'invoiceNumber' ILIKE")
+    expect(route).toContain("searchConditions.push(eq(orders.id, numericOrderId))")
   })
 
   it("bounds page sizes and returns exact pagination metadata", () => {

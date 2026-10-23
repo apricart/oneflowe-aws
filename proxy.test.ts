@@ -191,6 +191,14 @@ describe("session policy proxy enforcement", () => {
     ["GROUP_USER", "/join-requests", "/dashboard"],
     ["GROUP_ORDER_PORTAL", "/join-requests", "/group-portal"],
     ["ORDER_PORTAL", "/join-requests", "/shop"],
+    // Ordering Blocks is Head Office's alone
+    // (plans/OF-PAYMENT-CONTROL-head-office-ordering-blocks-page.md).
+    ["HEAD_OFFICE", "/ordering-blocks", null],
+    ["SUPER_ADMIN", "/ordering-blocks", "/dashboard"],
+    ["BRANCH_ADMIN", "/ordering-blocks", "/dashboard"],
+    ["GROUP_USER", "/ordering-blocks", "/dashboard"],
+    ["GROUP_ORDER_PORTAL", "/ordering-blocks", "/group-portal"],
+    ["ORDER_PORTAL", "/ordering-blocks", "/shop"],
   ])(
     "preserves %s routing for %s",
     async (role, path, redirectedPath) => {
@@ -598,6 +606,7 @@ describe("the read-only Viewer session", () => {
     "/branch-inventory", "/refunds", "/products", "/employee-management", "/approvals",
     "/organizations", "/shop", "/group-portal", "/group-portal/bulk-order", "/receipts/42",
     "/delivery-dashboard", "/desk-team", "/warehouse", "/warehouse-team", "/order-desk",
+    "/ordering-blocks",
   ])("sends an organization-wide Viewer home from %s", async (path) => {
     expect(await landing(organizationWide(), path)).toBe("/dashboard")
   })

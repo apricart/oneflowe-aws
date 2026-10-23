@@ -83,9 +83,10 @@ afterEach(() => {
 })
 
 describe("Apricart warehouses", () => {
-  it("says plainly that configuring changes no one's access yet", () => {
+  it("says plainly what membership does and that default warehouses move no order", () => {
     render(<ApricartWarehousesCard />)
-    expect(screen.getByText(/does not yet change what any warehouse user or executive sees/)).toBeTruthy()
+    expect(screen.getByText(/operators fulfil the orders Super Admin transfers to it/)).toBeTruthy()
+    expect(screen.getByText(/default warehouses do not move any order/)).toBeTruthy()
   })
 
   it("lists each warehouse with its members and routed branches", () => {

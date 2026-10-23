@@ -3,6 +3,7 @@ import "server-only"
 import { and, asc, desc, eq, ilike, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm"
 
 import {
+  apricartWarehouses,
   branchDeliveryAddresses,
   branches,
   orderDeliveryChallans,
@@ -17,15 +18,19 @@ import { FULFILLED_ORDER_STATUSES } from "@/lib/order-delivery-status"
 import { hasDeskIntakeScreenshot } from "@/lib/order-desk-access"
 import { escapeLikePattern } from "@/lib/utils"
 import { lineAmountCents, parseRouteId, warehouseNextStage, type WarehouseOrderListQuery } from "@/lib/warehouse-orders"
+import { isEmptyWarehouseOrderReach, type WarehouseOrderReach } from "@/lib/order-warehouse-transfer"
 import { listDeliveryChallans } from "@/lib/server/delivery-challan"
-import { loadWarehouseOrderInReach, loadWarehouseReach } from "@/lib/server/warehouse-scope"
+import { warehouseOrderReachCondition, warehouseReachBranchCondition } from "@/lib/server/warehouse-order-reach"
+import { loadWarehouseOrderInReach, loadWarehouseOrderReach } from "@/lib/server/warehouse-scope"
 
 /**
  * The warehouse's reads: its queue and one order's picking sheet.
  *
- * The fence is the user's branch reach, re-read on every call
- * (`loadWarehouseReach`), plus the branch belonging to the order's own
- * organization. Prices and invoice figures are included — the warehouse may
+ * The fence is the user's order reach, re-read on every call
+ * (`loadWarehouseOrderReach`): the orders naming no warehouse at the branches
+ * it serves, and the orders transferred to a warehouse it operates
+ * (plans/OF-WAREHOUSE-order-ownership-and-transfer.md) — plus the branch
+ * belonging to the order's own organization. Prices and invoice figures are included — the warehouse may
  * see them (plans/OF-WAREHOUSE-warehouse-fulfilment-role.md, revision
  * 2026-10-07) — but no person behind the order: no creator, approver or
  * phone of a requester.
@@ -42,9 +47,9 @@ const isDelivered = sql`(${stage} = 'DELIVERED' OR ${orderStatus} IN (${fulfille
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-function reachConditions(branchIds: number[]): SQL {
+function reachConditions(reach: WarehouseOrderReach): SQL {
   return and(
-    inArray(orders.branchId, branchIds),
+    warehouseOrderReachCondition(reach),
     // The branch row must belong to the order's own tenant, as everywhere else.
     eq(branches.organizationId, orders.organizationId),
     workStatus,
@@ -204,8 +209,8 @@ export type WarehouseReachOptions = {
   branches: Array<{ id: number; name: string; organizationId: number }>
 }
 
-async function loadReachOptions(branchIds: number[]): Promise<WarehouseReachOptions> {
-  if (branchIds.length === 0) return { organizations: [], branches: [] }
+async function loadReachOptions(reach: WarehouseOrderReach): Promise<WarehouseReachOptions> {
+  if (isEmptyWarehouseOrderReach(reach)) return { organizations: [], branches: [] }
   const rows = await db
     .select({
       id: branches.id,
@@ -215,8 +220,9 @@ async function loadReachOptions(branchIds: number[]): Promise<WarehouseReachOpti
     })
     .from(branches)
     .innerJoin(organizations, eq(organizations.id, branches.organizationId))
-    .where(inArray(branches.id, branchIds))
+    .where(warehouseReachBranchCondition(reach))
     .orderBy(asc(organizations.name), asc(branches.name))
+    .limit(5000)
   const organizationsById = new Map<number, string>()
   for (const row of rows) organizationsById.set(row.organizationId, row.organizationName)
   return {
@@ -226,14 +232,14 @@ async function loadReachOptions(branchIds: number[]): Promise<WarehouseReachOpti
 }
 
 export async function listWarehouseOrders(userId: string, query: WarehouseOrderListQuery, now: Date) {
-  const branchIds = await loadWarehouseReach(db, userId)
-  const reach = await loadReachOptions(branchIds)
+  const orderReach = await loadWarehouseOrderReach(db, userId)
+  const reach = await loadReachOptions(orderReach)
   const emptyCounts = { NOT_STARTED: 0, IN_PROCESS: 0, OUT_FOR_DELIVERY: 0, DELIVERED_RECENT: 0 }
-  if (branchIds.length === 0) {
+  if (isEmptyWarehouseOrderReach(orderReach)) {
     return { items: [], total: 0, page: query.page, limit: query.limit, counts: emptyCounts, reach }
   }
 
-  const base = reachConditions(branchIds)
+  const base = reachConditions(orderReach)
   const where = and(base, ...filterConditions(query, now))
   const since = new Date(now.getTime() - query.deliveredWithinDays * DAY_MS)
 
@@ -316,8 +322,8 @@ type ReceiptSnapshot = {
  * this user serves — the caller answers null as 404.
  */
 export async function loadWarehouseOrder(userId: string, orderId: number, now: Date) {
-  const branchIds = await loadWarehouseReach(db, userId)
-  if (branchIds.length === 0) return null
+  const orderReach = await loadWarehouseOrderReach(db, userId)
+  if (isEmptyWarehouseOrderReach(orderReach)) return null
 
   const [row] = await db
     .select({
@@ -337,12 +343,15 @@ export async function loadWarehouseOrder(userId: string, orderId: number, now: D
       deliveryContactPhone: branchDeliveryAddresses.contactPhone,
       createdByRole: orders.createdByRole,
       intakeAttachmentKey: orders.intakeAttachmentKey,
+      fulfillmentWarehouseCode: apricartWarehouses.code,
+      fulfillmentWarehouseName: apricartWarehouses.name,
     })
     .from(orders)
     .innerJoin(branches, eq(branches.id, orders.branchId))
     .innerJoin(organizations, eq(organizations.id, orders.organizationId))
     .leftJoin(branchDeliveryAddresses, deliveryAddressJoin)
-    .where(and(eq(orders.id, orderId), reachConditions(branchIds)))
+    .leftJoin(apricartWarehouses, eq(apricartWarehouses.id, orders.fulfillmentWarehouseId))
+    .where(and(eq(orders.id, orderId), reachConditions(orderReach)))
     .limit(1)
   if (!row) return null
 
@@ -371,6 +380,11 @@ export async function loadWarehouseOrder(userId: string, orderId: number, now: D
       // The customer's screenshot on an Order Desk order, served by
       // GET /api/v1/warehouse/orders/{id}/intake-screenshot. Never the key.
       hasIntakeScreenshot: hasDeskIntakeScreenshot(row),
+      // Set only on an order Super Admin transferred to a warehouse this user
+      // operates; null on every order it works through its branches.
+      transferredToWarehouse: row.fulfillmentWarehouseCode && row.fulfillmentWarehouseName
+        ? { code: row.fulfillmentWarehouseCode, name: row.fulfillmentWarehouseName }
+        : null,
       ...presentDelivery(row, now),
     },
     destination: {

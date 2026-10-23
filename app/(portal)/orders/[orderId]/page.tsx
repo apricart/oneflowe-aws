@@ -8,6 +8,8 @@ import { useSession } from "next-auth/react"
 import { useState } from "react"
 import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
 import { OrderIntakeScreenshot } from "@/components/orders/order-intake-screenshot"
+import { OrderWarehousePanel } from "@/components/orders/order-warehouse-panel"
+import { canTransferOrderWarehouse } from "@/lib/order-warehouse-transfer"
 import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -350,6 +352,7 @@ export default function SuperAdminOrderDetailsPage() {
       {order && normalizeFulfillmentStatus(order.fulfillmentStatus) === "DELIVERED" && (
         <DeliveryChallanPanel orderId={order.id} orderTid={order.tid} canReplace={isSuperAdmin} />
       )}
+      {order && canTransferOrderWarehouse(userRole) && <OrderWarehousePanel orderId={order.id} />}
       {order?.hasIntakeScreenshot === true && (
         <Card className="space-y-3 rounded-2xl border-0 bg-white p-4 shadow-md dark:border-slate-800 dark:bg-slate-900">
           <div>
