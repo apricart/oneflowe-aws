@@ -138,6 +138,18 @@ describe("the server module", () => {
     expect(insertAt).toBeGreaterThan(liveAt)
   })
 
+  // plans/OF-PAYMENT-CONTROL-head-office-ordering-blocks-page.md
+  it("grants nothing in an organization whose unpaid-invoice block is off, judged on the locked branch's tenant", () => {
+    const grantAt = moduleSource.indexOf("export async function grantPaymentControlException")
+    const lockAt = moduleSource.indexOf('.for("update")', grantAt)
+    const toggleAt = moduleSource.indexOf("loadUnpaidInvoiceBlockConfig(tx, branch.organizationId)", grantAt)
+    const refusedAt = moduleSource.indexOf('return { kind: "block_disabled" }', grantAt)
+    const insertAt = moduleSource.indexOf(".insert(paymentControlExceptions)", grantAt)
+    expect(toggleAt).toBeGreaterThan(lockAt)
+    expect(refusedAt).toBeGreaterThan(toggleAt)
+    expect(insertAt).toBeGreaterThan(refusedAt)
+  })
+
   it("audits the grant and the revoke in the same transaction as the write", () => {
     for (const action of ["GRANT_PAYMENT_CONTROL_EXCEPTION", "REVOKE_PAYMENT_CONTROL_EXCEPTION"]) {
       expect(moduleSource).toContain(action)
@@ -158,31 +170,48 @@ describe("the server module", () => {
 describe("the seam", () => {
   const seam = source("lib/server/overdue-payment-source.ts")
   const body = seam.slice(seam.indexOf("export const overduePaymentSource"))
+  // The toggle read and the invoice predicate are shared with the unpaid-invoice
+  // alerts (plans/OF-PAYMENT-CONTROL-unpaid-invoice-alerts.md), so they live in
+  // their own functions; the seam must still go through both.
+  const config = seam.slice(
+    seam.indexOf("export async function loadUnpaidInvoiceBlockConfig"),
+    seam.indexOf("export function unpaidInvoiceOrdersOf"),
+  )
+  const predicate = seam.slice(
+    seam.indexOf("export function unpaidInvoiceOrdersOf"),
+    seam.indexOf("export const overduePaymentSource"),
+  )
 
   it("is server-only", () => {
     expect(seam.startsWith('import "server-only"')).toBe(true)
   })
 
   it("reads the organization's toggle first and answers not-configured while it is off", () => {
-    const toggleAt = body.indexOf("organizations.blockOrderingOnUnpaidInvoices")
-    const offAt = body.indexOf("if (organization?.enabled !== true) return NOT_CONFIGURED_OVERDUE_SUMMARY")
-    const ordersAt = body.indexOf(".from(orders)")
+    const toggleAt = config.indexOf("organizations.blockOrderingOnUnpaidInvoices")
     expect(toggleAt).toBeGreaterThan(-1)
-    expect(offAt).toBeGreaterThan(toggleAt)
+    expect(config.indexOf("if (organization?.enabled !== true) return null")).toBeGreaterThan(toggleAt)
+
+    const readAt = body.indexOf("const config = await loadUnpaidInvoiceBlockConfig(client, scope.organizationId)")
+    const offAt = body.indexOf("if (!config) return NOT_CONFIGURED_OVERDUE_SUMMARY")
+    const ordersAt = body.indexOf(".from(orders)")
+    expect(readAt).toBeGreaterThan(-1)
+    expect(offAt).toBeGreaterThan(readAt)
     expect(ordersAt).toBeGreaterThan(offAt)
   })
 
   it("counts only the gate's own tenant and branch, never a value from a request", () => {
-    expect(body).toContain("eq(orders.organizationId, scope.organizationId)")
+    expect(predicate).toContain("eq(orders.organizationId, organizationId)")
+    expect(body).toContain("unpaidInvoiceOrdersOf(scope.organizationId)")
     expect(body).toContain("eq(orders.branchId, scope.branchId)")
-    expect(body).toContain("eq(organizations.id, scope.organizationId)")
+    expect(config).toContain("eq(organizations.id, organizationId)")
   })
 
   it("counts exactly the invoices the Paid/Unpaid control can clear", () => {
-    expect(body).toContain("eq(orders.status, UNPAID_INVOICE_ORDER_STATUS)")
-    expect(body).toContain("eq(orders.fulfillmentStatus, UNPAID_INVOICE_FULFILLMENT_STATUS)")
-    expect(body).toContain("eq(orders.paymentStatus, UNPAID_INVOICE_PAYMENT_STATUS)")
-    expect(body).toContain("isNotNull(orders.receiptData)")
+    expect(predicate).toContain("eq(orders.status, UNPAID_INVOICE_ORDER_STATUS)")
+    expect(predicate).toContain("eq(orders.fulfillmentStatus, UNPAID_INVOICE_FULFILLMENT_STATUS)")
+    expect(predicate).toContain("eq(orders.paymentStatus, UNPAID_INVOICE_PAYMENT_STATUS)")
+    expect(predicate).toContain("isNotNull(orders.receiptData)")
+    expect(predicate).toContain("orderStillOwesSql")
   })
 
   it("never selects an amount: the status route is readable where prices are hidden", () => {
@@ -197,12 +226,13 @@ describe("the seam", () => {
 
   // plans/OF-ORDERING-BLOCK-configurable-thresholds.md
   it("reads the organization's own limit from the same row as the toggle, never from a request", () => {
-    const selectAt = body.indexOf(".select({")
-    const thresholdAt = body.indexOf("threshold: organizations.unpaidInvoiceBlockThreshold")
-    const fromAt = body.indexOf(".from(organizations)")
+    const selectAt = config.indexOf(".select({")
+    const thresholdAt = config.indexOf("threshold: organizations.unpaidInvoiceBlockThreshold")
+    const fromAt = config.indexOf(".from(organizations)")
     expect(thresholdAt).toBeGreaterThan(selectAt)
     expect(fromAt).toBeGreaterThan(thresholdAt)
-    expect(body).toContain("const blockThreshold = orderingBlockThresholdOrDefault(organization.threshold)")
+    expect(config).toContain("return { threshold: orderingBlockThresholdOrDefault(organization.threshold) }")
+    expect(body).toContain("const blockThreshold = config.threshold")
     expect(body).toContain("blockThreshold,")
   })
 })
@@ -216,6 +246,28 @@ describe("the routes", () => {
     expect(text).toContain('if (scope.role !== "SUPER_ADMIN" && branch.organizationId !== scope.organizationId) return error("Branch not found", 404)')
     expect(text).not.toContain("auditLogs")
     expect(text).toContain('"Cache-Control": "private, no-store, max-age=0"')
+  })
+
+  it("the Ordering Blocks list is Head Office only, its organization from the session, and reads through the shared seam", () => {
+    const text = source("app/api/v1/payment-control/branches/route.ts")
+    expect(text).toContain('requireApiRole(["HEAD_OFFICE"])')
+    expect(text).toContain("organizationId: scope.organizationId,")
+    expect(text).toContain("orderingBlockBranchesQuerySchema.safeParse(")
+    expect(text).not.toContain("auditLogs")
+    expect(text).toContain('"Cache-Control": "private, no-store, max-age=0"')
+
+    const loader = source("lib/server/ordering-block-branches.ts")
+    expect(loader.startsWith('import "server-only"')).toBe(true)
+    const configAt = loader.indexOf("await loadUnpaidInvoiceBlockConfig(client, input.organizationId)")
+    const offAt = loader.indexOf("if (!config) return ORDERING_BLOCKS_DISABLED")
+    const countAt = loader.indexOf(".from(branches)")
+    expect(configAt).toBeGreaterThan(-1)
+    expect(offAt).toBeGreaterThan(configAt)
+    expect(countAt).toBeGreaterThan(offAt)
+    expect(loader).toContain("unpaidInvoiceOrdersOf(input.organizationId)")
+    expect(loader).toContain("eq(branches.organizationId, input.organizationId)")
+    expect(loader).toContain("eq(paymentControlExceptions.organizationId, input.organizationId)")
+    expect(loader).not.toMatch(/totalCents|amountCents/)
   })
 
   it.each([

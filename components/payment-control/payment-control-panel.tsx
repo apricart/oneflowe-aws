@@ -94,7 +94,8 @@ function PaymentControlHeader({ view, openDialog }: Readonly<{
   openDialog: (dialog: "grant" | "revoke") => void
 }>) {
   const state = STATE_LABELS[view.state]
-  const canGrant = view.canManageExceptions && !view.exceptionActive
+  // The grant route refuses an organization whose block is off; the button follows it.
+  const canGrant = view.canManageExceptions && view.configured && !view.exceptionActive
   const canRevoke = view.canManageExceptions && view.exceptionActive && view.exception !== null
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -102,7 +103,7 @@ function PaymentControlHeader({ view, openDialog }: Readonly<{
         <Badge className={state.className}>{state.label}</Badge>
         {view.configured && (
           <span className="text-sm text-muted-foreground">
-            {view.overdueCount} of {view.threshold} overdue{view.limitReached ? " · limit reached" : ""}
+            {view.overdueCount} of {view.threshold} unpaid invoices{view.limitReached ? " · limit reached" : ""}
           </span>
         )}
         <Badge variant="outline" className={view.orderingAllowed ? "text-emerald-700 dark:text-emerald-300" : "text-rose-700 dark:text-rose-300"}>
@@ -189,43 +190,15 @@ export function PaymentControlPanel({ branchId, onChanged }: Readonly<{ branchId
   return (
     <div className="space-y-4" data-testid="payment-control-panel" data-state={view.state}>
       <PaymentControlHeader view={view} openDialog={setDialog} />
-          {/* Summary moved to PaymentControlHeader.
-            <span className="text-sm text-muted-foreground">
-              {view.overdueCount} of {view.threshold} overdue{view.limitReached ? " · limit reached" : ""}
-            </span>
-          */}
 
       {!view.configured && (
         <p className="rounded-xl border border-dashed p-3 text-sm text-muted-foreground" data-testid="payment-control-not-configured">
-          No overdue-payment data source is connected yet, so ordering for this branch is not restricted by payment
-          status. An exception recorded now takes effect automatically once payment data is connected, and expires on
-          its date either way.
+          This organization does not block ordering on unpaid invoices, so ordering for this branch is not restricted
+          by payment status and there is nothing to make an exception to.
         </p>
       )}
 
       {exception && <PaymentControlException exception={exception} />}
-      {/* Exception details moved to PaymentControlException.
-        <div className="rounded-xl border p-3 text-sm dark:border-slate-700" data-testid="payment-control-exception">
-          <div className="flex items-start gap-2">
-            {exception.active ? <ShieldCheck className="mt-0.5 h-4 w-4 text-indigo-600" /> : <ShieldAlert className="mt-0.5 h-4 w-4 text-slate-500" />}
-            <div className="space-y-1">
-              <p className="font-medium">
-                {exception.active ? "Head Office exception in force" : exception.revokedAt ? "Exception revoked" : "Exception expired"}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                From {formatDateTime(exception.startAt)} to {formatDateTime(exception.expiresAt)}
-                {exception.grantedBy ? ` · granted by ${exception.grantedBy.name || "Head Office"}` : ""}
-              </p>
-              {exception.reason && <p className="text-xs text-muted-foreground">Reason: {exception.reason}</p>}
-              {exception.revokedAt && (
-                <p className="text-xs text-muted-foreground">
-                  Revoked {formatDateTime(exception.revokedAt)}{exception.revokeReason ? ` · ${exception.revokeReason}` : ""}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      */}
 
       {view.timeline.length > 0 && <PaymentControlTimeline steps={view.timeline} />}
 

@@ -3,9 +3,10 @@
 import { useRef, useState } from "react"
 import useSWR from "swr"
 import { format } from "date-fns"
-import { CheckCircle2, Clock, Download, FileText, Loader2, MapPin, Package, Receipt, StickyNote, Truck, Upload, X } from "lucide-react"
+import { ArrowRightLeft, CheckCircle2, Clock, Download, FileText, ImageIcon, Loader2, MapPin, Package, Receipt, StickyNote, Truck, Upload, X } from "lucide-react"
 
 import { uploadDeliveryChallan } from "@/components/orders/delivery-challan"
+import { OrderIntakeScreenshot } from "@/components/orders/order-intake-screenshot"
 import { healthStyle, paymentStyle } from "@/components/warehouse/delivery-health-styles"
 import { Button } from "@/components/ui/button"
 import {
@@ -49,6 +50,10 @@ export type WarehouseOrderSheetData = {
     health: string | null
     healthLabel: string | null
     promisedAt: string | null
+    /** An Order Desk order carrying the customer's screenshot. */
+    hasIntakeScreenshot?: boolean
+    /** Set when Super Admin transferred the order to a warehouse this user operates. */
+    transferredToWarehouse?: { code: string; name: string } | null
   }
   destination: {
     label: string | null
@@ -468,6 +473,15 @@ export function WarehouseOrderSheet({
                 </dl>
               </Section>
 
+              {order.transferredToWarehouse && (
+                <div className="flex gap-3 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm dark:border-indigo-900 dark:bg-indigo-950/40">
+                  <ArrowRightLeft className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" aria-hidden="true" />
+                  <p className="text-indigo-900 dark:text-indigo-100">
+                    Transferred to {order.transferredToWarehouse.code} — {order.transferredToWarehouse.name}. Your warehouse fulfils this order.
+                  </p>
+                </div>
+              )}
+
               {order.notes && (
                 <div className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950/40">
                   <StickyNote className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
@@ -476,6 +490,18 @@ export function WarehouseOrderSheet({
                     <p className="mt-0.5 whitespace-pre-wrap text-amber-900/90 dark:text-amber-100">{order.notes}</p>
                   </div>
                 </div>
+              )}
+
+              {order.hasIntakeScreenshot && (
+                <Section icon={ImageIcon} title="Customer's order screenshot">
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    Attached by Apricart&apos;s Order Desk when it entered this order from the customer&apos;s message.
+                  </p>
+                  <OrderIntakeScreenshot
+                    src={`/api/v1/warehouse/orders/${order.id}/intake-screenshot`}
+                    orderTid={order.tid}
+                  />
+                </Section>
               )}
 
               <Section

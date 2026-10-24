@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server"
-import { and, desc, eq, inArray, isNull, like } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, like, or, sql } from "drizzle-orm"
 
 import { notifications, orders } from "@/db/schema"
 import { error, requireApiRole } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { handleError } from "@/lib/error-handler"
-import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
+import { isEmptyWarehouseOrderReach, type WarehouseOrderReach } from "@/lib/order-warehouse-transfer"
+import { warehouseOrderReachCondition } from "@/lib/server/warehouse-order-reach"
+import { loadWarehouseOrderReach } from "@/lib/server/warehouse-scope"
 import {
   toWarehouseNotificationItem,
   WAREHOUSE_NOTIFICATION_LIST_LIMIT,
@@ -22,16 +24,31 @@ export const dynamic = "force-dynamic"
  * See plans/OF-WAREHOUSE-order-stage-notifications.md.
  *
  * Only this user's rows addressed to the warehouse role, and only for branches
- * it serves **now**: a branch or city withdrawn since takes its notices with
- * it. An empty reach lists nothing.
+ * it serves **now** or orders transferred to a warehouse it operates **now**: a
+ * branch, city or membership withdrawn since takes its notices with it. The
+ * one exception is "moved to another warehouse", which is about an order the
+ * user no longer works and is kept for as long as the user has any reach. An
+ * empty reach lists nothing. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
  */
 
-function ownNotices(userId: string, reach: number[]) {
+const TRANSFERRED_OUT_TYPE = "WAREHOUSE_ORDER_TRANSFERRED_OUT"
+
+function ownNotices(userId: string, reach: WarehouseOrderReach) {
+  const transferredIn = reach.warehouseIds.length === 0
+    ? undefined
+    : sql`${notifications.orderId} IN (
+      SELECT ${orders.id} FROM ${orders}
+      WHERE ${inArray(orders.fulfillmentWarehouseId, [...reach.warehouseIds])}
+    )`
   return and(
     eq(notifications.userId, userId),
     eq(notifications.targetRole, WAREHOUSE_NOTIFICATION_ROLE),
     like(notifications.type, "WAREHOUSE_ORDER_%"),
-    inArray(notifications.branchId, reach),
+    or(
+      reach.branchIds.length === 0 ? undefined : inArray(notifications.branchId, [...reach.branchIds]),
+      transferredIn,
+      eq(notifications.type, TRANSFERRED_OUT_TYPE),
+    ),
   )
 }
 
@@ -42,8 +59,8 @@ export async function GET() {
     const user = await getCurrentUser()
     if (!user) return error("Unauthorized", 401)
 
-    const reach = await loadWarehouseReach(db, user.id)
-    if (reach.length === 0) {
+    const reach = await loadWarehouseOrderReach(db, user.id)
+    if (isEmptyWarehouseOrderReach(reach)) {
       return NextResponse.json({ items: [], unreadCount: 0 }, { headers: { "Cache-Control": "private, no-store" } })
     }
 
@@ -55,6 +72,7 @@ export async function GET() {
         createdAt: notifications.createdAt,
         readAt: notifications.readAt,
         orderStatus: orders.status,
+        orderInReach: sql<boolean>`(${warehouseOrderReachCondition(reach)})`,
       })
       .from(notifications)
       .leftJoin(orders, eq(orders.id, notifications.orderId))
@@ -91,8 +109,8 @@ export async function PATCH(req: Request) {
     const parsed = warehouseNotificationActionSchema.safeParse(await req.json().catch(() => null))
     if (!parsed.success) return error("action must be \"mark-all-read\"", 400)
 
-    const reach = await loadWarehouseReach(db, user.id)
-    if (reach.length === 0) return NextResponse.json({ updated: 0 })
+    const reach = await loadWarehouseOrderReach(db, user.id)
+    if (isEmptyWarehouseOrderReach(reach)) return NextResponse.json({ updated: 0 })
 
     const updated = await db
       .update(notifications)

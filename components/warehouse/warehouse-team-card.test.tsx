@@ -198,6 +198,93 @@ describe("Warehouse team", () => {
     })
   })
 
+  describe("select all / unselect all", () => {
+    const saved = (item: Record<string, unknown>) => new Response(JSON.stringify({ item }), { status: 200 })
+
+    it("chooses every organization not yet chosen with one request, and keeps the server's answer", async () => {
+      swr.data = team([member({ cityOrganizationIds: [1] })])
+      fetchMock.mockResolvedValueOnce(saved({ organizationIds: [1, 2] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Select all (1)" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/warehouse-team/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4/city-organizations")
+      expect(sentBody(0)).toEqual({ organizationIds: [2], assigned: true })
+      expect(within(dialog).getByText("2 organizations chosen.")).toBeTruthy()
+      expect((within(dialog).getByRole("button", { name: "Select all (0)" }) as HTMLButtonElement).disabled).toBe(true)
+    })
+
+    it("acts only on the organizations the filter shows", async () => {
+      swr.data = team([member()])
+      fetchMock.mockResolvedValueOnce(saved({ organizationIds: [2] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      fireEvent.change(within(dialog).getByLabelText("Filter organizations"), { target: { value: "ub" } })
+      fireEvent.click(within(dialog).getByRole("button", { name: "Select all shown (1)" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ organizationIds: [2], assigned: true })
+    })
+
+    it("asks before withdrawing every organization, and sends nothing when kept", async () => {
+      swr.data = team([member({ cityOrganizationIds: [1, 2] })])
+      fetchMock.mockResolvedValueOnce(saved({ organizationIds: [] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unselect all (2)" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Keep them" }))
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unselect all (2)" }))
+      expect(await screen.findByText("Withdraw 2 organizations?")).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Withdraw" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ organizationIds: [1, 2], assigned: false })
+      expect(within(dialog).getByText("0 organizations chosen.")).toBeTruthy()
+    })
+
+    it("assigns every city of the chosen organizations, never one outside them", async () => {
+      // Lahore is assigned but outside the chosen organization; Karachi is not yet assigned.
+      swr.data = team([member({ cityKeys: ["lahore"], cityOrganizationIds: [2] })])
+      fetchMock.mockResolvedValueOnce(saved({ cityKeys: ["karachi", "lahore"] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Assign all (1)" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/warehouse-team/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4/cities")
+      expect(sentBody(0)).toEqual({ cities: ["karachi"], assigned: true })
+      expect(within(dialog).getByText("2 cities assigned.")).toBeTruthy()
+    })
+
+    it("asks before unassigning every city, including one outside the chosen organizations", async () => {
+      swr.data = team([member({ cityKeys: ["karachi", "lahore"], cityOrganizationIds: [2] })])
+      fetchMock.mockResolvedValueOnce(saved({ cityKeys: [] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unassign all (2)" }))
+      expect(await screen.findByText("Unassign 2 cities?")).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Unassign" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ cities: ["karachi", "lahore"], assigned: false })
+      expect(within(dialog).getByText("0 cities assigned.")).toBeTruthy()
+    })
+
+    it("keeps the reach unchanged with the server's reason when refused", async () => {
+      swr.data = team([member({ cityOrganizationIds: [1] })])
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "A warehouse user can be assigned at most 200 cities" }), { status: 409 }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      fireEvent.click(within(dialog).getByRole("button", { name: "Assign all (2)" }))
+      expect(await within(dialog).findByText("A warehouse user can be assigned at most 200 cities")).toBeTruthy()
+      expect(within(dialog).getByText("0 cities assigned.")).toBeTruthy()
+      expect(swr.mutate).not.toHaveBeenCalled()
+    })
+  })
+
   describe("by branch", () => {
     it("replaces one organization's branches with what is ticked, once, and refreshes", async () => {
       swr.data = team([member()])

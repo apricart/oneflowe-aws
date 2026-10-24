@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation"
 
+import { UnpaidInvoiceAlerts } from "@/components/payment-control/unpaid-invoice-alerts"
 import { SessionGuard } from "@/components/shell/session-guard"
 import { RoleRenameNotice } from "@/components/shell/role-rename-notice"
 import { SessionUnavailable } from "@/components/shell/session-unavailable"
@@ -49,6 +50,7 @@ export default async function GroupPortalLayout({
   return (
     <SessionGuard>
       <RoleRenameNotice />
+      <UnpaidInvoiceAlerts placement="storefront" />
       {children}
     </SessionGuard>
   )

@@ -4,6 +4,16 @@ import { useMemo, useState } from "react"
 import useSWR from "swr"
 import { Loader2 } from "lucide-react"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -22,12 +32,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
+import { WAREHOUSE_CITY_BULK_MAX, WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER } from "@/lib/warehouse-access"
 import {
   branchesInOrganization,
+  bulkChange,
   citiesForOrganizations,
   cityCoveringBranch,
   cityLabel,
   describeWarehouseReach,
+  inBatches,
   toggleAllBranches,
   toggleBranch,
   type CityChoice,
@@ -78,7 +91,10 @@ type CityReach = { cityKeys: string[]; cityOrganizationIds: number[] }
  * organizations have branches in. The user serves every branch that is in a
  * ticked organization **and** a ticked city — including branches opened there
  * later. Every tick saves at once, one per request, one request at a time.
- * See plans/OF-WAREHOUSE-city-assignments-by-organization.md.
+ * "Select all" / "Unselect all" act on the rows the filter shows, in bounded
+ * batches, each batch one transaction; withdrawing asks first.
+ * See plans/OF-WAREHOUSE-city-assignments-by-organization.md and
+ * plans/OF-WAREHOUSE-city-bulk-select.md.
  */
 function CitiesPanel({
   member,
@@ -97,6 +113,7 @@ function CitiesPanel({
   const [cityFilter, setCityFilter] = useState("")
   const [pending, setPending] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState<"organizations" | "cities" | null>(null)
 
   const organizationNeedle = organizationFilter.trim().toLowerCase()
   const shownOrganizations = organizations.filter((organization) => organization.name.toLowerCase().includes(organizationNeedle))
@@ -104,8 +121,17 @@ function CitiesPanel({
   const offered = citiesForOrganizations(cities, reach.cityOrganizationIds, reach.cityKeys)
   const shownCities = offered.filter((city) => city.label.toLowerCase().includes(cityNeedle))
   const chosenCount = reach.cityOrganizationIds.length
+  const who = member.fullName ?? member.email
 
-  const send = async (path: string, body: unknown, fallback: string): Promise<boolean> => {
+  const shownOrganizationIds = shownOrganizations.map((organization) => organization.id)
+  const organizationsToSelect = bulkChange(shownOrganizationIds, reach.cityOrganizationIds, true)
+  const organizationsToUnselect = bulkChange(shownOrganizationIds, reach.cityOrganizationIds, false)
+  // A city outside the chosen organizations can only be withdrawn, never assigned.
+  const citiesToAssign = bulkChange(shownCities.filter((city) => !city.outside).map((city) => city.key), reach.cityKeys, true)
+  const citiesToUnassign = bulkChange(shownCities.map((city) => city.key), reach.cityKeys, false)
+
+  /** The saved `item`, or null once the error is shown. */
+  const send = async (path: string, body: unknown, fallback: string): Promise<Record<string, unknown> | null> => {
     try {
       const response = await fetch(`${WAREHOUSE_TEAM_KEY}/${member.id}/${path}`, {
         method: "PUT",
@@ -114,13 +140,79 @@ function CitiesPanel({
       })
       if (!response.ok) {
         setFormError(await errorMessage(response, fallback))
-        return false
+        return null
       }
-      return true
+      const data = await response.json().catch(() => ({}))
+      return (data?.item ?? {}) as Record<string, unknown>
     } catch {
       setFormError("The request could not be sent. Check the connection and try again.")
-      return false
+      return null
     }
+  }
+
+  /**
+   * Sends the changes in bounded batches, one transaction each, and keeps the
+   * reach the server answers after each. A failed batch stops the rest; what
+   * was saved before it stays saved and is shown.
+   */
+  const saveInBatches = async <Value,>(input: {
+    pendingKey: string
+    values: Value[]
+    batchSize: number
+    path: string
+    body: (batch: Value[]) => unknown
+    fallback: string
+    apply: (current: CityReach, item: Record<string, unknown>) => CityReach
+  }): Promise<number> => {
+    if (pending || input.values.length === 0) return 0
+    setPending(input.pendingKey)
+    setFormError(null)
+    let next = reach
+    let saved = 0
+    try {
+      for (const batch of inBatches(input.values, input.batchSize)) {
+        const item = await send(input.path, input.body(batch), input.fallback)
+        if (item === null) break
+        next = input.apply(next, item)
+        saved += batch.length
+      }
+    } finally {
+      if (saved > 0) onChanged(next)
+      setPending(null)
+    }
+    return saved
+  }
+
+  const bulkOrganizations = async (assigned: boolean) => {
+    const saved = await saveInBatches({
+      pendingKey: "organizations-bulk",
+      values: assigned ? organizationsToSelect : organizationsToUnselect,
+      batchSize: WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER,
+      path: "city-organizations",
+      body: (organizationIds) => ({ organizationIds, assigned }),
+      fallback: "The organizations could not be saved",
+      apply: (current, item) => ({
+        ...current,
+        cityOrganizationIds: Array.isArray(item.organizationIds) ? (item.organizationIds as number[]) : current.cityOrganizationIds,
+      }),
+    })
+    if (saved > 0) toast({ title: `${plural(saved, "organization")} ${assigned ? "chosen" : "withdrawn"}`, description: who })
+  }
+
+  const bulkCities = async (assigned: boolean) => {
+    const saved = await saveInBatches({
+      pendingKey: "cities-bulk",
+      values: assigned ? citiesToAssign : citiesToUnassign,
+      batchSize: WAREHOUSE_CITY_BULK_MAX,
+      path: "cities",
+      body: (cities) => ({ cities, assigned }),
+      fallback: "The cities could not be saved",
+      apply: (current, item) => ({
+        ...current,
+        cityKeys: Array.isArray(item.cityKeys) ? (item.cityKeys as string[]) : current.cityKeys,
+      }),
+    })
+    if (saved > 0) toast({ title: `${plural(saved, "city", "cities")} ${assigned ? "assigned" : "withdrawn"}`, description: who })
   }
 
   const toggleOrganization = async (organization: Organization) => {
@@ -134,11 +226,11 @@ function CitiesPanel({
         { organizationId: organization.id, assigned },
         "The organization could not be saved",
       )
-      if (!saved) return
+      if (saved === null) return
       onChanged({ ...reach, cityOrganizationIds: toggleBranch(reach.cityOrganizationIds, organization.id) })
       toast({
         title: assigned ? `${organization.name} chosen` : `${organization.name} withdrawn`,
-        description: member.fullName ?? member.email,
+        description: who,
       })
     } finally {
       setPending(null)
@@ -152,7 +244,7 @@ function CitiesPanel({
     setFormError(null)
     try {
       const saved = await send("cities", { city: city.key, assigned }, "The city could not be saved")
-      if (!saved) return
+      if (saved === null) return
       onChanged({
         ...reach,
         cityKeys: assigned
@@ -161,7 +253,7 @@ function CitiesPanel({
       })
       toast({
         title: assigned ? `${city.label} assigned` : `${city.label} withdrawn`,
-        description: `${member.fullName ?? member.email} · ${plural(city.branchCount, "branch", "branches")}`,
+        description: `${who} · ${plural(city.branchCount, "branch", "branches")}`,
       })
     } finally {
       setPending(null)
@@ -183,6 +275,16 @@ function CitiesPanel({
           value={organizationFilter}
           onChange={(event) => setOrganizationFilter(event.target.value)}
           maxLength={100}
+        />
+        <BulkButtons
+          selectLabel={organizationNeedle ? "Select all shown" : "Select all"}
+          unselectLabel={organizationNeedle ? "Unselect all shown" : "Unselect all"}
+          selectCount={organizationsToSelect.length}
+          unselectCount={organizationsToUnselect.length}
+          busy={pending === "organizations-bulk"}
+          disabled={pending !== null}
+          onSelect={() => { void bulkOrganizations(true) }}
+          onUnselect={() => setConfirming("organizations")}
         />
         <fieldset className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
           <legend className="sr-only">Organizations</legend>
@@ -227,6 +329,16 @@ function CitiesPanel({
               onChange={(event) => setCityFilter(event.target.value)}
               maxLength={100}
             />
+            <BulkButtons
+              selectLabel={cityNeedle ? "Assign all shown" : "Assign all"}
+              unselectLabel={cityNeedle ? "Unassign all shown" : "Unassign all"}
+              selectCount={citiesToAssign.length}
+              unselectCount={citiesToUnassign.length}
+              busy={pending === "cities-bulk"}
+              disabled={pending !== null}
+              onSelect={() => { void bulkCities(true) }}
+              onUnselect={() => setConfirming("cities")}
+            />
             <fieldset className="max-h-48 space-y-1 overflow-y-auto rounded-md border p-2">
               <legend className="sr-only">Cities</legend>
               {shownCities.length === 0 && <p className="p-2 text-sm text-muted-foreground">No cities.</p>}
@@ -260,6 +372,69 @@ function CitiesPanel({
         <p className="text-xs text-muted-foreground">{plural(reach.cityKeys.length, "city", "cities")} assigned.</p>
       </section>
       {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
+
+      <AlertDialog open={confirming !== null} onOpenChange={(open) => { if (!open) setConfirming(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirming === "organizations"
+                ? `Withdraw ${plural(organizationsToUnselect.length, "organization")}?`
+                : `Unassign ${plural(citiesToUnassign.length, "city", "cities")}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirming === "organizations"
+                ? `${who} stops serving, at once, every branch of these organizations reached through a city. The cities stay assigned for the other organizations.`
+                : `${who} stops serving, at once, every branch reached through these cities. Branches assigned one by one are kept.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep them</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const target = confirming
+                setConfirming(null)
+                if (target === "organizations") void bulkOrganizations(false)
+                if (target === "cities") void bulkCities(false)
+              }}
+            >
+              {confirming === "organizations" ? "Withdraw" : "Unassign"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+/** The two bulk buttons above a list; each says how many rows it would change. */
+function BulkButtons({
+  selectLabel,
+  unselectLabel,
+  selectCount,
+  unselectCount,
+  busy,
+  disabled,
+  onSelect,
+  onUnselect,
+}: Readonly<{
+  selectLabel: string
+  unselectLabel: string
+  selectCount: number
+  unselectCount: number
+  busy: boolean
+  disabled: boolean
+  onSelect: () => void
+  onUnselect: () => void
+}>) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button type="button" variant="outline" size="sm" onClick={onSelect} disabled={disabled || selectCount === 0}>
+        {selectLabel} ({selectCount})
+      </Button>
+      <Button type="button" variant="outline" size="sm" onClick={onUnselect} disabled={disabled || unselectCount === 0}>
+        {unselectLabel} ({unselectCount})
+      </Button>
+      {busy && <Loader2 className="h-4 w-4 animate-spin" aria-label="Saving" />}
     </div>
   )
 }

@@ -943,7 +943,8 @@ export default function OrderReportPage() {
                                     <div className="relative">
                                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within/search:text-indigo-500 transition-colors" />
                                         <Input
-                                            placeholder="Search Transaction..."
+                                            placeholder="Search by transaction ID, invoice number, or order ID..."
+                                            aria-label="Search order report by transaction ID, invoice number, or order ID"
                                             className="pl-11 h-11 w-[280px] bg-slate-100 dark:bg-slate-800/80 border-transparent rounded-2xl text-[11px] font-bold placeholder:text-slate-400 focus-visible:bg-white dark:focus-visible:bg-slate-900 focus-visible:ring-2 focus-visible:ring-indigo-500/20 focus-visible:border-indigo-500/30 transition-all"
                                             value={reportSearch}
                                             onChange={(e) => setReportSearch(e.target.value)}

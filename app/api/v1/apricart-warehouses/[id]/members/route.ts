@@ -12,7 +12,9 @@ import { apricartWarehouseMemberUpdateSchema, validationMessage } from "@/lib/se
  * Add or remove one account at an Apricart warehouse. Super Admin only. The
  * account must be a `WAREHOUSE` or `APRICART_EXECUTIVE` account — any other is
  * 404, so this cannot probe other accounts — and its responsibility follows
- * its role, never the body. Membership grants no access yet. The audit row is
+ * its role, never the body. Membership as an operator makes the orders
+ * transferred to the warehouse this account's work, so removing the last
+ * active operator of one with open transferred orders is refused (409). The audit row is
  * written by `lib/server/apricart-warehouses.ts`, inside the change.
  * See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
  */
@@ -42,6 +44,7 @@ export async function PUT(req: Request, props: { params: Promise<{ id: string }>
     if (outcome.kind === "not-found") return NextResponse.json({ error: "Warehouse not found" }, { status: 404 })
     if (outcome.kind === "account-not-found") return NextResponse.json({ error: "User not found" }, { status: 404 })
     if (outcome.kind === "invalid") return NextResponse.json({ error: outcome.message }, { status: 400 })
+    if (outcome.kind === "conflict") return NextResponse.json({ error: outcome.message }, { status: 409 })
     if (outcome.kind === "limit") {
       return NextResponse.json(
         { error: `A warehouse can have at most ${APRICART_WAREHOUSE_MEMBER_MAX} members` },

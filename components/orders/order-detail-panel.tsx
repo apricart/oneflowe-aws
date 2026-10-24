@@ -23,11 +23,13 @@ import {
   Loader2,
   User,
   CornerUpLeft,
+  ImageIcon,
 } from "lucide-react"
 import { format } from "date-fns"
 
 import { toast } from "@/hooks/use-toast"
 import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
+import { OrderIntakeScreenshot } from "@/components/orders/order-intake-screenshot"
 import { cn, formatPKR } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -356,6 +358,28 @@ export function OrderDetailPanel({
                   </div>
                 )}
 
+
+                {/* The customer's message the Order Desk keyed this order in
+                    from, for whoever can read the order; the endpoint behind
+                    it applies the order detail's own rule. */}
+                {order.hasIntakeScreenshot === true && typeof order.id === "number" && (
+                  <div className="space-y-3">
+                    <h3 className="text-[11px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2 pl-2">
+                      <ImageIcon className="h-3.5 w-3.5" />
+                      Customer&apos;s Order Screenshot
+                    </h3>
+                    <div className="bg-slate-50 dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800 p-4 rounded-[2rem] space-y-3">
+                      <p className="pl-1 text-xs text-slate-500 dark:text-slate-400">
+                        Attached by Apricart&apos;s Order Desk when it entered this order from the customer&apos;s message.
+                      </p>
+                      <OrderIntakeScreenshot
+                        src={`/api/v1/orders/${order.id}/intake-screenshot`}
+                        orderTid={String(order.tid ?? order.id)}
+                        className="rounded-2xl"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <OrderDetailsDisclosure
                   order={order}

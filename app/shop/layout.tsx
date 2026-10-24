@@ -1,6 +1,7 @@
 import { AppContextProvider } from "@/components/context/app-context"
 import { SessionGuard } from "@/components/shell/session-guard"
 import { RoleRenameNotice } from "@/components/shell/role-rename-notice"
+import { UnpaidInvoiceAlerts } from "@/components/payment-control/unpaid-invoice-alerts"
 import { redirect } from "next/navigation"
 import { getProtectedPageSession } from "@/lib/server/page-session"
 import { SessionUnavailable } from "@/components/shell/session-unavailable"
@@ -28,6 +29,7 @@ export default async function ShopLayout({
     <AppContextProvider>
       <SessionGuard>
         <RoleRenameNotice />
+        <UnpaidInvoiceAlerts placement="storefront" />
         {children}
       </SessionGuard>
     </AppContextProvider>

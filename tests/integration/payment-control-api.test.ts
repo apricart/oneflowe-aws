@@ -18,6 +18,7 @@ import {
   orderItems,
   orders,
   organizationInventory,
+  organizations,
   paymentControlExceptions,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
@@ -64,7 +65,11 @@ vi.mock("@/lib/server/order-notifications", () => ({
   queueOrderDeliveredNotifications: vi.fn(async () => ({ eventKeys: [], recipientCount: 0 })),
   attemptImmediateOrderEmailDelivery: vi.fn(async () => undefined),
 }))
-vi.mock("@/lib/server/overdue-payment-source", () => ({
+// Only the count is faked. The organization's toggle is still read for real:
+// a grant needs the block switched on
+// (plans/OF-PAYMENT-CONTROL-head-office-ordering-blocks-page.md).
+vi.mock("@/lib/server/overdue-payment-source", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/server/overdue-payment-source")>()),
   overduePaymentSource: vi.fn(async (_client: unknown, scope: { branchId: number }) =>
     mocks.overdueByBranch.get(scope.branchId) ?? NOT_CONFIGURED_OVERDUE_SUMMARY),
 }))
@@ -125,6 +130,11 @@ describe.skipIf(!hasTestDatabase)("branch payment control", () => {
     .where(and(eq(auditLogs.branchId, branchId), eq(auditLogs.action, action)))
     .orderBy(desc(auditLogs.id))
 
+  const setBlock = (enabled: boolean) => db
+    .update(organizations)
+    .set({ blockOrderingOnUnpaidInvoices: enabled })
+    .where(eq(organizations.id, f.organizationId))
+
   const status = (branchId: number) => resolveBranchPaymentControl(db, { organizationId: f.organizationId, branchId })
 
   const grantFor = (branchId: number, reason?: string) =>
@@ -157,6 +167,7 @@ describe.skipIf(!hasTestDatabase)("branch payment control", () => {
       assignedByUserId: f.headOfficeId,
     })))
     await db.update(globalProducts).set({ stockQuantity: 1_000 }).where(eq(globalProducts.id, f.productId))
+    await setBlock(true)
   })
 
   // The real order routes write rows the fixture helper does not know about
@@ -281,6 +292,23 @@ describe.skipIf(!hasTestDatabase)("branch payment control", () => {
       signIn(foreignHeadOffice())
       expect((await grantFor(f.alphaNorthId)).status).toBe(404)
       expect(await exceptionRows(f.alphaNorthId)).toHaveLength(0)
+    })
+
+    it("is not granted, by Head Office or Super Admin, while the organization does not block on unpaid invoices", async () => {
+      mocks.overdueByBranch.set(f.alphaNorthId, overdue(2))
+      await setBlock(false)
+      try {
+        for (const actor of [headOffice(), superAdmin()]) {
+          signIn(actor)
+          const { status: code, body } = await grantFor(f.alphaNorthId, "Cheque in transit")
+          expect(code).toBe(409)
+          expect(body.error).toBe("This organization does not block ordering on unpaid invoices, so there is nothing to make an exception to")
+        }
+        expect(await exceptionRows(f.alphaNorthId)).toHaveLength(0)
+        expect(await auditRows(f.alphaNorthId, PAYMENT_CONTROL_EXCEPTION_GRANTED_AUDIT_ACTION)).toHaveLength(0)
+      } finally {
+        await setBlock(true)
+      }
     })
 
     it("is granted by Head Office for one month, audited in the same transaction", async () => {

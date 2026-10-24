@@ -4,6 +4,7 @@ import * as mockedNextAuth from "next-auth"
 import { and, desc, eq, inArray, like } from "drizzle-orm"
 
 import * as ordersRoute from "@/app/api/v1/orders/route"
+import * as summaryRoute from "@/app/api/v1/analytics/summary/route"
 import * as receiptRoute from "@/app/api/v1/receipts/[orderId]/route"
 import * as deleteOrderRoute from "@/app/api/v1/admin/delete-order/route"
 import * as organizationsRoute from "@/app/api/v1/organizations/route"
@@ -224,6 +225,54 @@ describe.skipIf(!hasTestDatabase)("invoice status, customer STRN and the deletio
       const { body } = await read(await ordersRoute.GET(request("GET", listUrl("invoiceStatus=PROFORMA_AVAILABLE"))))
       expect(body.items.every((item: any) => item.organizationId === f.organizationId)).toBe(true)
       expect(body.items).toHaveLength(1)
+    })
+  })
+
+  describe("searching by invoice number", () => {
+    // Each organization numbers its own invoices, so another tenant can hold
+    // the same number; the search must never reach past the caller's scope.
+    const invoiceNumber = () => `ZQX-${f.suffix}-000417`
+    const receiptWith = (number: string) => ({
+      invoiceNumber: number, date: "10/09/2026", items: [], subtotal: 84.75, tax: 15.25, discount: 0, deliveryCharges: 0, totalAmount: 100,
+    })
+    let ownOrderId = 0
+    let foreignOrderId = 0
+
+    beforeAll(async () => {
+      ownOrderId = await seedOrder({ label: "S", status: "APPROVED", receiptData: receiptWith(invoiceNumber()) })
+      foreignOrderId = await seedOrder({
+        label: "S", status: "APPROVED", receiptData: receiptWith(invoiceNumber()),
+        organizationId: f.foreignOrganizationId, branchId: f.foreignBranchId,
+      })
+    })
+
+    const listIds = async (q: string) => {
+      const { status, body } = await read(await ordersRoute.GET(request("GET", `http://localhost/api/v1/orders?q=${encodeURIComponent(q)}&limit=50`)))
+      expect(status).toBe(200)
+      return body.items.map((item: any) => item.id)
+    }
+
+    const reportIds = async (q: string) => {
+      const { status, body } = await read(await summaryRoute.GET(request("GET", `http://localhost/api/v1/analytics/summary?ordersOnly=true&limit=100&q=${encodeURIComponent(q)}`)))
+      expect(status).toBe(200)
+      return body.orders.map((order: any) => order.id)
+    }
+
+    it("finds the order on the Orders list by a whole or partial invoice number, within the tenant only", async () => {
+      signIn(headOffice())
+      expect(await listIds(invoiceNumber())).toEqual([ownOrderId])
+      expect(await listIds(invoiceNumber().toLowerCase().slice(0, -2))).toEqual([ownOrderId])
+    })
+
+    it("finds the order on the Order Report by invoice number, within the tenant only", async () => {
+      signIn(headOffice())
+      expect(await reportIds(invoiceNumber())).toEqual([ownOrderId])
+    })
+
+    it("finds the order on the Order Report by its numeric id, and never another tenant's", async () => {
+      signIn(headOffice())
+      expect(await reportIds(String(ownOrderId))).toContain(ownOrderId)
+      expect(await reportIds(String(foreignOrderId))).not.toContain(foreignOrderId)
     })
   })
 

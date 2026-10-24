@@ -84,8 +84,8 @@ describe("Orders page", () => {
     fireEvent.click(screen.getByTitle("Active orders whose goods have been delivered but which are not yet fulfilled"))
     await waitFor(() => expect(lastOrdersCall()).toMatch(/status=approved.*delivery=|delivery=.*status=approved/))
 
-    fireEvent.change(screen.getByPlaceholderText("Search by transaction ID, order ID, or cost center..."), { target: { value: "TID-0002" } })
-    await waitFor(() => expect(lastOrdersCall()).toContain("q=TID-0002"), { timeout: 3000 })
+    fireEvent.change(screen.getByPlaceholderText("Search by transaction ID, invoice number, order ID, or cost center..."), { target: { value: "INV-0002" } })
+    await waitFor(() => expect(lastOrdersCall()).toContain("q=INV-0002"), { timeout: 3000 })
   })
 
   it("pages through the list on the server", async () => {

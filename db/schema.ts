@@ -1019,6 +1019,12 @@ export const orders = pgTable(
     // not use approval levels, which means "decided exactly as today".
     // See plans/OF-APPROVAL-LEVELS-route-orders-by-level.md.
     approvalLevel: integer("approval_level"),
+    // The Apricart warehouse this order was transferred to, whose operators
+    // now pick, dispatch and deliver it. Null on every order nobody has
+    // transferred, which means "worked by whoever serves its branch, as
+    // before". Written only by `transferOrderWarehouse`.
+    // See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+    fulfillmentWarehouseId: integer("fulfillment_warehouse_id").references(() => apricartWarehouses.id),
     // Where an Order Desk order came from — the customer's email, WhatsApp
     // message or call — so it can be traced back to its source. Required for a
     // desk order and null on every portal order (lib/order-desk-access.ts).
@@ -1136,6 +1142,10 @@ export const orders = pgTable(
     index("orders_delivery_address_idx")
       .on(t.deliveryAddressId)
       .where(sql`${t.deliveryAddressId} IS NOT NULL`),
+    // Partial: only a transferred order carries the column.
+    index("orders_fulfillment_warehouse_idx")
+      .on(t.fulfillmentWarehouseId, t.status)
+      .where(sql`${t.fulfillmentWarehouseId} IS NOT NULL`),
     uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
     check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
     check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
@@ -2790,9 +2800,11 @@ export const warehouseCityOrganizations = pgTable(
  * order will be fulfilled by, which keeps existing when the people working it
  * are deactivated or replaced. Never deleted — made `INACTIVE` instead.
  *
- * Configuration only for now: nothing reads these tables for an order, a reach
- * or a decision. `loadWarehouseReach` still decides what a warehouse account
- * sees. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ * An order Super Admin has transferred names one in
+ * `orders.fulfillment_warehouse_id`, and is then worked by its operator
+ * members only. Every other order is still worked through `loadWarehouseReach`
+ * (branch reach), and routes are still configuration only.
+ * See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
  */
 export const apricartWarehouses = pgTable(
   "apricart_warehouses",
@@ -2864,6 +2876,37 @@ export const branchFulfillmentRoutes = pgTable(
   },
   (t) => [
     index("branch_fulfillment_routes_warehouse_idx").on(t.warehouseId),
+  ],
+)
+
+/**
+ * Every time an order moved from one warehouse to another, oldest first.
+ * `from_warehouse_id` / `to_warehouse_id` null means "whoever serves the
+ * order's branch" — an order not yet transferred, or one handed back. Written
+ * only by `transferOrderWarehouse`, in the transaction that moves the order,
+ * beside its `ORDER_WAREHOUSE_TRANSFERRED` audit row; never updated.
+ * See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ */
+export const orderWarehouseTransfers = pgTable(
+  "order_warehouse_transfers",
+  {
+    id: serial("id").primaryKey(),
+    orderId: integer("order_id")
+      .references(() => orders.id, { onDelete: "cascade" })
+      .notNull(),
+    fromWarehouseId: integer("from_warehouse_id").references(() => apricartWarehouses.id),
+    toWarehouseId: integer("to_warehouse_id").references(() => apricartWarehouses.id),
+    reason: varchar("reason", { length: 500 }).notNull(),
+    // Null once that account is deleted; the audit row still names it.
+    transferredByUserId: uuid("transferred_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("order_warehouse_transfers_order_idx").on(t.orderId, t.id),
+    check(
+      "order_warehouse_transfers_moves_ck",
+      sql`${t.fromWarehouseId} IS DISTINCT FROM ${t.toWarehouseId}`,
+    ),
   ],
 )
 
