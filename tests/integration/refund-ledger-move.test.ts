@@ -212,7 +212,10 @@ const remainingOf = (row: { amountAllocatedCents: number; amountCreditedCents: n
   row.amountAllocatedCents + row.amountCreditedCents - row.amountSpentCents - row.amountHeldCents
 
 async function summary(f: Fixtures, dateFiltered: boolean) {
-  const today = new Date().toISOString().slice(0, 10)
+  // Date-only analytics filters are interpreted in the application's Karachi
+  // calendar. A UTC day label is one day behind after 19:00 UTC and would
+  // exclude the orders this fixture has just created.
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Karachi" }).format(new Date())
   const query = new URLSearchParams({ organizationId: String(f.organizationId), branchIds: String(f.branchIds.main) })
   if (dateFiltered) {
     query.set("preset", "this_month")
