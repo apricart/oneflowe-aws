@@ -232,6 +232,17 @@ describe("buildSideBySideWorkbookData", () => {
     ])
   })
 
+  it("labels a requester-split By month export by requester rather than by month", () => {
+    const [, month] = buildSideBySideWorkbookData(
+      [byId("by-month")],
+      { "by-month": loaded(seriesResponse({ dimension: "user" })) },
+      context({ requesters: ["Ahmed", "Sana"] }),
+    )
+
+    expect(month.columns).toEqual(["Requester", "2026-07", "2026-08", "2026-09", "Total Consumed (PKR)"])
+    expect(month.rows).toHaveLength(2)
+  })
+
   it("writes the grid with a blank for a pair that never happened, and the margins", () => {
     // "By product" with two or more requesters compared answers as a grid,
     // and its sheet is that grid: one row per person, one column per product.

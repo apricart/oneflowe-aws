@@ -1145,22 +1145,83 @@ describe.skipIf(!hasTestDatabase)("Product Performance — executive analytics r
       expect(ranked(withBudget.body)).toEqual(ranked(plain.body))
     })
 
-    it("withholds the budget under a product focus, a requester narrowing, a category, or Quantity — asked or not", async () => {
+    it("withholds the budget under a product focus, a category, or Quantity — asked or not", async () => {
       const refused = [
         { productIds: f.paperProductId },
-        { userIds: f.ahmedId },
         { categoryIds: f.stationeryCategoryId },
         { metric: "quantity", unit: "Ream" },
       ]
       for (const narrowing of refused) {
-        const { status, body } = await compare({ dimension: "branch", metric: "spend", chart: "column", budget: 1, ...narrowing })
-        expect(status, JSON.stringify(narrowing)).toBe(200)
-        expect(body.budgetBeside, JSON.stringify(narrowing)).toBe(false)
-        for (const row of body.rows) expect(row.totalBudgetCents, JSON.stringify(narrowing)).toBeUndefined()
+        for (const dimension of ["branch", "user"]) {
+          const { status, body } = await compare({ dimension, metric: "spend", chart: "column", budget: 1, ...narrowing })
+          expect(status, `${dimension} ${JSON.stringify(narrowing)}`).toBe(200)
+          expect(body.budgetBeside, `${dimension} ${JSON.stringify(narrowing)}`).toBe(false)
+          for (const row of body.rows) expect(row.totalBudgetCents, JSON.stringify(narrowing)).toBeUndefined()
+        }
       }
-      // Nor beside a dimension that holds no budget.
-      const byPerson = await compare({ dimension: "user", metric: "spend", chart: "column", budget: 1 })
-      expect(byPerson.body.budgetBeside).toBe(false)
+      // A month's budget is every fenced branch's, which a requester narrowing
+      // cannot follow, so it stays withheld there.
+      const months = await compare({ dimension: "month", metric: "spend", chart: "column", budget: 1, userIds: f.ahmedId })
+      expect(months.body.budgetBeside).toBe(false)
+    })
+
+    it("keeps each branch's whole budget beside the selected requesters' consumption", async () => {
+      // Ahmed ordered only at North: North's whole 55,000 beside his
+      // consumed 65,000 (O1 + O3 + pending O6), and no South row at all.
+      const { body } = await compare({
+        dimension: "branch", metric: "spend", chart: "column", budget: 1, statuses: "consumed", userIds: f.ahmedId,
+      })
+      expect(body.budgetBeside).toBe(true)
+      expect(budgetsOf(body).map(([label, , budget]) => [label, budget])).toEqual([[f.names.north, 55_000]])
+
+      const both = await compare({
+        dimension: "branch", metric: "spend", chart: "column", budget: 1, statuses: "consumed",
+        userIds: `${f.ahmedId},${f.sanaId}`,
+      })
+      expect(Object.fromEntries(budgetsOf(both.body).map(([label, , budget]) => [label, budget])))
+        .toEqual({ [f.names.north]: 55_000, [f.names.south]: 5_000 })
+    })
+
+    it("sets each requester beside the budget of the branches they ordered at", async () => {
+      // Ahmed: North only. Sana: South only (her cancelled and refunded
+      // orders count for nothing, and were at South anyway). The group
+      // requester ordered at both, so stands beside both, summed.
+      const { status, body } = await compare({
+        dimension: "user", metric: "spend", chart: "column", budget: 1, statuses: "consumed",
+      })
+      expect(status).toBe(200)
+      expect(body.budgetBeside).toBe(true)
+      const budgetOf = Object.fromEntries(body.rows.map((row: any) => [row.key, row.totalBudgetCents]))
+      expect(budgetOf).toEqual({ [f.ahmedId]: 55_000, [f.sanaId]: 5_000, [f.groupRequesterId]: 60_000 })
+
+      // Picking requesters changes which bars are drawn, never their budget.
+      const picked = await compare({
+        dimension: "user", metric: "spend", chart: "column", budget: 1, statuses: "consumed",
+        keys: `${f.ahmedId},${f.groupRequesterId}`, userIds: `${f.ahmedId},${f.groupRequesterId}`,
+      })
+      expect(Object.fromEntries(picked.body.rows.map((row: any) => [row.key, row.totalBudgetCents])))
+        .toEqual({ [f.ahmedId]: 55_000, [f.groupRequesterId]: 60_000 })
+
+      // A window holding only August: the group requester ordered at North
+      // then (O5), and North had no August budget; South's 5,000 is not his.
+      const august = await compare({
+        dimension: "user", metric: "spend", chart: "column", budget: 1, statuses: "consumed", startDate: "2026-08-01",
+      })
+      expect(august.body.rows.find((row: any) => row.key === f.groupRequesterId).totalBudgetCents).toBe(0)
+    })
+
+    it("reads a requester's budget only from branches inside the caller's fence", async () => {
+      // The South approver sees the group requester's South order alone, so
+      // only South's 5,000 — never North's, which is outside its reach.
+      signIn(southApprover)
+      const south = await compare({ dimension: "user", metric: "spend", chart: "column", budget: 1, statuses: "consumed" })
+      expect(south.body.rows.find((row: any) => row.key === f.groupRequesterId).totalBudgetCents).toBe(5_000)
+      expect(south.body.rows.map((row: any) => row.key)).not.toContain(f.ahmedId)
+
+      // The neighbour's Head Office: its own person beside its own 99,000, and nothing of tenant A's.
+      signIn(neighbourHeadOffice)
+      const theirs = await compare({ dimension: "user", metric: "spend", chart: "column", budget: 1, statuses: "consumed" })
+      expect(theirs.body.rows.map((row: any) => row.totalBudgetCents)).toEqual([99_000])
     })
 
     it("stands beside a group and a tenant as the sum of their branches", async () => {
