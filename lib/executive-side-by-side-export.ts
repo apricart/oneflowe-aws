@@ -3,6 +3,7 @@ import {
   MEASURE_LABEL,
   isTimeAxisDimension,
   utilizationPct,
+  type ExecutiveDimensionId,
   type MeasureId,
   type SideBySidePanel,
 } from "@/lib/executive-analytics"
@@ -43,6 +44,8 @@ export type ExportSeries = {
 
 /** What a ranking or trend panel holds once `/compare` has answered. */
 export type SideBySideComparisonResponse = {
+  /** The entity represented by each row/series; may differ from the panel's time axis presentation. */
+  dimension?: ExecutiveDimensionId
   rows: ExportRankRow[]
   series: ExportSeries[]
   periods: string[]
@@ -215,7 +218,7 @@ function rankSheet(name: string, panel: SideBySidePanel, response: SideBySideCom
 }
 
 function seriesSheet(name: string, panel: SideBySidePanel, response: SideBySideComparisonResponse): WorkbookSheet {
-  const dimensionLabel = EXECUTIVE_DIMENSIONS[panel.dimension].label
+  const dimensionLabel = EXECUTIVE_DIMENSIONS[response.dimension ?? panel.dimension].label
   const metricHeader = metricColumnHeader(response.label, response.format, response.quantityUnit.selected)
   const periods = response.periods
 

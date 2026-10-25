@@ -32,12 +32,12 @@ import {
 import type { ExecutiveFilterState } from "./executive-filters"
 
 /**
- * The requester × product grid: one figure per pair, drawn two ways.
+ * A segmented comparison grid: one figure per row/column pair, drawn two ways.
  *
- * As grouped columns — the "By product" panel with several requesters picked
- * — the products run along the axis and each requester is a series, so "who
- * consumed more of this product" is read across one cluster and "what did
- * this person consume" across one colour. As a table, the same figures sit in
+ * As grouped columns — the "By product" or "By category" panel with several
+ * requesters picked — the products or categories run along the axis and each
+ * requester is a series, so "who consumed more of this one" is read across
+ * one cluster and "what did this person consume" across one colour. As a table, the same figures sit in
  * a grid with the margins the server ranked them by, for the reader who wants
  * the numbers rather than their shape.
  *
