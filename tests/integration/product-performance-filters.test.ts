@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
 
-import { orders, refunds } from "@/db/schema"
+import { orderItems, orders, refundItems, refunds } from "@/db/schema"
 
 import * as compareRoute from "@/app/api/v1/analytics/executive/compare/route"
 import * as drillDownRoute from "@/app/api/v1/analytics/executive/drill-down/route"
@@ -374,6 +374,77 @@ describe.skipIf(!hasTestDatabase)("Product Performance — filters, alone and co
       const unfocused = byKey((await compare({ ...AMOUNT, dimension: "branch" })).body)[f.westBranchId]
       const paperOnly = byKey((await compare({ ...AMOUNT, dimension: "branch", productIds: f.paperProductId })).body)[f.westBranchId]
       expect(paperOnly).toBe(unfocused)
+    })
+  })
+
+  // A refund partly itemised and partly not, on a two-line order, at amounts
+  // that do not divide evenly. P6 (East) is Toner 9000 + Paper 1000. Its order
+  // refund is 833: 500 named on the Paper line and 333 named on no line. The
+  // 333 is shared over what the lines still charge (Toner 9000, Paper 500):
+  // 333 × 9000 / 9500 = 315.47 → Toner 315, Paper the remaining 18. So P6
+  // reads Toner 8685 + Paper 482 = 9167 = 10000 − 833, and East (Amount)
+  // reads B4 3000 + P2 5000 + 9167 = 17167.
+  describe("a refund partly itemised, shared across lines to the paisa", () => {
+    let refundIds: number[] = []
+
+    beforeAll(async () => {
+      const [paperLine] = await db
+        .select({ id: orderItems.id })
+        .from(orderItems)
+        .where(and(eq(orderItems.orderId, f.orderIds.P6), eq(orderItems.globalProductId, f.paperProductId)))
+      await db.update(orders).set({ refundAmountCents: 833 }).where(eq(orders.id, f.orderIds.P6))
+      const inserted = await db
+        .insert(refunds)
+        .values([
+          {
+            organizationId: f.organizationId,
+            orderId: f.orderIds.P6,
+            amountCents: 500,
+            taxRefundCents: 0,
+            status: "APPROVED",
+            refundNumber: `RF-ITPF-${f.suffix}-A`,
+            requestedByUserId: f.bilalId,
+            processedByUserId: f.headOfficeId,
+          },
+          {
+            organizationId: f.organizationId,
+            orderId: f.orderIds.P6,
+            amountCents: 333,
+            taxRefundCents: 0,
+            status: "APPROVED",
+            refundNumber: `RF-ITPF-${f.suffix}-B`,
+            requestedByUserId: f.bilalId,
+            processedByUserId: f.headOfficeId,
+          },
+        ])
+        .returning({ id: refunds.id })
+      refundIds = inserted.map((row) => row.id)
+      await db.insert(refundItems).values({ refundId: refundIds[0], orderItemId: paperLine.id, quantity: 1, amountCents: 500 })
+    })
+
+    afterAll(async () => {
+      await db.delete(refunds).where(inArray(refunds.id, refundIds))
+      await db.update(orders).set({ refundAmountCents: null }).where(eq(orders.id, f.orderIds.P6))
+    })
+
+    it("nets the whole refund out of the branch bar, and its drill-down agrees", async () => {
+      const { body } = await compare({ ...AMOUNT, dimension: "branch", branchIds: f.eastBranchId })
+      expect(ranked(body)).toEqual([[f.names.east, 17167]])
+      const { body: lines } = await drillDown({ ...AMOUNT, dimension: "branch", key: String(f.eastBranchId) })
+      expect(lines.totals.valueCents).toBe(17167)
+    })
+
+    it("splits the un-itemised part across the products so they add up to the branch", async () => {
+      const products = byKey((await compare({ ...AMOUNT, dimension: "product", branchIds: f.eastBranchId })).body)
+      expect(products).toEqual({
+        [f.tonerProductId]: 3000 + 8685,
+        [f.paperProductId]: 2000 + 482,
+        [f.dieselProductId]: 3000,
+      })
+      const focused = byKey((await compare({
+        ...AMOUNT, dimension: "branch", productIds: `${f.paperProductId},${f.tonerProductId},${f.dieselProductId}`,
+      })).body)[f.eastBranchId]
+      expect(focused).toBe(17167)
     })
   })
 })
