@@ -236,7 +236,7 @@ describe("the side-by-side panel registry", () => {
     // the panel's own as columns, so the pair must be one the grid accepts —
     // and a trend has nothing to split.
     const segmented = SIDE_BY_SIDE_PANELS.filter((panel) => panel.segmentBy)
-    expect(segmented.map((panel) => panel.id)).toEqual(["by-product"])
+    expect(segmented.map((panel) => panel.id)).toEqual(["by-product", "by-category"])
     for (const panel of segmented) {
       expect(panel.chart, panel.id).not.toBe("line")
       expect(panel.segmentBy, panel.id).not.toBe(panel.dimension)
@@ -266,12 +266,12 @@ describe("the side-by-side panel registry", () => {
     expect(dimensions).toContain("month")
   })
 
-  it("sets the budget beside the two panels whose entities hold one, and no other", () => {
+  it("sets the budget beside the panels whose entities hold one or order against one, and no other", () => {
     // A branch holds a budget directly; a month is the grain the ledger is
-    // kept at. A product, a person or a category has no budget of its own, so
-    // asking would only ever be refused.
+    // kept at; a person stands beside the branch they ordered at. A product
+    // or a category has no budget of its own, so asking would be refused.
     const withBudget = SIDE_BY_SIDE_PANELS.filter((panel) => panel.budgetBeside).map((panel) => panel.id)
-    expect(withBudget).toEqual(["by-branch", "by-month"])
+    expect(withBudget).toEqual(["by-requester", "by-branch", "by-month"])
     for (const panel of SIDE_BY_SIDE_PANELS.filter((entry) => entry.budgetBeside)) {
       expect(panel.chart, panel.id).toBe("column")
       expect(canShowBudgetBeside(panel.dimension, "spend", { lineScoped: false, userScoped: false }), panel.id).toBe(true)

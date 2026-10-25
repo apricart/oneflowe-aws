@@ -10,6 +10,7 @@ import {
   MATRIX_MAX_ENTITIES,
   MATRIX_METRICS,
   MAX_COMPARE_ENTITIES,
+  budgetBesideScopeNote,
   budgetBesideWithheldReason,
   canShowBudgetBeside,
   chartMode,
@@ -446,13 +447,13 @@ describe("role-gated dimensions", () => {
 describe("a budget beside the bars", () => {
   const clear = { lineScoped: false, userScoped: false }
 
-  it("stands only beside the entities a budget is held against, and the month the ledger is kept by", () => {
-    expect(BUDGET_BESIDE_DIMENSIONS).toEqual(["branch", "group", "organization", "month"])
+  it("stands only beside the entities a budget is held against, the month the ledger is kept by, and a requester's branch", () => {
+    expect(BUDGET_BESIDE_DIMENSIONS).toEqual(["branch", "group", "organization", "month", "user"])
     for (const dimension of BUDGET_BESIDE_DIMENSIONS) {
       expect(isBudgetBesideDimension(dimension)).toBe(true)
       expect(canShowBudgetBeside(dimension, "spend", clear), dimension).toBe(true)
     }
-    for (const dimension of ["user", "product", "category", "day"] as const) {
+    for (const dimension of ["product", "category", "day"] as const) {
       expect(isBudgetBesideDimension(dimension)).toBe(false)
       expect(canShowBudgetBeside(dimension, "spend", clear), dimension).toBe(false)
       expect(budgetBesideWithheldReason(dimension, "spend", clear)).toMatch(/held per branch and per month/)
@@ -469,7 +470,7 @@ describe("a budget beside the bars", () => {
     }
   })
 
-  it("is withheld under a product, category or requester narrowing it cannot follow, naming the narrowing", () => {
+  it("is withheld under a product or category narrowing, and a requester narrowing it cannot follow, naming the narrowing", () => {
     // A branch's whole budget beside its spend on one product, or beside two
     // people's share of it, would be apples against oranges. Withheld, never
     // approximated — and the reason names what to clear.
@@ -480,6 +481,27 @@ describe("a budget beside the bars", () => {
     // The product reason wins when both apply: clearing it is the first step.
     expect(budgetBesideWithheldReason("branch", "spend", { lineScoped: true, userScoped: true })).toMatch(/not per product/)
     expect(canShowBudgetBeside("branch", "spend", { lineScoped: true, userScoped: false })).toBe(false)
+    expect(canShowBudgetBeside("user", "spend", { lineScoped: true, userScoped: false })).toBe(false)
+    for (const dimension of ["group", "organization", "month"] as const) {
+      expect(canShowBudgetBeside(dimension, "spend", { lineScoped: false, userScoped: true }), dimension).toBe(false)
+    }
+  })
+
+  it("stays beside a branch or a requester when requesters are picked, since it is the branch's whole budget either way", () => {
+    for (const dimension of ["branch", "user"] as const) {
+      expect(canShowBudgetBeside(dimension, "spend", { lineScoped: false, userScoped: true }), dimension).toBe(true)
+    }
+    // Still money only.
+    expect(canShowBudgetBeside("user", "quantity", { lineScoped: false, userScoped: true })).toBe(false)
+  })
+
+  it("says what the budget stands for where it is not the entity's own", () => {
+    const picked = { lineScoped: false, userScoped: true }
+    expect(budgetBesideScopeNote("user", clear)).toMatch(/branch they ordered at.*share that one budget/)
+    expect(budgetBesideScopeNote("user", picked)).toMatch(/branch they ordered at/)
+    expect(budgetBesideScopeNote("branch", picked)).toMatch(/full budget.*only the selected requesters/)
+    expect(budgetBesideScopeNote("branch", clear)).toBeNull()
+    expect(budgetBesideScopeNote("month", clear)).toBeNull()
   })
 })
 

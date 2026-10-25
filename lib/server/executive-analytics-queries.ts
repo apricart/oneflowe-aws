@@ -422,8 +422,16 @@ const ENTITY_DIMENSION_COLUMNS: Record<Exclude<ExecutiveDimensionId, "category" 
  * previous month — so the month comparison and the budget it was being read
  * against disagreed at every boundary. It matters far more at day grain, where
  * five hours is a fifth of the bucket.
+ *
+ * `created_at` is `timestamptz`, so one `AT TIME ZONE 'Asia/Karachi'` yields
+ * the Karachi wall-clock time whatever the session zone is. The double form
+ * other analytics routes use — `(x AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi'`
+ * — is the conversion for a column *without* a zone: applied to this one it
+ * reads the UTC wall time as Karachi's and converts back, landing ten hours
+ * behind Karachi on a UTC session. That filed an order placed at 08:00 on the
+ * 1st under the previous month, outside the range the reader had chosen.
  */
-const APP_LOCAL_CREATED_AT = sql`((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`
+const APP_LOCAL_CREATED_AT = sql`(${orders.createdAt} AT TIME ZONE 'Asia/Karachi')`
 
 const MONTH_DIMENSION_COLUMN: DimensionColumn = {
   key: sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM')`,
@@ -941,12 +949,48 @@ async function loadMonthBudgets(scope: ExecutiveScope, filters: ExecutiveFilters
 }
 
 /**
+ * Total Budget per requester: the budget of each branch their counted orders
+ * in the window were placed at, summed over those branches.
+ *
+ * "Their branch" is read from the orders, never from `users.branch_id`, so a
+ * group requester ordering for three branches stands beside those three, and
+ * a person moved since stands beside the branch the money came from. The
+ * pairs come from the same conditions as the comparison itself, so a branch
+ * appears only where the bar beside it has orders there. Each branch's figure
+ * is the "By branch" panel's own (`loadBudgetRollup`), so the two agree.
+ */
+async function loadRequesterBudgets(
+  scope: ExecutiveScope,
+  filters: ExecutiveFilters,
+  userIds: string[],
+): Promise<Map<string, number>> {
+  if (userIds.length === 0) return new Map()
+
+  const [pairs, branchBudgets] = await Promise.all([
+    db
+      .selectDistinct({ userId: orders.createdByUserId, branchId: orders.branchId })
+      .from(orders)
+      .where(and(...orderConditions(scope, filters), inArray(orders.createdByUserId, userIds))),
+    loadBudgetRollup(scope, filters, "branch"),
+  ])
+
+  const budgetOfBranch = new Map(branchBudgets.map((row) => [row.branchId, row.totalBudgetCents]))
+  const budgetOfUser = new Map<string, number>()
+  for (const pair of pairs) {
+    if (!pair.userId || pair.branchId === null) continue
+    budgetOfUser.set(pair.userId, (budgetOfUser.get(pair.userId) ?? 0) + (budgetOfBranch.get(pair.branchId) ?? 0))
+  }
+  return budgetOfUser
+}
+
+/**
  * Sets each entity's Total Budget beside its ranked figure.
  *
  * A branch, group or tenant takes the rollup the Overview is built from, so
  * the budget beside a bar is the same number as the budget on the Overview's
- * chart for the same window. A month takes the ledger summed by period over
- * the fenced branches.
+ * chart for the same window. A requester takes the budget of the branches
+ * they ordered at (`loadRequesterBudgets`). A month takes the ledger summed by
+ * period over the fenced branches.
  *
  * The month axis is also **filled**: a month inside the window that nobody
  * ordered in has no row from the order read, but a budget it was given is
@@ -967,6 +1011,11 @@ export async function attachBudgetBeside(
   if (isBudgetRollupDimension(dimension)) {
     const rollup = await loadBudgetRollup(scope, filters, dimension)
     const budgetOf = new Map(rollup.map((row) => [row.key, row.totalBudgetCents]))
+    return rows.map((row) => ({ ...row, totalBudgetCents: budgetOf.get(row.key) ?? 0 }))
+  }
+
+  if (dimension === "user") {
+    const budgetOf = await loadRequesterBudgets(scope, filters, rows.map((row) => row.key))
     return rows.map((row) => ({ ...row, totalBudgetCents: budgetOf.get(row.key) ?? 0 }))
   }
 

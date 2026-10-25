@@ -588,16 +588,28 @@ export function resolveMatrixGrain(
 
 /**
  * The dimensions a Total Budget column can stand beside a Procurement Value
- * column: the entities a budget is held against, directly or by rollup, and
- * the month — the grain the ledger itself is kept at, so a month's budget is
- * the sum of the fenced branches' allocations for that period.
+ * column: the entities a budget is held against, directly or by rollup, the
+ * month — the grain the ledger itself is kept at, so a month's budget is the
+ * sum of the fenced branches' allocations for that period — and the
+ * requester, who is set beside the budget of the branch they ordered at.
  */
-export const BUDGET_BESIDE_DIMENSIONS = ["branch", "group", "organization", "month"] as const satisfies readonly ExecutiveDimensionId[]
+export const BUDGET_BESIDE_DIMENSIONS = ["branch", "group", "organization", "month", "user"] as const satisfies readonly ExecutiveDimensionId[]
 export type BudgetBesideDimension = (typeof BUDGET_BESIDE_DIMENSIONS)[number]
 
 export function isBudgetBesideDimension(value: unknown): value is BudgetBesideDimension {
   return typeof value === "string" && (BUDGET_BESIDE_DIMENSIONS as readonly string[]).includes(value)
 }
+
+/**
+ * The dimensions whose budget is still shown when requesters are picked.
+ *
+ * Each bar there is one branch, or one person at their branch, so the budget
+ * beside it is that branch's whole budget for the period, unchanged by who is
+ * picked; the note under the panel says so. A month, group or tenant budget
+ * is the sum of every fenced branch's, which the picked people may never have
+ * ordered at, so those stay withheld.
+ */
+const REQUESTER_INDEPENDENT_BUDGET_DIMENSIONS: readonly ExecutiveDimensionId[] = ["branch", "user"]
 
 /** The narrowings a request may carry that a budget cannot follow. */
 export type BudgetBesideNarrowing = {
@@ -614,9 +626,11 @@ export type BudgetBesideNarrowing = {
  * A budget is money held per branch per month, and nothing else: it has no
  * quantity, no share for one product and no share for one person. So it is
  * withheld — never approximated — the moment the comparison measures anything
- * but money, or is narrowed to products, categories or requesters. One rule
- * decides both what a panel asks for and what the server will attach, so
- * neither side can show a budget the other would not.
+ * but money, or is narrowed to products or categories. A requester narrowing
+ * withholds it too, except beside a branch or a requester, where the whole
+ * branch budget is shown as it is (`REQUESTER_INDEPENDENT_BUDGET_DIMENSIONS`).
+ * One rule decides both what a panel asks for and what the server will
+ * attach, so neither side can show a budget the other would not.
  */
 export function budgetBesideWithheldReason(
   dimension: ExecutiveDimensionId,
@@ -628,7 +642,28 @@ export function budgetBesideWithheldReason(
   }
   if (metric !== "spend") return "Budget is money, so it is shown beside the bars only when measuring by amount."
   if (narrowing.lineScoped) return "Budget is held per branch, not per product, so it is shown only against all products. Clear the product focus to see it."
-  if (narrowing.userScoped) return "Budget is held per branch, not per requester, so it is shown only against all requesters. Clear the requesters to see it."
+  if (narrowing.userScoped && !REQUESTER_INDEPENDENT_BUDGET_DIMENSIONS.includes(dimension)) {
+    return "Budget is held per branch, not per requester, so it is shown only against all requesters. Clear the requesters to see it."
+  }
+  return null
+}
+
+/**
+ * What the Total Budget beside a branch or requester stands for, when it is
+ * not simply "this entity's budget" — or null when it is.
+ *
+ * A requester's budget is their branch's, shared with everyone else there; a
+ * branch's budget beside a few people's consumption is still the whole
+ * branch's. Either would read as "this much left for these people" without a
+ * word, so the panel says it.
+ */
+export function budgetBesideScopeNote(dimension: ExecutiveDimensionId, narrowing: BudgetBesideNarrowing): string | null {
+  if (dimension === "user") {
+    return "Each requester's Total budget is the full budget, for the period, of the branch they ordered at (summed when they ordered at several). Requesters at the same branch share that one budget, so do not add their budgets together."
+  }
+  if (dimension === "branch" && narrowing.userScoped) {
+    return "Total budget is each branch's full budget for the period; the column beside it counts only the selected requesters' orders."
+  }
   return null
 }
 
@@ -1096,10 +1131,9 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
    * The ranked panels draw upright columns rather than bars listed downward,
    * so the comparison reads left to right like the month panel beside it.
    *
-   * With several requesters picked to compare, the panel becomes requester
-   * against product, uncombined: one cluster per product, one column per
-   * person inside it, so "who consumed how much of this product" is read
-   * across a cluster and "what did this person consume" across one colour.
+   * With several requesters picked to compare, the product and category
+   * panels become requester grids: one cluster per product/category, one
+   * column per person inside it, so each person's contribution stays visible.
    * "By requester" with three products in focus gives one bar per person
    * summed over the three; this gives the nine figures behind those bars.
    */
@@ -1125,22 +1159,29 @@ export const SIDE_BY_SIDE_PANELS: SideBySidePanel[] = [
     title: "By category",
     question: "Which product categories were ordered the most? Each bar adds up every product in that category.",
     colorful: true,
+    segmentBy: "user",
     hiddenForSingleProduct: true,
     withheldNote: "A single product belongs to one category, so there is nothing to compare here. Choose more products, or clear the selection, to see it.",
     dualValueLabels: true,
   },
+  /**
+   * A person holds no budget of their own, so each column stands beside the
+   * budget of the branch they ordered at — shared with everyone else there,
+   * which the panel's note says.
+   */
   {
     id: "by-requester",
     dimension: "user",
     chart: "column",
     title: "By requester",
-    question: "Which people ordered the most? Each bar is one person's total.",
+    question: "Which people ordered the most? Each bar is one person's total, shown next to their branch's budget.",
     colorful: true,
+    budgetBeside: true,
     dualValueLabels: true,
   },
   /**
-   * The two panels whose entities hold a budget — a branch directly, a month
-   * as the ledger's own grain — set the Total Budget beside each column, so
+   * The panels whose entities hold a budget — a branch directly, a month as
+   * the ledger's own grain — set the Total Budget beside each column, so
    * "which consumed the most" is read against "and how much was it given".
    */
   {

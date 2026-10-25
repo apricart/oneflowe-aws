@@ -73,12 +73,17 @@ const REQUESTERS_BY_BRANCH: Record<string, Array<{ key: string; label: string }>
 
 /** The canned answer to the one `/matrix` request, shaped by the same flags. */
 function matrixResponse(url: string) {
-  const isQuantity = url.includes("metric=quantity")
+  const params = new URL(`http://x${url}`).searchParams
+  const isQuantity = params.get("metric") === "quantity"
+  const isCategory = params.get("columns") === "category"
+  const [[first, firstLabel], [second, secondLabel]] = isCategory
+    ? [["4", "Stationery"], ["5", "Fuel"]]
+    : [["186", "A4 Paper"], ["187", "Toner"]]
   return {
     rowDimension: "user",
-    columnDimension: "product",
+    columnDimension: isCategory ? "category" : "product",
     rowLabel: "Requester",
-    columnLabel: "Product",
+    columnLabel: isCategory ? "Category" : "Product",
     metric: isQuantity ? "quantity" : "spend",
     grain: "line",
     format: isQuantity ? "quantity" : "currency",
@@ -88,12 +93,12 @@ function matrixResponse(url: string) {
     quantityUnit: { selected: selectedUnit, conflict: false, available: [] },
     limits: { rows: 12, columns: 12 },
     rows: emptyRows ? [] : [{ key: "u1", label: "Ahmed", total: 700 }, { key: "u2", label: "Sana", total: 300 }],
-    columns: emptyRows ? [] : [{ key: "186", label: "A4 Paper", total: 600 }, { key: "187", label: "Toner", total: 400 }],
+    columns: emptyRows ? [] : [{ key: first, label: firstLabel, total: 600 }, { key: second, label: secondLabel, total: 400 }],
     cells: emptyRows ? [] : [
-      { row: "u1", column: "186", value: 400, spendCents: 400, quantity: 4, orderCount: 1 },
-      { row: "u1", column: "187", value: 300, spendCents: 300, quantity: 1, orderCount: 1 },
-      { row: "u2", column: "186", value: 200, spendCents: 200, quantity: 2, orderCount: 1 },
-      { row: "u2", column: "187", value: 100, spendCents: 100, quantity: 1, orderCount: 1 },
+      { row: "u1", column: first, value: 400, spendCents: 400, quantity: 4, orderCount: 1 },
+      { row: "u1", column: second, value: 300, spendCents: 300, quantity: 1, orderCount: 1 },
+      { row: "u2", column: first, value: 200, spendCents: 200, quantity: 2, orderCount: 1 },
+      { row: "u2", column: second, value: 100, spendCents: 100, quantity: 1, orderCount: 1 },
     ],
     blocked,
   }
@@ -101,11 +106,13 @@ function matrixResponse(url: string) {
 
 /** The canned answer to one `/compare` request, shaped by the flags above. */
 function comparisonResponse(url: string) {
-  const isSeries = url.includes("chart=line")
-  const isQuantity = url.includes("metric=quantity")
+  const params = new URL(`http://x${url}`).searchParams
+  const isSeries = params.get("chart") === "line"
+  const isQuantity = params.get("metric") === "quantity"
   // As the server does: the budget is set beside the row only when asked for.
   const budgetBeside = url.includes("budget=1")
   return {
+    dimension: params.get("dimension"),
     rows: isSeries || emptyRows ? [] : [{
       key: "7", label: "North Zone", value: 100, previousValue: 0, changePct: null,
       spendCents: 100, quantity: 0, orderCount: 1, avgUnitPriceCents: 0, share: 100, cumulativeShare: 100,
@@ -136,7 +143,7 @@ vi.mock("./matrix-chart", async (importOriginal) => {
         type="button"
         onClick={() => onDrillDown(actual.cellDrillTarget(response, response.rows[1], response.columns[1]))}
       >
-        grid cell
+        grid {response.columnDimension}
       </button>
     ),
   }
@@ -146,9 +153,9 @@ vi.mock("./comparison-charts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./comparison-charts")>()
   return {
     ...actual,
-    ComparisonChart: ({ rows, series, dimension, onDrillDown }: any) => (
+    ComparisonChart: ({ rows, series, dimension, seriesVariant, onDrillDown }: any) => (
       <button type="button" onClick={() => onDrillDown({ dimension, key: rows[0]?.key ?? series[0]?.key, label: "x" })}>
-        bar {dimension}
+        bar {seriesVariant === "grouped-columns" ? "month requesters" : dimension}
       </button>
     ),
     SeriesTable: () => null,
@@ -196,18 +203,25 @@ function panelRequests() {
   for (const url of requested) {
     if (!url.includes("/compare?")) continue
     const params = new URL(`http://x${url}`).searchParams
-    // One entry per panel: dimension + chart identifies it. The last request wins.
-    seen.set(`${params.get("dimension")}:${params.get("chart")}`, params)
+    // The month panel intentionally reuses the requester-series endpoint once
+    // people are selected, but presents it as grouped monthly columns.
+    const key = params.get("presentation") === "requester-bars"
+      ? "month:requester-columns"
+      : `${params.get("dimension")}:${params.get("chart")}`
+    seen.set(key, params)
   }
   return seen
 }
 
 const panelTitles = () => screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent)
 
-/** The latest `/matrix` request, parsed. */
-function gridRequest() {
-  const url = requested.filter((entry) => entry.includes("/matrix?")).at(-1)
-  if (!url) throw new Error("no grid request")
+/** The latest `/matrix` request for a column dimension, parsed. */
+function gridRequest(columns: "product" | "category") {
+  const url = requested.filter((entry) => {
+    if (!entry.includes("/matrix?")) return false
+    return new URL(`http://x${entry}`).searchParams.get("columns") === columns
+  }).at(-1)
+  if (!url) throw new Error(`no ${columns} grid request`)
   return new URL(`http://x${url}`).searchParams
 }
 
@@ -219,7 +233,7 @@ function openPicker(name: RegExp) {
   return screen.getByRole("list")
 }
 
-/** Ticks Ahmed and Sana to compare, which is what turns "By product" into the grid. */
+/** Ticks Ahmed and Sana, turning product and category rankings into grids. */
 function compareAhmedAndSana() {
   const list = openPicker(/All requesters/)
   fireEvent.click(within(list).getByText("Ahmed"))
@@ -276,9 +290,9 @@ describe("what the screen asks for", () => {
       expect(params.has("productIds")).toBe(false)
       expect(params.has("userIds")).toBe(false)
     }
-    // Only the two panels whose entities hold a budget ask for it beside their columns.
+    // Only the panels whose entities hold or order against a budget ask for it beside their columns.
     const askingForBudget = [...panels.entries()].filter(([, params]) => params.get("budget") === "1").map(([id]) => id).sort()
-    expect(askingForBudget).toEqual(["branch:column", "month:column"])
+    expect(askingForBudget).toEqual(["branch:column", "month:column", "user:column"])
     expect(screen.getByText(/All products/, { selector: "strong" })).toBeTruthy()
     expect(screen.getByText(/measured by consumed/)).toBeTruthy()
     expect(screen.queryByText(/Procurement Value/i)).toBeNull()
@@ -286,7 +300,7 @@ describe("what the screen asks for", () => {
 
     // With nobody compared there is no grid to ask for: every panel is a ranking or a trend.
     expect(gridUrls()).toHaveLength(0)
-    expect(screen.queryByRole("button", { name: "grid cell" })).toBeNull()
+    expect(screen.queryByRole("button", { name: /grid (product|category)/ })).toBeNull()
   })
 
   it("narrows the grid to the ticked requesters and focused products, as ordinary filters", () => {
@@ -297,7 +311,7 @@ describe("what the screen asks for", () => {
     fireEvent.click(within(list).getByText("Toner"))
 
     // Requesters as rows, products as columns, under the same filters and cap.
-    const grid = gridRequest()
+    const grid = gridRequest("product")
     expect(grid.get("rows")).toBe("user")
     expect(grid.get("columns")).toBe("product")
     expect(grid.get("metric")).toBe("spend")
@@ -330,6 +344,21 @@ describe("what the screen asks for", () => {
     expect(productOptions).toContain("statuses=consumed")
     expect(userOptions).toContain("statuses=consumed")
     expect(userOptions).not.toContain("userIds=")
+  })
+
+  it("splits By month into one consumed bar per selected requester", () => {
+    render(<SideBySideWorkspace filters={filters()} />)
+    compareAhmedAndSana()
+
+    const month = panelRequests().get("month:requester-columns")
+    expect(month).toBeTruthy()
+    expect(month?.get("dimension")).toBe("user")
+    expect(month?.get("chart")).toBe("line")
+    expect(month?.get("keys")).toBe("u1,u2")
+    expect(month?.get("userIds")).toBe("u1,u2")
+    expect(month?.get("limit")).toBe("2")
+    expect(screen.getByRole("button", { name: "bar month requesters" })).toBeTruthy()
+    expect(screen.getByText(/Every requester has a separate bar/)).toBeTruthy()
   })
 
   it("drops a compared requester the newly selected branch does not list, and keeps the rest", () => {
@@ -377,29 +406,34 @@ describe("what the screen asks for", () => {
     for (const params of panelRequests().values()) expect(params.get("userIds")).toBe("u1,u2")
   })
 
-  it("turns the product panel into the requester × product grid once two people are compared", () => {
+  it("turns product and category panels into requester grids once two people are compared", () => {
     render(<SideBySideWorkspace filters={filters()} />)
-    // One person compared: the product panel is still its plain ranking, and no grid is asked for.
+    // One person compared: both panels are still plain rankings, and no grid is asked for.
     const list = openPicker(/All requesters/)
     let panels = after(() => fireEvent.click(within(list).getByText("Ahmed")))
     expect(panels.has("product:column")).toBe(true)
+    expect(panels.has("category:column")).toBe(true)
     expect(gridUrls()).toHaveLength(0)
-    expect(screen.queryByRole("button", { name: "grid cell" })).toBeNull()
+    expect(screen.queryByRole("button", { name: /grid (product|category)/ })).toBeNull()
 
-    // Two: the product panel is served by the grid — requesters as rows,
-    // products as columns, drawn grouped — and its ranking request is gone.
+    // Two: both panels are served by grids — requesters as rows and each
+    // panel's dimension as columns — and their ranking requests are gone.
     requested.length = 0
     fireEvent.click(within(list).getByText("Sana"))
     panels = panelRequests()
     expect(panels.has("product:column")).toBe(false)
+    expect(panels.has("category:column")).toBe(false)
     expect(panels.has("product:line")).toBe(true)
-    expect(screen.getAllByRole("button", { name: "grid cell" })).toHaveLength(1)
-    expect(gridUrls()).toHaveLength(1)
-    const grid = gridRequest()
-    expect(grid.get("rows")).toBe("user")
-    expect(grid.get("columns")).toBe("product")
-    expect(grid.get("userIds")).toBe("u1,u2")
-    expect(grid.get("limit")).toBe("12")
+    expect(screen.getByRole("button", { name: "grid product" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "grid category" })).toBeTruthy()
+    expect(gridUrls()).toHaveLength(2)
+    for (const columns of ["product", "category"] as const) {
+      const grid = gridRequest(columns)
+      expect(grid.get("rows")).toBe("user")
+      expect(grid.get("columns")).toBe(columns)
+      expect(grid.get("userIds")).toBe("u1,u2")
+      expect(grid.get("limit")).toBe("12")
+    }
     // The panel keeps its place, its title and its question.
     expect(panelTitles()).toEqual([
       "By product", "By category", "By requester", "By branch", "By month",
@@ -409,8 +443,9 @@ describe("what the screen asks for", () => {
     // Untick one and the plain ranking is back.
     panels = after(() => fireEvent.click(within(list).getByText("Ahmed")))
     expect(panels.has("product:column")).toBe(true)
+    expect(panels.has("category:column")).toBe(true)
     expect(gridUrls()).toHaveLength(0)
-    expect(screen.queryByRole("button", { name: "grid cell" })).toBeNull()
+    expect(screen.queryByRole("button", { name: /grid (product|category)/ })).toBeNull()
   })
 
   it("keeps By product in the single-product layout with day-by-day, and back", () => {
@@ -491,18 +526,23 @@ describe("what the screen asks for", () => {
   })
 })
 
-describe("the budget beside By branch and By month", () => {
+describe("the budget beside By branch, By requester and By month", () => {
   const budgetRequests = () => [...panelRequests().entries()]
     .filter(([, params]) => params.get("budget") === "1")
     .map(([id]) => id)
     .sort()
   const withheldNotes = () => screen.queryAllByText(/Budget is (money|held per branch)/).map((note) => note.textContent)
+  const scopeNotes = () => screen.queryAllByText(/(Each requester's Total budget|Total budget is each branch's full budget)/)
+    .map((note) => note.textContent)
 
   it("is asked for under Amount with nothing focused, drawn with its legend and note, and never on the Explore-style panels", () => {
     render(<SideBySideWorkspace filters={filters()} />)
-    expect(budgetRequests()).toEqual(["branch:column", "month:column"])
+    expect(budgetRequests()).toEqual(["branch:column", "month:column", "user:column"])
     expect(withheldNotes()).toEqual([])
-    // The two panels' tables carry the budget columns; no other panel's does.
+    // Only the requester panel needs to say whose budget it is.
+    expect(scopeNotes()).toHaveLength(1)
+    expect(scopeNotes()[0]).toMatch(/branch they ordered at/)
+    // The budget panels' tables carry the budget columns; no other panel's does.
     fireEvent.click(screen.getByRole("button", { name: "Show By branch as a table" }))
     let table = screen.getByRole("table")
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual([
@@ -512,6 +552,10 @@ describe("the budget beside By branch and By month", () => {
     fireEvent.click(screen.getByRole("button", { name: "Show By branch as a chart" }))
     fireEvent.click(screen.getByRole("button", { name: "Show By requester as a table" }))
     table = screen.getByRole("table")
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toContain("Total Budget")
+    fireEvent.click(screen.getByRole("button", { name: "Show By requester as a chart" }))
+    fireEvent.click(screen.getByRole("button", { name: "Show By product as a table" }))
+    table = screen.getByRole("table")
     expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).not.toContain("Total Budget")
   })
 
@@ -519,10 +563,8 @@ describe("the budget beside By branch and By month", () => {
     render(<SideBySideWorkspace filters={filters()} />)
     after(() => fireEvent.click(screen.getByRole("button", { name: "Quantity" })))
     expect(budgetRequests()).toEqual([])
-    expect(withheldNotes()).toEqual([
-      "Budget is money, so it is shown beside the bars only when measuring by amount.",
-      "Budget is money, so it is shown beside the bars only when measuring by amount.",
-    ])
+    expect(withheldNotes()).toEqual(Array(3).fill("Budget is money, so it is shown beside the bars only when measuring by amount."))
+    expect(scopeNotes()).toEqual([])
   })
 
   it("is withdrawn while a product is in focus, and comes back when the focus is cleared", () => {
@@ -530,22 +572,26 @@ describe("the budget beside By branch and By month", () => {
     const list = openPicker(/All products/)
     after(() => fireEvent.click(within(list).getByText("A4 Paper")))
     expect(budgetRequests()).toEqual([])
-    expect(withheldNotes()).toEqual([
+    expect(withheldNotes()).toEqual(Array(3).fill(
       "Budget is held per branch, not per product, so it is shown only against all products. Clear the product focus to see it.",
-      "Budget is held per branch, not per product, so it is shown only against all products. Clear the product focus to see it.",
-    ])
+    ))
 
     after(() => fireEvent.click(screen.getByRole("button", { name: /Clear selection/ })))
-    expect(budgetRequests()).toEqual(["branch:column", "month:column"])
+    expect(budgetRequests()).toEqual(["branch:column", "month:column", "user:column"])
     expect(withheldNotes()).toEqual([])
   })
 
-  it("is withdrawn while requesters are compared, naming them as what to clear", () => {
+  it("stays beside branches and requesters while requesters are compared, saying it is the branch's whole budget", () => {
     render(<SideBySideWorkspace filters={filters()} />)
     const list = openPicker(/All requesters/)
     after(() => fireEvent.click(within(list).getByText("Ahmed")))
-    expect(budgetRequests()).toEqual([])
-    expect(withheldNotes()).toHaveLength(2)
+    expect(budgetRequests()).toEqual(["branch:column", "user:column"])
+    for (const params of panelRequests().values()) expect(params.get("userIds")).toBe("u1")
+    expect(scopeNotes()).toHaveLength(2)
+    expect(scopeNotes()).toContainEqual(expect.stringMatching(/each branch's full budget.*only the selected requesters/))
+    // The month panel turns into one bar per requester, where a month's
+    // budget — every branch's — cannot follow, and says so.
+    expect(withheldNotes()).toHaveLength(1)
     expect(withheldNotes()[0]).toMatch(/not per requester.*Clear the requesters to see it\./)
   })
 
@@ -635,7 +681,7 @@ describe("full-width panels", () => {
 
     // The product panel widens the same way once it has become the grid.
     compareAhmedAndSana()
-    expect(screen.getByRole("button", { name: "grid cell" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "grid product" })).toBeTruthy()
     const grid = screen.getByRole("checkbox", { name: "Show By product at full width" })
     fireEvent.click(grid)
     expect(cardOf(grid).className).toContain("xl:col-span-2")
@@ -685,13 +731,27 @@ describe("drill-down from the grid", () => {
     fireEvent.click(within(list).getByText("A4 Paper"))
     fireEvent.click(within(list).getByText("Toner"))
 
-    fireEvent.click(screen.getByRole("button", { name: "grid cell" }))
+    fireEvent.click(screen.getByRole("button", { name: "grid product" }))
     expect(document.getElementById("executive-drill-down")).not.toBeNull()
     const drill = new URL(`http://x${requested.filter((u) => u.includes("/drill-down?")).at(-1)}`).searchParams
     expect(drill.get("dimension")).toBe("user")
     expect(drill.get("key")).toBe("u2")
     // The cell's product replaces the screen's two-product focus for this table alone.
     expect(drill.get("productIds")).toBe("187")
+    expect(drill.get("branchIds")).toBe("7")
+    expect(drill.get("statuses")).toBe("consumed")
+  })
+
+  it("opens a category pair's lines: the person as the key, the category as a narrowing", () => {
+    render(<SideBySideWorkspace filters={filters()} />)
+    compareAhmedAndSana()
+
+    fireEvent.click(screen.getByRole("button", { name: "grid category" }))
+    expect(document.getElementById("executive-drill-down")).not.toBeNull()
+    const drill = new URL(`http://x${requested.filter((u) => u.includes("/drill-down?")).at(-1)}`).searchParams
+    expect(drill.get("dimension")).toBe("user")
+    expect(drill.get("key")).toBe("u2")
+    expect(drill.get("categoryIds")).toBe("5")
     expect(drill.get("branchIds")).toBe("7")
     expect(drill.get("statuses")).toBe("consumed")
   })
