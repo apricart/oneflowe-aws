@@ -68,14 +68,20 @@ function filterConditions(query: WarehouseOrderListQuery, now: Date): SQL[] {
   if (query.organizationId !== null) conditions.push(eq(orders.organizationId, query.organizationId))
   if (query.branchId !== null) conditions.push(eq(orders.branchId, query.branchId))
   if (query.search) {
-    const pattern = `%${escapeLikePattern(query.search)}%`
     const searchedOrderId = parseRouteId(query.search)
-    conditions.push(or(
-      ...(searchedOrderId === null ? [] : [eq(orders.id, searchedOrderId)]),
-      ilike(orders.tid, pattern),
-      sql`${invoiceNumber} ILIKE ${pattern}`,
-      ilike(branches.name, pattern),
-    )!)
+    if (searchedOrderId !== null) {
+      // A positive integer is an exact database order id, not also a partial
+      // text search. Otherwise an id such as "55" can return unrelated orders
+      // whose tenant-generated references or branch names happen to contain it.
+      conditions.push(eq(orders.id, searchedOrderId))
+    } else {
+      const pattern = `%${escapeLikePattern(query.search)}%`
+      conditions.push(or(
+        ilike(orders.tid, pattern),
+        sql`${invoiceNumber} ILIKE ${pattern}`,
+        ilike(branches.name, pattern),
+      )!)
+    }
   }
   return conditions
 }
