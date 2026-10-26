@@ -98,6 +98,8 @@ async function loadRiderByIdentifier(identifier: string) {
         eq(roles.name, RIDER_ROLE),
         or(
           sql`lower(${riderProfiles.code}) = ${normalized}`,
+          sql`lower(${users.email}) = ${normalized}`,
+          sql`lower(coalesce(${users.username}, '')) = ${normalized}`,
           sql`lower(replace(coalesce(${users.phone}, ''), ' ', '')) = ${normalized}`,
           sql`lower(replace(coalesce(${riderProfiles.phone}, ''), ' ', '')) = ${normalized}`,
           phoneDigits.length >= 10

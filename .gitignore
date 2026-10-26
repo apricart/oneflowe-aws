@@ -66,3 +66,6 @@ next-env.d.ts
 
 # Personal Claude Code overrides
 .claude/settings.local.json
+
+# Local upload store (S3_UPLOADS_LOCAL_DIR)
+.data/

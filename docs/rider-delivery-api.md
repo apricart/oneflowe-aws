@@ -30,8 +30,9 @@ Additive backend for rider mobile + warehouse ops. See `plans/OF-RIDER-DELIVERY-
 | POST | `/api/v1/rider/orders/:orderId/arrive` | `{ latitude, longitude }` |
 | POST | `/api/v1/rider/orders/:orderId/pod` | multipart `files` (1–3) |
 | POST | `/api/v1/rider/orders/:orderId/fulfillment-token` | `{ token }` after POD approved |
-| GET | `/api/v1/rider/route` | depot + sequenced stops |
+| GET | `/api/v1/rider/route` | depot + today's stops + OSRM `geometry`. Optional `?latitude=&longitude=` = **live** nav from GPS → remaining stops (drops travelled path) |
 | POST | `/api/v1/rider/location` | Redis upsert (~1/3s) |
+| GET/PATCH | `/api/v1/rider/notifications` | overdue / rider notices |
 
 Envelope: `{ success, data, error }`.
 
@@ -44,12 +45,40 @@ Envelope: `{ success, data, error }`.
 | GET/PUT | `/api/v1/rider-ops/depot` | warehouse start lat/lng |
 | GET/POST | `/api/v1/rider-ops/assignments` | list / multi-assign (order must be APPROVED + OUT_FOR_DELIVERY) |
 | PATCH | `/api/v1/rider-ops/assignments/sequence` | reorder |
-| GET | `/api/v1/rider-ops/assignments/:id` | detail + POD images |
-| POST | `/api/v1/rider-ops/assignments/:id/pod/approve` | → DELIVERED via `progressOrderFulfillment` |
-| POST | `/api/v1/rider-ops/assignments/:id/pod/reject` | `{ reason }` |
-| GET | `/api/v1/rider-ops/riders/locations` | latest Redis points for map poll |
+| GET | `/api/v1/rider-ops/assignments/:id` | detail + POD images (`proofImages[].fileUrl`) |
+| GET | `/api/v1/rider-ops/assignments/:id/pod/:imageId/file` | stream one POD image (warehouse-scoped) |
+| POST | `/api/v1/rider-ops/assignments/:id/pod/approve` | Mark delivered → order `DELIVERED`, assignment `FULFILLMENT_PENDING` |
+| POST | `/api/v1/rider-ops/assignments/:id/pod/reject` | `{ reason }` → `POD_REJECTED` (rider re-uploads) |
+| GET | `/api/v1/rider-ops/riders/locations` | live GPS + today's stops (warehouse-scoped); `?riderId=` for Track |
+| GET | `/api/v1/rider-ops/assignments?day=today` | Karachi today + overdue carry-overs |
 
-POD approve notifies warehouse via `WAREHOUSE_RIDER_POD_SUBMITTED` on the existing notifications table (warehouse bell).
+### Delivery → fulfilment pipeline
+
+1. **Rider** uploads photos only: `POST /api/v1/rider/orders/:id/pod` → assignment `POD_SUBMITTED`.
+2. **Warehouse** opens **POD review** (Riders section), views images, then either:
+   - **Mark delivered** (`…/pod/approve`) → order fulfilment `DELIVERED`, assignment `FULFILLMENT_PENDING`, or
+   - **Reject** (`…/pod/reject`) → `POD_REJECTED`; rider submits a new POD.
+3. **Rider** enters the customer 6-digit fulfilment token: `POST /api/v1/rider/orders/:id/fulfillment-token` → validates `orders.approval_token`, runs `fulfillApprovedOrder` → order `FULFILLED`, assignment `FULFILLMENT_COMPLETED`.
+
+The token API refuses until warehouse has approved the POD (order must be `DELIVERED`). Reject does not deliver the order.
+
+POD approve notifies warehouse via `WAREHOUSE_RIDER_POD_SUBMITTED`. Same-day misses notify warehouse (`WAREHOUSE_RIDER_DELIVERY_OVERDUE`) and rider (`RIDER_DELIVERY_OVERDUE`).
+
+**Route contract for mobile MapScreen:**
+1. On open: `GET /rider/route` → draw `geometry` (`geometryMode: "planned"` = warehouse → remaining).
+2. While on duty / moving: on each location ping (or every few seconds), call  
+   `GET /rider/route?latitude={lat}&longitude={lng}` → **replace** the polyline with the new `geometry` (`geometryMode: "live"`). Do not keep the old path — travelled segments are intentionally omitted.
+3. Markers: green when `delivered`, orange when `overdue`. Head toward `nextStop`. Never draw a return-to-depot leg.
+
+## Local APK against this Mac
+
+`npm run dev` binds `0.0.0.0` so a phone on the same Wi‑Fi can reach the API.
+
+- APK base URL: `http://192.168.1.43:3000` (this Mac’s LAN IP)
+- Login: `POST /api/v1/rider/auth/login` body `{ "identifier", "password" }`
+- Android debug builds must allow cleartext HTTP to that host
+
+Machine-only (no LAN): `npm run dev:local`.
 
 ## Smoke
 

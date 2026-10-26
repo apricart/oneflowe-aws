@@ -3523,13 +3523,23 @@ export const riderProfiles = pgTable(
     vehicleNumber: varchar("vehicle_number", { length: 64 }),
     isOnDuty: boolean("is_on_duty").notNull().default(false),
     avatarUrl: text("avatar_url"),
+    // Serving city — links the rider to the one warehouse depot for that city.
+    cityKey: varchar("city_key", { length: 120 }),
+    cityLabel: varchar("city_label", { length: 120 }),
+    warehouseUserId: uuid("warehouse_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
     createdByUserId: uuid("created_by_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
-  (t) => [uniqueIndex("rider_profiles_code_uq").on(t.code)],
+  (t) => [
+    uniqueIndex("rider_profiles_code_uq").on(t.code),
+    index("rider_profiles_warehouse_user_idx").on(t.warehouseUserId),
+    index("rider_profiles_city_key_idx").on(t.cityKey),
+  ],
 )
 
 export const riderDepots = pgTable(
@@ -3543,11 +3553,17 @@ export const riderDepots = pgTable(
     latitude: doublePrecision("latitude").notNull(),
     longitude: doublePrecision("longitude").notNull(),
     address: text("address"),
+    // One warehouse start pin per city (partial unique index in migration).
+    cityKey: varchar("city_key", { length: 120 }),
+    cityLabel: varchar("city_label", { length: 120 }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [
     uniqueIndex("rider_depots_warehouse_user_uq").on(t.warehouseUserId),
+    uniqueIndex("rider_depots_city_key_uq")
+      .on(t.cityKey)
+      .where(sql`${t.cityKey} IS NOT NULL`),
     check("rider_depots_lat_ck", sql`${t.latitude} >= -90 AND ${t.latitude} <= 90`),
     check("rider_depots_lng_ck", sql`${t.longitude} >= -180 AND ${t.longitude} <= 180`),
   ],
@@ -3632,7 +3648,10 @@ export const riderPodImages = pgTable(
     index("rider_pod_images_assignment_idx").on(t.assignmentId),
     uniqueIndex("rider_pod_images_storage_key_uq").on(t.storageKey),
     check("rider_pod_images_size_ck", sql`${t.sizeBytes} > 0 AND ${t.sizeBytes} <= 5242880`),
-    check("rider_pod_images_key_ck", sql`${t.storageKey} LIKE 'rider-pod/%'`),
+    check(
+      "rider_pod_images_key_ck",
+      sql`(${t.storageKey} LIKE 'proof-of-delivery/%' OR ${t.storageKey} LIKE 'rider-pod/%')`,
+    ),
   ],
 )
 

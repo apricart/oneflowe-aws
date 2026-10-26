@@ -85,6 +85,9 @@ function getLoginErrorMessage(errorCode: string) {
   if (errorCode === "USER_INACTIVE") {
     return "Your account has been deactivated. Please contact support."
   }
+  if (errorCode === "RIDER_USE_MOBILE_APP") {
+    return "Rider accounts sign in on the mobile app only — not this website. Use your warehouse login here."
+  }
   if (errorCode === "NETWORK_RESTRICTED") {
     return "Please log in from your organization's network."
   }

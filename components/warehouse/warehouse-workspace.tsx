@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import dynamic from "next/dynamic"
 import { useSession } from "next-auth/react"
-import { ChevronDown, ChevronUp, ClipboardList, LayoutDashboard, Package, Warehouse } from "lucide-react"
+import { Bike, ChevronDown, ChevronUp, ClipboardList, LayoutDashboard, Package, Warehouse } from "lucide-react"
 
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { DeliveryDashboard } from "@/components/delivery-dashboard/delivery-dashboard"
@@ -14,6 +14,7 @@ import { WarehouseTaxonomy } from "@/components/warehouse/catalog/warehouse-taxo
 import { WarehouseCatalog } from "@/components/warehouse/warehouse-catalog"
 import { WarehouseNotificationBell } from "@/components/warehouse/warehouse-notification-bell"
 import { WarehouseOrders } from "@/components/warehouse/warehouse-orders"
+import { WarehouseRiders } from "@/components/warehouse/warehouse-riders"
 import { WarehouseSupportLink } from "@/components/warehouse/warehouse-support-link"
 import { WAREHOUSE_LABEL } from "@/lib/warehouse-access"
 import { cn } from "@/lib/utils"
@@ -41,11 +42,12 @@ export const CATALOG_SECTIONS = [
 ] as const
 
 type CatalogSection = (typeof CATALOG_SECTIONS)[number]["key"]
-type Section = "dashboard" | "orders" | CatalogSection
+type Section = "dashboard" | "orders" | "riders" | CatalogSection
 
 const TOP_SECTIONS: ReadonlyArray<{ key: Exclude<Section, CatalogSection>; label: string; icon: LucideIcon }> = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "Orders", icon: ClipboardList },
+  { key: "riders", label: "Riders", icon: Bike },
 ]
 
 const ALL_SECTION_KEYS: readonly string[] = [...TOP_SECTIONS.map((section) => section.key), ...CATALOG_SECTIONS.map((section) => section.key)]
@@ -203,6 +205,7 @@ export function WarehouseWorkspace() {
               <DeliveryDashboard dashboardEndpoint="/api/v1/warehouse/workload" timelineEndpoint={warehouseTimeline} warehouseOrderIdTools />
             )}
             {section === "orders" && <WarehouseOrders />}
+            {section === "riders" && <WarehouseRiders />}
             {section === "catalog" && <WarehouseCatalog />}
             {section === "catalog-price-history" && (
               <ProductPriceHistoryView role="WAREHOUSE" endpoint="/api/v1/warehouse/catalog/price-history" />

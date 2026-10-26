@@ -24,12 +24,24 @@ import {
   isValidLatLng,
   riderMayStartDelivery,
 } from "@/lib/rider/assignment-status"
-import { buildRoutePayload, type RouteStop } from "@/lib/rider/route"
+import { karachiDay } from "@/lib/delivery-sla"
+import { fetchDrivingGeometry } from "@/lib/rider/osrm-route"
+import { isAssignmentDelivered, isAssignmentOverdue } from "@/lib/rider/same-day"
+import {
+  buildRoutePayload,
+  liveRouteWaypoints,
+  plannedRouteWaypoints,
+  type RouteLatLng,
+  type RouteStop,
+} from "@/lib/rider/route"
 import { sanitizeRasterUpload } from "@/lib/server/upload-security"
 import { isImageStorageConfigured, putImage } from "@/lib/server/image-storage"
 import { fulfillApprovedOrder } from "@/lib/server/order-fulfillment"
 import { progressOrderFulfillment } from "@/lib/server/order-fulfillment-progress"
-import { queueRiderPodSubmittedNotifications } from "@/lib/server/rider-notifications"
+import {
+  queueRiderOverdueDeliveryNotifications,
+  queueRiderPodSubmittedNotifications,
+} from "@/lib/server/rider-notifications"
 import { isOrderBranchInWarehouseReach } from "@/lib/server/warehouse-scope"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
 
@@ -150,6 +162,9 @@ export async function toMobileOrder(row: {
     .where(eq(riderDepots.warehouseUserId, row.assignment.assignedByUserId ?? ""))
     .limit(1)
 
+  const overdue = isAssignmentOverdue(row.assignment.assignedAt, row.assignment.status)
+  const delivered = isAssignmentDelivered(row.assignment.status)
+
   return {
     id: row.order.tid,
     customerName: row.orgName ?? row.branchName ?? "Customer",
@@ -159,6 +174,9 @@ export async function toMobileOrder(row: {
       row.assignment.podApprovedAt?.toISOString?.() ??
       row.order.deliveredAt?.toISOString?.() ??
       null,
+    overdue,
+    delivered,
+    serviceDay: karachiDay(new Date(row.assignment.assignedAt)),
     timeSlot: null,
     paymentType: row.order.paymentStatus === "PAID" ? "prepaid" : "cod",
     amount: Math.round(Number(row.order.totalCents) / 100),
@@ -194,38 +212,127 @@ export async function toMobileOrder(row: {
   }
 }
 
-export async function getRiderRoute(riderUserId: string, warehouseUserId?: string | null) {
+export async function getRiderRoute(
+  riderUserId: string,
+  warehouseUserId?: string | null,
+  /**
+   * When the rider app sends live GPS, geometry is recalculated from here →
+   * remaining stops so the travelled polyline disappears.
+   */
+  currentLocation?: RouteLatLng | null,
+) {
+  const now = new Date()
+  const serviceDay = karachiDay(now)
   const rows = await listRiderAssignments(riderUserId)
-  const open = rows.filter((r) => r.assignment.status !== "FULFILLMENT_COMPLETED")
-  const stops: RouteStop[] = open.map((r) => ({
+
+  const [profile] = await db
+    .select({
+      code: riderProfiles.code,
+      cityKey: riderProfiles.cityKey,
+      warehouseUserId: riderProfiles.warehouseUserId,
+    })
+    .from(riderProfiles)
+    .where(eq(riderProfiles.userId, riderUserId))
+    .limit(1)
+
+  // Today's assignments (incl. delivered flags) + overdue undelivered carry-overs.
+  const onRoute = rows.filter((r) => {
+    const day = karachiDay(new Date(r.assignment.assignedAt))
+    if (day === serviceDay) return true
+    return isAssignmentOverdue(r.assignment.assignedAt, r.assignment.status, now)
+  })
+
+  // Notify once for each overdue stop (warehouse + rider).
+  for (const r of onRoute) {
+    if (!isAssignmentOverdue(r.assignment.assignedAt, r.assignment.status, now)) continue
+    if (r.order.branchId == null) continue
+    await queueRiderOverdueDeliveryNotifications(db, {
+      orderId: r.order.id,
+      orderTid: r.order.tid,
+      branchId: r.order.branchId,
+      organizationId: r.order.organizationId,
+      assignmentId: r.assignment.id,
+      riderUserId,
+      riderCode: profile?.code ?? "rider",
+      warehouseUserId: profile?.warehouseUserId ?? null,
+      customerName: r.orgName ?? r.branchName ?? r.order.tid,
+    })
+  }
+
+  const stops: RouteStop[] = onRoute.map((r) => ({
     sequence: r.assignment.deliverySequence,
     assignmentId: r.assignment.id,
     orderId: r.order.id,
     orderTid: r.order.tid,
+    customerName: r.orgName ?? r.branchName ?? null,
     latitude: r.assignment.deliveryLat,
     longitude: r.assignment.deliveryLng,
     address: r.assignment.deliveryAddressText,
     status: r.assignment.status,
+    delivered: isAssignmentDelivered(r.assignment.status),
+    overdue: isAssignmentOverdue(r.assignment.assignedAt, r.assignment.status, now),
   }))
 
   let depot = null
-  const depotOwner = warehouseUserId ?? open[0]?.assignment.assignedByUserId
-  if (depotOwner) {
-    const [d] = await db
+
+  if (profile?.cityKey) {
+    const [byCity] = await db
       .select()
       .from(riderDepots)
-      .where(eq(riderDepots.warehouseUserId, depotOwner))
+      .where(eq(riderDepots.cityKey, profile.cityKey))
       .limit(1)
-    if (d) {
+    if (byCity) {
       depot = {
-        name: d.name,
-        latitude: d.latitude,
-        longitude: d.longitude,
-        address: d.address,
+        name: byCity.name,
+        latitude: byCity.latitude,
+        longitude: byCity.longitude,
+        address: byCity.address,
       }
     }
   }
-  return buildRoutePayload({ depot, stops })
+
+  if (!depot) {
+    const depotOwner =
+      warehouseUserId ?? profile?.warehouseUserId ?? onRoute[0]?.assignment.assignedByUserId
+    if (depotOwner) {
+      const [d] = await db
+        .select()
+        .from(riderDepots)
+        .where(eq(riderDepots.warehouseUserId, depotOwner))
+        .limit(1)
+      if (d) {
+        depot = {
+          name: d.name,
+          latitude: d.latitude,
+          longitude: d.longitude,
+          address: d.address,
+        }
+      }
+    }
+  }
+
+  const remaining = stops
+    .filter((s) => !s.delivered)
+    .sort((a, b) => a.sequence - b.sequence)
+  const nextStop = remaining[0] ?? null
+
+  // Live: from current GPS → remaining stops (drops path already ridden).
+  // Planned: warehouse depot → remaining (initial map / no GPS yet).
+  const live = currentLocation != null && isValidLatLng(currentLocation.latitude, currentLocation.longitude)
+  const waypoints = live
+    ? liveRouteWaypoints(currentLocation, remaining)
+    : plannedRouteWaypoints(depot, remaining)
+  const geometry =
+    waypoints.length >= 2 ? await fetchDrivingGeometry(waypoints) : null
+
+  return buildRoutePayload({
+    depot,
+    stops,
+    geometry,
+    geometryMode: live ? "live" : "planned",
+    nextStop,
+    serviceDay,
+  })
 }
 
 export async function createAssignments(input: {
@@ -330,12 +437,108 @@ export async function createAssignments(input: {
   })
 }
 
+export async function updateAssignmentPin(input: {
+  actorUserId: string
+  actorRole: string
+  assignmentId: number
+  deliveryLat: number
+  deliveryLng: number
+  deliveryAddressText?: string | null
+}) {
+  if (!isValidLatLng(input.deliveryLat, input.deliveryLng)) {
+    return { kind: "invalid_coords" as const }
+  }
+
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({
+        id: riderOrderAssignments.id,
+        orderId: riderOrderAssignments.orderId,
+        riderUserId: riderOrderAssignments.riderUserId,
+        status: riderOrderAssignments.status,
+        organizationId: orders.organizationId,
+        branchId: orders.branchId,
+      })
+      .from(riderOrderAssignments)
+      .innerJoin(orders, eq(orders.id, riderOrderAssignments.orderId))
+      .where(eq(riderOrderAssignments.id, input.assignmentId))
+      .limit(1)
+      .for("update", { of: riderOrderAssignments })
+
+    if (!row) return { kind: "not_found" as const }
+    if (row.status === "FULFILLMENT_COMPLETED") {
+      return { kind: "conflict" as const, status: row.status }
+    }
+
+    if (input.actorRole === "WAREHOUSE") {
+      const inReach = await isOrderBranchInWarehouseReach(
+        input.actorUserId,
+        { organizationId: row.organizationId, branchId: row.branchId },
+        { client: tx, lock: true },
+      )
+      if (!inReach) return { kind: "not_found" as const }
+
+      const [owned] = await tx
+        .select({ userId: riderProfiles.userId })
+        .from(riderProfiles)
+        .where(
+          and(
+            eq(riderProfiles.userId, row.riderUserId),
+            eq(riderProfiles.warehouseUserId, input.actorUserId),
+          ),
+        )
+        .limit(1)
+      if (!owned) return { kind: "not_found" as const }
+    }
+
+    await tx
+      .update(riderOrderAssignments)
+      .set({
+        deliveryLat: input.deliveryLat,
+        deliveryLng: input.deliveryLng,
+        ...(input.deliveryAddressText !== undefined
+          ? { deliveryAddressText: input.deliveryAddressText }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(riderOrderAssignments.id, input.assignmentId))
+
+    await recordAuditEvent(tx, {
+      actor: { id: input.actorUserId, role: input.actorRole },
+      action: "UPDATE_RIDER_ASSIGNMENT_PIN",
+      entity: "RiderOrderAssignment",
+      entityId: String(input.assignmentId),
+      context: {
+        orderId: row.orderId,
+        deliveryLat: input.deliveryLat,
+        deliveryLng: input.deliveryLng,
+      },
+    })
+
+    return { kind: "ok" as const }
+  })
+}
+
 export async function reorderSequences(input: {
   actorUserId: string
   actorRole: string
   riderUserId: string
   orderedAssignmentIds: number[]
 }) {
+  if (input.actorRole === "WAREHOUSE") {
+    const [owned] = await db
+      .select({ userId: riderProfiles.userId })
+      .from(riderProfiles)
+      .where(
+        and(
+          eq(riderProfiles.userId, input.riderUserId),
+          eq(riderProfiles.warehouseUserId, input.actorUserId),
+        ),
+      )
+      .limit(1)
+    if (!owned) return { kind: "not_found" as const, assignmentId: input.orderedAssignmentIds[0] ?? 0 }
+  }
+
   return db.transaction(async (tx) => {
     let seq = 1
     for (const id of input.orderedAssignmentIds) {
@@ -454,7 +657,8 @@ export async function submitPod(input: {
       return { kind: "validation" as const, message: sanitized.error }
     }
     const ext = sanitized.image.extension
-    const key = `rider-pod/${randomUUID()}.${ext}`
+    // S3 "folder" for proof-of-delivery photos (bucket from S3_UPLOADS_*).
+    const key = `proof-of-delivery/${randomUUID()}.${ext}`
     await putImage({
       key,
       body: sanitized.buffer,

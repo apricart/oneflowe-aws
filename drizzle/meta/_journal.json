@@ -729,6 +729,20 @@
       "when": 1791104400000,
       "tag": "20261028120000_add_rider_delivery",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1791108000000,
+      "tag": "20261029120000_rider_city_warehouse",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1791111600000,
+      "tag": "20261030120000_pod_proof_of_delivery_prefix",
+      "breakpoints": true
     }
   ]
 }

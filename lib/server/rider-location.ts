@@ -3,7 +3,8 @@ import "server-only"
 import { redis } from "@/lib/redis"
 import { isValidLatLng } from "@/lib/rider/assignment-status"
 
-const LOCATION_TTL_SECONDS = 120
+/** Keep the last ping long enough for Track polls + brief radio gaps. */
+const LOCATION_TTL_SECONDS = 300
 const MIN_INTERVAL_SECONDS = 3
 
 export type RiderLocationPoint = {

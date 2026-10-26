@@ -111,6 +111,11 @@ export const RIDER_API_RULES: readonly ApiRule[] = [
   { route: `${RIDER_BASE}/route/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/rider\/route$/ },
   { route: `${RIDER_BASE}/location/route.ts`, methods: ["POST"], pattern: /^\/api\/v1\/rider\/location$/ },
   {
+    route: `${RIDER_BASE}/notifications/route.ts`,
+    methods: ["GET", "PATCH"],
+    pattern: /^\/api\/v1\/rider\/notifications$/,
+  },
+  {
     route: "app/api/v1/users/me/change-password/route.ts",
     methods: ["POST"],
     pattern: /^\/api\/v1\/users\/me\/change-password$/,
@@ -128,8 +133,9 @@ export const RIDER_API_RULES: readonly ApiRule[] = [
 ]
 
 /**
- * rider-ops routes warehouse / Super Admin may call. Merged into the warehouse
- * proxy allowlist so WAREHOUSE is not refused before the handler runs.
+ * rider-ops routes the warehouse web UI calls (Create Rider, Assign, Plan route).
+ * Proxy admits them for WAREHOUSE via `isRiderOpsApiRequestAllowed` alongside
+ * `WAREHOUSE_API_RULES`. Create Rider POST is warehouse-only at the handler.
  */
 export const RIDER_OPS_API_RULES: readonly ApiRule[] = [
   { route: `${OPS_BASE}/riders/route.ts`, methods: ["GET", "POST"], pattern: /^\/api\/v1\/rider-ops\/riders$/ },
@@ -151,7 +157,7 @@ export const RIDER_OPS_API_RULES: readonly ApiRule[] = [
   },
   {
     route: `${OPS_BASE}/assignments/[id]/route.ts`,
-    methods: ["GET"],
+    methods: ["GET", "PATCH"],
     pattern: /^\/api\/v1\/rider-ops\/assignments\/\d+$/,
   },
   {
@@ -165,9 +171,24 @@ export const RIDER_OPS_API_RULES: readonly ApiRule[] = [
     pattern: /^\/api\/v1\/rider-ops\/assignments\/\d+\/pod\/reject$/,
   },
   {
+    route: `${OPS_BASE}/assignments/[id]/pod/[imageId]/file/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/rider-ops\/assignments\/\d+\/pod\/\d+\/file$/,
+  },
+  {
     route: `${OPS_BASE}/riders/locations/route.ts`,
     methods: ["GET"],
     pattern: /^\/api\/v1\/rider-ops\/riders\/locations$/,
+  },
+  {
+    route: `${OPS_BASE}/route-geometry/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/rider-ops\/route-geometry$/,
+  },
+  {
+    route: `${OPS_BASE}/geocode/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/rider-ops\/geocode$/,
   },
 ]
 
