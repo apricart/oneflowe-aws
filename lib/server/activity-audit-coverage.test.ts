@@ -113,6 +113,16 @@ const DIRECT: readonly DirectRoute[] = [
     handlers: ["DELETE"],
     actions: ["DELETE_ORDER"],
   },
+  {
+    file: "app/api/v1/rider-ops/riders/route.ts",
+    handlers: ["POST"],
+    actions: ["CREATE_RIDER"],
+  },
+  {
+    file: "app/api/v1/rider-ops/riders/[id]/route.ts",
+    handlers: ["PATCH"],
+    actions: ["UPDATE_RIDER"],
+  },
 ]
 
 /**
@@ -250,6 +260,12 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/apricart-warehouses/[id]/branches/route.ts", module: "lib/server/apricart-warehouses.ts" },
   // Moving one order to another warehouse records inside the move.
   { file: "app/api/v1/orders/[id]/fulfillment-warehouse/route.ts", module: "lib/server/order-warehouse-transfer.ts" },
+  // Rider delivery ops: assign / pin / reorder / POD decide in the shared module.
+  { file: "app/api/v1/rider-ops/assignments/route.ts", module: "lib/server/rider-assignments.ts" },
+  { file: "app/api/v1/rider-ops/assignments/[id]/route.ts", module: "lib/server/rider-assignments.ts" },
+  { file: "app/api/v1/rider-ops/assignments/sequence/route.ts", module: "lib/server/rider-assignments.ts" },
+  { file: "app/api/v1/rider-ops/assignments/[id]/pod/approve/route.ts", module: "lib/server/rider-assignments.ts" },
+  { file: "app/api/v1/rider-ops/assignments/[id]/pod/reject/route.ts", module: "lib/server/rider-assignments.ts" },
 ]
 
 /**
@@ -364,6 +380,70 @@ const NOT_AUDITED: readonly { file: string; reason: string }[] = [
       + "flood audit_logs. The privileged half — the decision that actually "
       + "creates an account — is audited through "
       + "lib/server/organization-join-audit.ts.",
+  },
+  {
+    file: "app/api/v1/rider-ops/depot/route.ts",
+    reason:
+      "Warehouse start pin for a city — operational map config moved often while "
+      + "planning a route. Rider create/update, assignments and POD decisions "
+      + "are audited; a row per pin drag would bury those.",
+  },
+  {
+    file: "app/api/v1/rider/auth/login/route.ts",
+    reason:
+      "Issues a rider Bearer token. Auth success/failure already has its own "
+      + "signal path; a second audit row per unlock of the mobile app would "
+      + "drown the trail the warehouse uses for delivery decisions.",
+  },
+  {
+    file: "app/api/v1/rider/auth/logout/route.ts",
+    reason: "Drops the caller's own Bearer session. Per-device UI state, not a business event.",
+  },
+  {
+    file: "app/api/v1/rider/auth/refresh/route.ts",
+    reason: "Rotates the caller's own Bearer token. Session plumbing, not a business event.",
+  },
+  {
+    file: "app/api/v1/rider/duty/route.ts",
+    reason:
+      "Toggles the rider's own on-duty flag. High-frequency; the assignment and "
+      + "POD rows already say whether they were working a stop.",
+  },
+  {
+    file: "app/api/v1/rider/location/route.ts",
+    reason:
+      "GPS pings every few seconds into a short-TTL Redis key. Auditing each "
+      + "point would be thousands of rows a shift and still vanish with the TTL.",
+  },
+  {
+    file: "app/api/v1/rider/notifications/route.ts",
+    reason:
+      "PATCH is mark-read on the rider's own notices — the same per-viewer UI "
+      + "state as the shared notifications route.",
+  },
+  {
+    file: "app/api/v1/rider/orders/[orderId]/arrive/route.ts",
+    reason:
+      "Marks the rider's own stop arrived. The assignment row is the record; "
+      + "warehouse POD approve/reject is the audited decision.",
+  },
+  {
+    file: "app/api/v1/rider/orders/[orderId]/status/route.ts",
+    reason:
+      "Advances the rider's own delivery leg. The assignment status column is "
+      + "the record; warehouse POD approve/reject is the audited decision.",
+  },
+  {
+    file: "app/api/v1/rider/orders/[orderId]/pod/route.ts",
+    reason:
+      "Uploads proof photos. The images and `POD_SUBMITTED` on the assignment "
+      + "are the record; warehouse approve/reject is the audited decision.",
+  },
+  {
+    file: "app/api/v1/rider/orders/[orderId]/fulfillment-token/route.ts",
+    reason:
+      "Hands over the fulfilment token after warehouse-approved delivery. "
+      + "Fulfilment itself is audited through the shared fulfilment path.",
   },
 ]
 

@@ -121,7 +121,9 @@ export function WarehouseOrders() {
   const activeAssignmentByOrder = useMemo(() => {
     const map = new Map<number, string>()
     for (const row of assignmentIndex?.items ?? []) {
-      if (row.assignment.status === "FULFILLMENT_COMPLETED") continue
+      // Ignore malformed / unrelated SWR payloads (e.g. the orders list key
+      // answering this hook in tests) and finished deliveries.
+      if (!row?.assignment || row.assignment.status === "FULFILLMENT_COMPLETED") continue
       map.set(row.assignment.orderId, row.riderCode)
     }
     return map
