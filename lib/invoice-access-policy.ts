@@ -97,6 +97,7 @@ type InvoiceRoleRule = {
  *                          money at all.
  *  - WAREHOUSE           — nothing, for the same reason; it reads invoice
  *                          figures on its own order endpoint instead.
+ *  - RIDER               — nothing; mobile delivery only, no invoice surface.
  *  - FINANCE             — every order of the organizations assigned to it,
  *                          like its order list (`lib/finance-access.ts`).
  */
@@ -126,6 +127,9 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   // Reads no invoice: its area is the support queue alone. No organization, so
   // the tenant check refuses it, and "none" refuses it again.
   APRICART_SUPPORT: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
+  // Reads no invoice: mobile delivery only. No organization, so the tenant
+  // check refuses it, and "none" refuses it again.
+  RIDER: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
   // Every invoice of the organizations assigned to it, like its order list.
   FINANCE: { tenant: "assigned-organizations", branches: "all", ownOrdersOnly: false },
 }
