@@ -40,7 +40,11 @@ describe("the consolidated invoice report", () => {
     const report = source("lib/server/consolidated-invoice-report.ts")
     // Checked on the read role: an organization-wide Viewer reads it as Head
     // Office (its own organization below), a pinned one maps to no role.
-    expect(report).toContain("const readRole = viewerReadRole(user)")
+    expect(report).toContain("let readRole = viewerReadRole(user)")
+    // Finance reads it as Super Admin, but only for an organization assigned
+    // to it (plans/OF-FINANCE-finance-role.md).
+    expect(report).toContain("const financeScope = await resolveFinanceReadScope({")
+    expect(report).toContain("if (financeScope && !financeScope.ok) return { ok: false, status: financeScope.status, error: financeScope.error }")
     expect(report).toContain("canReadConsolidatedInvoiceReport(readRole)")
     expect(report).toContain("const scope = await getRequestScope()")
     expect(report).toContain("organizationId = scope?.organizationId ?? null")

@@ -8,7 +8,8 @@ import { and, eq, gte, lte, sql, count, inArray, isNull } from "drizzle-orm"
 import { metricExpressions } from "@/lib/metric-utils"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 import { shouldIncludeHeadOfficeUsers } from "@/lib/organization-report-scope"
-import { lacksAnalyticsTenant } from "@/lib/server/analytics-scope"
+import { lacksAnalyticsTenant, parseRequestedOrganizationIds } from "@/lib/server/analytics-scope"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 
 function parseNumberList(value: string | null, requirePositive = false) {
     return value
@@ -134,8 +135,21 @@ export async function GET(req: NextRequest) {
     const session = await getServerSession(authOptions)
     if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     // An organization-wide Viewer reads as Head Office; a pinned one is refused.
-    const userRole = viewerReadRole(session.user as any)
+    let userRole = viewerReadRole(session.user as any)
     if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+    // Finance reads as Super Admin, inside the organizations assigned to it.
+    const requestUrl = new URL(req.url)
+    const requestedOrganizationParam = requestUrl.searchParams.get("organizationId")
+    const financeScope = await resolveFinanceReadScope({
+        role: userRole,
+        userId: (session.user as any).id,
+        requestedOrganizationIds: parseRequestedOrganizationIds({
+            organizationIds: requestUrl.searchParams.get("organizationIds"),
+            organizationId: requestedOrganizationParam && !["all", "0"].includes(requestedOrganizationParam) ? requestedOrganizationParam : null,
+        }),
+    })
+    if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+    if (financeScope) userRole = "SUPER_ADMIN"
     if (lacksAnalyticsTenant(userRole, (session.user as any).organizationId)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     }
@@ -158,6 +172,8 @@ export async function GET(req: NextRequest) {
     const userOrgId = (session.user as any).organizationId
 
     const branchConditions = buildBranchConditions(url.searchParams, userRole, userOrgId)
+    // Every read below is keyed on the branches these conditions select.
+    if (financeScope) branchConditions.push(inArray(branches.organizationId, financeScope.organizationIds))
 
     // 1. Fetch Branches with Org info and User counts
     const branchStats = await db.select({

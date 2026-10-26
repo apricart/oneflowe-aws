@@ -129,6 +129,7 @@ export const ACTOR_ROLE_LABEL: Readonly<Record<ActivityActorRole, string>> = {
   APRICART_EXECUTIVE: "Apricart Executive",
   WAREHOUSE: "Warehouse",
   APRICART_SUPPORT: "Apricart Support",
+  FINANCE: "Finance",
 }
 
 export type ActorRoleOption = { value: ActivityActorRole; label: string }

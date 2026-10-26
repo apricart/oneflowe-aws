@@ -44,6 +44,13 @@ import {
   isWarehouseRole,
 } from "@/lib/warehouse-access"
 import {
+  RIDER_AREAS,
+  RIDER_HOME,
+  isRiderApiRequestAllowed,
+  isRiderOpsApiRequestAllowed,
+  isRiderRole,
+} from "@/lib/rider-access"
+import {
   APRICART_SUPPORT_AREAS,
   APRICART_SUPPORT_HOME,
   isApricartSupportApiRequestAllowed,
@@ -54,6 +61,7 @@ import {
   HEAD_COUNT_REQUEST_READ_ROLES,
 } from "@/lib/branch-head-count-access"
 import { ORDERING_BLOCKS_AREA, ORDERING_BLOCKS_PAGE_ROLES } from "@/lib/ordering-blocks-access"
+import { FINANCE_HOME, FINANCE_KPI_ROLES, isFinanceApiRequestAllowed, isFinanceAreaAllowed, isFinanceRole } from "@/lib/finance-access"
 
 const protectedPrefixes = [
   // The activity log was gated in ROLE_GATED_AREAS but missing here, so the
@@ -74,6 +82,8 @@ const protectedPrefixes = [
   "/desk-team",
   "/employee-management",
   "/executive",
+  // Finance's payment KPIs; the page admits Finance and Super Admin only.
+  FINANCE_HOME,
   "/group-portal",
   "/groups",
   // Branch head count requests: raised by Branch Admin / Group User, decided by
@@ -272,8 +282,41 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
   }
   // And for Apricart's warehouse, which also has no organization of its own:
   // its queue, its progress write and the challan upload, nothing else.
-  if (isWarehouseRole((token as any)?.role) && !isWarehouseApiRequestAllowed(req.method, pathname)) {
+  // Rider-ops routes are additive and admitted here so warehouse can manage riders.
+  if (
+    isWarehouseRole((token as any)?.role) &&
+    !isWarehouseApiRequestAllowed(req.method, pathname) &&
+    !isRiderOpsApiRequestAllowed(req.method, pathname)
+  ) {
     logger("middleware", { reason: "warehouse_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
+  // Riders: Bearer-authenticated mobile API only. Login/refresh are public.
+  // Match `/api/v1/rider/...` only — never `/api/v1/rider-ops/...` (warehouse).
+  if (pathname === "/api/v1/rider" || pathname.startsWith("/api/v1/rider/")) {
+    if (!isRiderApiRequestAllowed(req.method, pathname)) {
+      logger("middleware", { reason: "rider_api_not_allowed", path: pathname })
+      return withSecurityHeaders(
+        NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+        pathname,
+      )
+    }
+    // Login + refresh need no session token.
+    if (
+      req.method.toUpperCase() === "POST" &&
+      (pathname === "/api/v1/rider/auth/login" ||
+        pathname === "/api/v1/rider/auth/refresh" ||
+        pathname === "/api/v1/rider/auth/login/" ||
+        pathname === "/api/v1/rider/auth/refresh/")
+    ) {
+      return withSecurityHeaders(response, pathname)
+    }
+  }
+  if (isRiderRole((token as any)?.role) && !isRiderApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "rider_session_api_not_allowed", path: pathname })
     return withSecurityHeaders(
       NextResponse.json({ error: "Forbidden" }, { status: 403 }),
       pathname,
@@ -283,6 +326,16 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
   // their own: support operations plus explicitly listed read-only order calls.
   if (isApricartSupportRole((token as any)?.role) && !isApricartSupportApiRequestAllowed(req.method, pathname)) {
     logger("middleware", { reason: "apricart_support_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
+  // And for Apricart finance, which also has no organization of its own: the
+  // reads its orders and reports pages make, the Paid/Unpaid change, and its
+  // own password. Each admitted handler fences the role itself.
+  if (isFinanceRole((token as any)?.role) && !isFinanceApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "finance_api_not_allowed", path: pathname })
     return withSecurityHeaders(
       NextResponse.json({ error: "Forbidden" }, { status: 403 }),
       pathname,
@@ -404,6 +457,8 @@ function adminPortalRedirect(pathname: string): string | null {
  *   * WAREHOUSE — Apricart's warehouse: its delivery queue, for the same reason.
  *   * APRICART_SUPPORT — Apricart's support agents: the shared support pages
  *     and read-only order directory. Each handler re-checks the read scope.
+ *   * FINANCE — Apricart finance: its payment KPIs, orders, invoices and
+ *     reports, for its assigned organizations (`lib/finance-access.ts`).
  */
 type TenantClaims = { organizationId: unknown; branchId: unknown }
 
@@ -421,6 +476,8 @@ const SINGLE_AREA_ROLES: ReadonlyArray<{
   { matches: isApricartExecutiveRole, allows: withinAreas(APRICART_EXECUTIVE_AREAS), home: APRICART_EXECUTIVE_HOME },
   { matches: isWarehouseRole, allows: withinAreas(WAREHOUSE_AREAS), home: WAREHOUSE_HOME },
   { matches: isApricartSupportRole, allows: withinAreas(APRICART_SUPPORT_AREAS), home: APRICART_SUPPORT_HOME },
+  { matches: isRiderRole, allows: withinAreas(RIDER_AREAS), home: RIDER_HOME },
+  { matches: isFinanceRole, allows: isFinanceAreaAllowed, home: FINANCE_HOME },
 ]
 
 /**
@@ -527,6 +584,9 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   // Inside /reports, which Branch Admin and Group User also reach; the report
   // is Super Admin's and Head Office's, and both its endpoints re-check.
   { prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: [...CONSOLIDATED_INVOICE_REPORT_ROLES, "VIEWER"], home: "/reports" },
+  // The payment KPIs: Finance's landing page, and Super Admin's too. The
+  // endpoint behind it re-checks the role and fences Finance.
+  { prefix: FINANCE_HOME, roles: FINANCE_KPI_ROLES, home: "/dashboard" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */

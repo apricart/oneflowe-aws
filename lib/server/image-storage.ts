@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto"
+import { createReadStream } from "node:fs"
+import { mkdir, stat, writeFile } from "node:fs/promises"
+import path from "node:path"
+import { Readable } from "node:stream"
 
 import {
   GetObjectCommand,
@@ -73,7 +77,33 @@ export class ImageStorageNotConfiguredError extends Error {
   }
 }
 
+/**
+ * Local disk store for development when the machine has no AWS credentials
+ * (POD / challan / product uploads). Set `S3_UPLOADS_LOCAL_DIR` (e.g. `.data/uploads`).
+ */
+function localUploadsRoot(): string | null {
+  const dir = process.env.S3_UPLOADS_LOCAL_DIR?.trim()
+  if (!dir) return null
+  return path.isAbsolute(dir) ? dir : path.join(process.cwd(), dir)
+}
+
+function usesLocalUploads(): boolean {
+  return localUploadsRoot() != null
+}
+
+function assertSafeStorageKey(key: string): void {
+  if (!key || key.includes("..") || key.startsWith("/") || path.isAbsolute(key)) {
+    throw new Error("Invalid image storage key")
+  }
+}
+
+function localPathForKey(key: string): string {
+  assertSafeStorageKey(key)
+  return path.join(localUploadsRoot()!, key)
+}
+
 export function isImageStorageConfigured(): boolean {
+  if (usesLocalUploads()) return true
   // S3_UPLOADS_REGION wins; AWS_REGION (which SES also uses) is the fallback.
   return Boolean(
     (process.env.S3_UPLOADS_REGION || process.env.AWS_REGION) &&
@@ -86,6 +116,11 @@ function requireConfig(): { region: string; bucket: string } {
 
   if (!isImageStorageConfigured()) {
     throw new ImageStorageNotConfiguredError()
+  }
+
+  if (usesLocalUploads()) {
+    resolvedConfig = { region: "local", bucket: "local" }
+    return resolvedConfig
   }
 
   const parsed = parseImageStorageEnv(process.env)
@@ -188,8 +223,16 @@ export async function putImage(input: {
   body: Buffer
   contentType: string
 }): Promise<void> {
-  const { bucket, region } = requireConfig()
+  requireConfig()
 
+  if (usesLocalUploads()) {
+    const filePath = localPathForKey(input.key)
+    await mkdir(path.dirname(filePath), { recursive: true })
+    await writeFile(filePath, input.body)
+    return
+  }
+
+  const { bucket, region } = requireConfig()
   await getClient(region).send(
     new PutObjectCommand({
       Bucket: bucket,
@@ -210,9 +253,39 @@ export type FetchedImage = {
   etag?: string
 }
 
-export async function getImage(key: string): Promise<FetchedImage | null> {
-  const { bucket, region } = requireConfig()
+function localFetchedBody(filePath: string): NonNullable<GetObjectCommandOutput["Body"]> {
+  const nodeStream = createReadStream(filePath)
+  return {
+    transformToWebStream: () => Readable.toWeb(nodeStream) as ReadableStream,
+    transformToByteArray: async () => {
+      const chunks: Buffer[] = []
+      for await (const chunk of createReadStream(filePath)) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      }
+      return new Uint8Array(Buffer.concat(chunks))
+    },
+  } as NonNullable<GetObjectCommandOutput["Body"]>
+}
 
+export async function getImage(key: string): Promise<FetchedImage | null> {
+  requireConfig()
+
+  if (usesLocalUploads()) {
+    const filePath = localPathForKey(key)
+    try {
+      const info = await stat(filePath)
+      if (!info.isFile()) return null
+      return {
+        body: localFetchedBody(filePath),
+        contentType: contentTypeForKey(key),
+        contentLength: info.size,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  const { bucket, region } = requireConfig()
   try {
     const result = await getClient(region).send(
       new GetObjectCommand({ Bucket: bucket, Key: key }),

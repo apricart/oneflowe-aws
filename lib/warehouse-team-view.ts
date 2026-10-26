@@ -58,10 +58,18 @@ export function inBatches<T>(items: readonly T[], size: number): T[][] {
   return batches
 }
 
-/** Every branch of the organization when not all are selected; none when all are. */
-export function toggleAllBranches(selected: readonly number[], organizationBranchIds: readonly number[]): number[] {
-  const allSelected = organizationBranchIds.length > 0 && organizationBranchIds.every((id) => selected.includes(id))
-  return allSelected ? [] : [...organizationBranchIds].sort((a, b) => a - b)
+/**
+ * Select or unselect every target branch while preserving selections that a
+ * filter hides. Passing the whole organization retains the original all/none
+ * behaviour; passing only shown ids makes the action filter-aware.
+ */
+export function toggleAllBranches(selected: readonly number[], targetBranchIds: readonly number[]): number[] {
+  const targets = new Set(targetBranchIds)
+  const allSelected = targetBranchIds.length > 0 && targetBranchIds.every((id) => selected.includes(id))
+  return (allSelected
+    ? selected.filter((id) => !targets.has(id))
+    : [...new Set([...selected, ...targetBranchIds])]
+  ).sort((a, b) => a - b)
 }
 
 // ---------------------------------------------------------------------------

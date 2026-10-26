@@ -14,6 +14,13 @@ vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }))
 
 import { ApricartWarehousesCard } from "./apricart-warehouses-card"
 
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver
+Element.prototype.scrollIntoView ??= vi.fn()
+
 const WH_OPERATOR = "0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4"
 const WH_OTHER = "1c9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4"
 const EXECUTIVE = "2d9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4"
@@ -128,6 +135,25 @@ describe("Apricart warehouses", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/apricart-warehouses/1/branches")
     expect(sentBody(0)).toEqual({ organizationId: 1, branchIds: [12, 13] })
+  })
+
+  it("searches organizations and selects only the branches shown by the filter", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Branches" }))
+    const dialog = screen.getByRole("dialog")
+
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Organization" }))
+    fireEvent.change(screen.getByLabelText("Search organizations"), { target: { value: "ubl" } })
+    fireEvent.click(screen.getByRole("option", { name: /UBL/ }))
+    expect(within(dialog).getByLabelText(/Clifton/)).toBeTruthy()
+
+    fireEvent.change(within(dialog).getByLabelText("Filter branches"), { target: { value: "clif" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Select all shown" }))
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(sentBody(0)).toEqual({ organizationId: 2, branchIds: [21] })
   })
 
   it("shows the server's refusal instead of claiming success", async () => {

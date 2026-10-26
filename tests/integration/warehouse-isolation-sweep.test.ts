@@ -358,7 +358,6 @@ const ANSWERS_ANY_SIGNED_IN_CALLER = new Set<string>([
   // already reads on its own Product Catalog tab. No tenant's assignment,
   // override or price is joined for a caller with no organization.
   "app/api/v1/analytics/products/list/route.ts",
-  "app/api/v1/analytics/products/catalog-performance/route.ts",
   // The support raise dialog's product picker: a caller with no organization —
   // the warehouse, which answers threads and raises none — gets an empty list.
   "app/api/v1/support/products/route.ts",

@@ -1,4 +1,5 @@
 import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -119,7 +120,7 @@ export async function GET(req: NextRequest) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
         // An organization-wide Viewer reads as Head Office; a pinned one is refused.
-        const userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
+        let userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
         if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
         const userOrgId = (session.user as any).organizationId
         const userBranchId = (session.user as any).branchId
@@ -146,12 +147,21 @@ export async function GET(req: NextRequest) {
         const parsedCompMonths = parseNumberList(url.searchParams.get("compareMonths"), (number) => number >= 1 && number <= 12)
         const parsedCompYears = parseNumberList(url.searchParams.get("compareYears"), (number) => number > 2000)
 
+        // Finance reads as Super Admin, inside the organizations assigned to it.
+        const financeScope = await resolveFinanceReadScope({
+            role: userRole,
+            userId: (session.user as any).id,
+            requestedOrganizationIds: parseNumberList(organizationIdsParam),
+        })
+        if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+        if (financeScope) userRole = "SUPER_ADMIN"
+
         // RBAC & Filter Context Parsing
         const branchIds = await resolveUserAnalyticsBranchIds({
             role: userRole,
             userOrganizationId: userOrgId,
             userBranchId,
-            requestedOrganizationIds: parseNumberList(organizationIdsParam),
+            requestedOrganizationIds: financeScope ? financeScope.organizationIds : parseNumberList(organizationIdsParam),
             requestedBranchIds: parseNumberList(branchIdsParam),
             groupIds,
             assignedBranchIds: await loadAnalyticsAssignedBranchIds(userRole, (session.user as any).id),

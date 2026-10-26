@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge,Warehouse,UsersRound,ShieldAlert } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge,Warehouse,UsersRound,ShieldAlert,Banknote } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
@@ -14,6 +14,7 @@ import { fetcher } from "@/lib/fetcher"
 import { isOrganizationViewer, isViewerRole } from "@/lib/viewer-access"
 import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 import { ORDERING_BLOCK_BRANCHES_URL, ORDERING_BLOCKS_AREA, canUseOrderingBlocksPage } from "@/lib/ordering-blocks-access"
+import { FINANCE_HOME, FINANCE_LABEL, isFinanceRole } from "@/lib/finance-access"
 
 const COLLAPSED_STORAGE_KEY = "oneflowe.sidebar.collapsed"
 
@@ -64,6 +65,25 @@ export function activeEntryHref(
   }
   return plain
 }
+
+/**
+ * Every report Super Admin reads. Finance gets the same list: each endpoint
+ * behind it fences Finance to its assigned organizations
+ * (`lib/finance-access.ts`).
+ */
+const platformReportItems = [
+  visualizeReports,
+  { href: "/reports/organization-report", label: "Organization Report" },
+  { href: "/reports/order-report", label: "Order Report" },
+  // Super Admin, Head Office and Finance only (lib/consolidated-invoice-access.ts).
+  { href: "/reports/consolidated-invoices", label: "Consolidated Invoice Report" },
+  { href: "/reports/refund-report", label: "Refund Report" },
+  { href: "/reports/budget-summary", label: "Budget Report" },
+  { href: "/reports/product-performance", label: "Product Report" },
+  { href: "/reports/user-report", label: "User Report" },
+  { href: "/reports/branch-reports", label: "Branch Report" },
+  { href: "/reports/groups", label: "Group Report" },
+]
 
 /** Entries that exist only to manage or report a budget. */
 const BUDGET_ONLY_HREFS = new Set(["/budgets", "/budget-by-quantity", "/reports/budget-summary"])
@@ -155,19 +175,7 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
         href: "/reports",
         label: "Reports",
         icon: BarChart3,
-        subItems: [
-          visualizeReports,
-          { href: "/reports/organization-report", label: "Organization Report" },
-          { href: "/reports/order-report", label: "Order Report" },
-          // Super Admin and Head Office only (lib/consolidated-invoice-access.ts).
-          { href: "/reports/consolidated-invoices", label: "Consolidated Invoice Report" },
-          { href: "/reports/refund-report", label: "Refund Report" },
-          { href: "/reports/budget-summary", label: "Budget Report" },
-          { href: "/reports/product-performance", label: "Product Report" },
-          { href: "/reports/user-report", label: "User Report" },
-          { href: "/reports/branch-reports", label: "Branch Report" },
-          { href: "/reports/groups", label: "Group Report" },
-        ]
+        subItems: platformReportItems,
       },
       { href: "/support", label: "Support", icon: LifeBuoy },
       // Every tenant's trail. Head Office has the same entry for its own
@@ -300,6 +308,16 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
     ]
   }
 
+  // Apricart finance: its payment KPIs, the order directory, and every report,
+  // all read-only but for Paid / Unpaid. No dashboard: it has none.
+  if (isFinanceRole(role)) {
+    return [
+      { href: FINANCE_HOME, label: "Payments", icon: Banknote },
+      { href: "/orders", label: "Orders", icon: Package },
+      { href: "/reports", label: "Reports", icon: BarChart3, subItems: platformReportItems },
+    ]
+  }
+
   // The read-only account pinned to a branch has its dashboard alone (an
   // organization-wide one is given Head Office's menu by
   // `getNavigationByRole`). Stated rather than left to the fallback below, so
@@ -326,6 +344,9 @@ const describeRole = (role: string) => {
   }
   if (isViewerRole(role)) {
     return "Viewer"
+  }
+  if (isFinanceRole(role)) {
+    return FINANCE_LABEL
   }
   return ""
 }

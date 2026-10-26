@@ -8,7 +8,7 @@ import { useSession } from "next-auth/react"
 // is a set of branches resolved on the server from its own assignments, so it
 // is pinned to its organization here and never to a branch — the branch filter
 // it would otherwise carry is not the client's to decide.
-type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "GROUP_USER" | "VIEWER"
+type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "BRANCH_ADMIN" | "GROUP_USER" | "VIEWER" | "FINANCE"
 
 interface AppContextValue {
   // Current context
@@ -73,6 +73,13 @@ function initializeRoleContext(options: {
     // Pinned to its tenant, with no branch selection: leaving the branch filter
     // empty lets each endpoint apply this role's assigned branch set itself.
     setOrganizationId(String(userOrgId))
+    setBranchId(null)
+    setBranchIds([])
+  } else if (userRole === "FINANCE") {
+    // Finance picks among its assigned organizations like Super Admin does,
+    // but starts on all of them: a saved selection may name an organization
+    // it no longer reaches, which every endpoint would refuse.
+    setOrganizationId(null)
     setBranchId(null)
     setBranchIds([])
   } else if (userRole === "VIEWER" && userOrgId) {
@@ -168,7 +175,7 @@ export function AppContextProvider({ children }: Readonly<{ children: ReactNode 
   }, [])
 
   const resetContext = useCallback(() => {
-    if (userRole === "SUPER_ADMIN") {
+    if (userRole === "SUPER_ADMIN" || userRole === "FINANCE") {
       setOrganizationIdState(null)
       setBranchIdState(null)
       setBranchIdsState([])
