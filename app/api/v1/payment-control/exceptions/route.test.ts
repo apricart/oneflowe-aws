@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 /**
  * The grant handler: a branch id and an optional reason in, the branch's
@@ -92,6 +92,8 @@ function post(body: unknown): NextRequest {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(NOW)
   mocks.getRequestScope.mockReset()
   mocks.withRateLimit.mockReset().mockResolvedValue(null)
   mocks.grantPaymentControlException.mockReset().mockResolvedValue({
@@ -103,6 +105,10 @@ beforeEach(() => {
   mocks.logError.mockReset()
   mocks.branchRows = [{ id: 5, organizationId: 10, name: "North" }]
   signIn("HEAD_OFFICE")
+})
+
+afterEach(() => {
+  vi.useRealTimers()
 })
 
 describe("POST /api/v1/payment-control/exceptions — guards", () => {
@@ -189,6 +195,16 @@ describe("POST /api/v1/payment-control/exceptions — grant", () => {
   it("a branch outside the tenant is a 404, not a 403 — its existence is not confirmed", async () => {
     mocks.grantPaymentControlException.mockResolvedValue({ kind: "branch_not_found" })
     expect((await POST(post({ branchId: 99 }))).status).toBe(404)
+  })
+
+  it("an organization that does not block ordering on unpaid invoices is a 409 and nothing is granted", async () => {
+    mocks.grantPaymentControlException.mockResolvedValue({ kind: "block_disabled" })
+    const response = await POST(post({ branchId: 5 }))
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      error: "This organization does not block ordering on unpaid invoices, so there is nothing to make an exception to",
+    })
+    expect(mocks.resolveBranchPaymentControl).not.toHaveBeenCalled()
   })
 
   it("a second live exception is a 409 that shows the one in force", async () => {

@@ -22,10 +22,10 @@ describe("creating an order", () => {
     expect(gate).toBeLessThan(post.indexOf("req.json()"))
   })
 
-  it("checks the desk's reach before reading the catalogue, and again under lock", () => {
+  it("checks the desk's reach before reading any product, and again under lock", () => {
     const preCheck = post.indexOf("await orderDeskCreationRefusal(role, {")
     expect(preCheck).toBeGreaterThan(-1)
-    expect(preCheck).toBeLessThan(post.indexOf("loadCreationInventory("))
+    expect(preCheck).toBeLessThan(post.indexOf("preflightCreation({"))
     expect(route).toMatch(/async function orderDeskCreationRefusal[\s\S]*?isOrderDeskTarget\(db, \{ userId: input\.userId/)
 
     const transaction = route.slice(route.indexOf("async function processOrderCreationTransaction"))
@@ -34,6 +34,33 @@ describe("creating an order", () => {
     expect(transaction.slice(lockedCheck, lockedCheck + 200)).toContain("lock: true")
     // Before the payment gate, and so before any lock on a budget or a product.
     expect(lockedCheck).toBeLessThan(transaction.indexOf("assertBranchMayOrder(tx"))
+    expect(lockedCheck).toBeLessThan(transaction.indexOf("resolveCreationBudgetTracking(tx, context)"))
+    expect(lockedCheck).toBeLessThan(transaction.indexOf("lockAndPriceDeskLines(tx, context, orgTaxRateBp)"))
+  })
+
+  // plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md
+  it("reads no product and no budget before the transaction for a desk order", () => {
+    const preflight = route.slice(route.indexOf("async function preflightCreation("))
+    const deskReturn = preflight.indexOf("if (isOrderDeskRole(context.role)) return { calculatedItems: [], total: 0, budgetId: null }")
+    expect(deskReturn).toBeGreaterThan(-1)
+    expect(deskReturn).toBeLessThan(preflight.indexOf("loadCreationInventory("))
+    expect(deskReturn).toBeLessThan(preflight.indexOf("preflightCreationBudget("))
+  })
+
+  it("exempts a desk order from budgets by its creator, never by a request field", () => {
+    expect(route).toMatch(/async function resolveCreationBudgetTracking\(tx: any, context: \{ role: unknown; organizationId: number \}\) \{\s*if \(isOrderDeskRole\(context\.role\)\) return false\s*return await resolveOrderBudgetTracking\(tx, context\.organizationId\)/)
+    expect(route).not.toMatch(/\bbudgetExempt\b|context\.budgetTracked\s*=|body\.budgetTracked/)
+    // `role` is the session's, never the body's.
+    expect(post).toContain("const role = (session.user as any).role")
+  })
+
+  it("never creates or changes a catalogue entry while ordering a product the branch does not carry", () => {
+    const desk = route.slice(route.indexOf("async function lockAndPriceDeskLines("), route.indexOf("async function processOrderCreationTransaction"))
+    expect(desk).not.toMatch(/insert\(|update\(organizationInventory|update\(branchInventory/)
+    for (const path of ["lib/server/order-desk-catalogue.ts", "lib/server/order-desk-edit.ts", "lib/order-desk-lines.ts"]) {
+      const text = source(path)
+      expect(text, path).not.toMatch(/insert\((organizationInventory|branchInventory)|update\((organizationInventory|branchInventory)/)
+    }
   })
 
   it("never lets a desk session fall back to an organization of its own", () => {
@@ -109,8 +136,10 @@ describe("the desk's own order actions", () => {
     expect(service).toContain("releaseHeldQuantityBudgetForOrder(tx, cancelled)")
   })
 
-  it("re-prices an edit through the ladder and re-checks the desk can still order there", () => {
-    expect(edit).toContain("resolveEffectivePriceCents({")
+  it("prices an edit as creation does and re-checks the desk can still order there", () => {
+    expect(edit).toContain("priceDeskOrderLines(items, {")
+    expect(edit).toContain("loadDeskBranchLineage(tx, {")
+    expect(source("lib/server/order-desk-catalogue.ts")).toContain("cataloguePriceCents: resolveEffectivePriceCents({")
     expect(edit).toContain("isOrderDeskTarget(tx, {")
     expect(edit.indexOf("settleDueAddonsOnBudget(tx,")).toBeLessThan(edit.indexOf("lockedBudget.amountAllocatedCents + "))
   })
@@ -144,6 +173,29 @@ describe("the customer's screenshot", () => {
     const helper = source("lib/server/order-desk-attachments.ts")
     expect(helper).toContain('"Cache-Control": "private, no-store, max-age=0"')
     expect(helper).toContain("if (!isOrderIntakeAttachmentKey(key)) return NextResponse.json")
+  })
+
+  it("is shown to whoever may read the order, under that reader's own rule, and only for a desk order", () => {
+    // The order readers through the order detail's rule; the warehouse through
+    // its branch reach and work status. Both read the key only after that
+    // check, only for an order the desk entered, and stream it through the
+    // same helper.
+    const readers = source("app/api/v1/orders/[id]/intake-screenshot/route.ts")
+    expect(readers).toContain("requireApiRole([...ORDER_DETAIL_READ_ROLES], { viewerReadsAsHeadOffice: true })")
+    expect(readers).toContain("if (!await canReadOrderDetail({ orderId, scope, viewerReadsAsHeadOffice: true })) return error(\"Not found\", 404)")
+    const warehouse = source("app/api/v1/warehouse/orders/[id]/intake-screenshot/route.ts")
+    expect(warehouse).toContain('requireApiRole(["WAREHOUSE"])')
+    expect(warehouse).toContain("if (!await loadWarehouseOrderInReach(db, user.id, orderId)) return error(\"Not found\", 404)")
+    for (const route of [readers, warehouse]) {
+      expect(route).toContain("intakeAttachmentResponse(await loadDeskOrderIntakeAttachmentKey(orderId))")
+      expect(route).not.toContain("getImage(")
+    }
+    const helper = source("lib/server/order-desk-attachments.ts")
+    expect(helper).toContain("eq(orders.createdByRole, ORDER_DESK_ROLE)")
+    // The payloads carry a flag, never the key.
+    expect(source("app/api/v1/orders/[id]/route.ts")).toContain("hasIntakeScreenshot: hasDeskIntakeScreenshot(item)")
+    expect(source("app/api/v1/orders/[id]/route.ts")).toContain("intakeAttachmentKey: _intakeAttachmentKey,")
+    expect(source("lib/server/warehouse-orders.ts")).toContain("hasIntakeScreenshot: hasDeskIntakeScreenshot(row)")
   })
 
   it("is required, and bound to its uploader and to one order when the order is created", () => {

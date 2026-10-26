@@ -57,7 +57,19 @@ export type ExecutiveApprovalItem = ExecutiveApprovalActions & {
   rejectionReason: string | null
   returnedForCorrectionAt: Date | null
   correctionRequestNote: string | null
-  items: { id: number; productName: string; productCode: string | null; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    productName: string
+    productCode: string | null
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually: boolean
+    cataloguePriceCents: number | null
+    /** False when the product was outside the branch's own catalogue when it was ordered. */
+    inBranchCatalogue: boolean
+  }[]
 }
 
 export type ExecutiveApprovalPage = {
@@ -137,9 +149,6 @@ export async function listExecutiveApprovals(
 
   const enteredBy = alias(users, "desk_entered_by")
   const approvedBy = alias(users, "desk_approved_by")
-  // Waiting work oldest first, so nothing sits at the bottom of the queue;
-  // decided work newest first.
-  const oldestFirst = executiveApprovalSelection(query.tab).kind === "pending"
   const rows = await db
     .select({
       id: orders.id,
@@ -175,10 +184,8 @@ export async function listExecutiveApprovals(
     .leftJoin(enteredBy, eq(enteredBy.id, orders.createdByUserId))
     .leftJoin(approvedBy, eq(approvedBy.id, orders.approvedByUserId))
     .where(where)
-    .orderBy(
-      oldestFirst ? asc(orders.createdAt) : desc(orders.createdAt),
-      oldestFirst ? asc(orders.id) : desc(orders.id),
-    )
+    // Every tab lists the latest orders first.
+    .orderBy(desc(orders.createdAt), desc(orders.id))
     .limit(query.limit)
     .offset((query.page - 1) * query.limit)
 
@@ -194,6 +201,9 @@ export async function listExecutiveApprovals(
         quantity: orderItems.quantity,
         unit: orderItems.unit,
         priceCents: orderItems.priceCents,
+        organizationInventoryId: orderItems.organizationInventoryId,
+        priceEnteredManually: orderItems.priceEnteredManually,
+        cataloguePriceCents: orderItems.cataloguePriceCents,
       })
       .from(orderItems)
       .where(inArray(orderItems.orderId, orderIds))
@@ -215,10 +225,14 @@ export async function listExecutiveApprovals(
       hasAttachment: intakeAttachmentKey !== null,
       items: lineRows
         .filter((line) => line.orderId === row.id)
-        .map(({ orderId: _orderId, quantity, priceCents, ...line }) => ({
+        .map(({ orderId: _orderId, quantity, priceCents, cataloguePriceCents, organizationInventoryId, ...line }) => ({
           ...line,
+          // Only a desk order reaches this list; its line has no catalogue
+          // entry exactly when the branch did not carry the product.
+          inBranchCatalogue: organizationInventoryId !== null,
           quantity: Number(quantity),
           priceCents: Number(priceCents),
+          cataloguePriceCents: cataloguePriceCents === null ? null : Number(cataloguePriceCents),
         })),
     })),
     pagination: {

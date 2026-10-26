@@ -29,6 +29,7 @@ import { legacyCreditedTaxCents, type LegacyApprovedRefund } from "@/lib/invoice
 import { reservedInvoiceNumber } from "@/lib/invoice-ledger"
 import { getReceiptUserDisplayName } from "@/lib/receipt-user"
 import { invoiceStatusSql } from "@/lib/server/invoice-status-sql"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 
 /**
  * The Consolidated Invoice Report's server side
@@ -86,7 +87,18 @@ async function resolveOrganization(query: ConsolidatedInvoiceQuery): Promise<
   // Both callers are GET handlers. An organization-wide Viewer reads the
   // report as Head Office does (its own organization, whatever was sent); a
   // pinned one is refused. The caller keeps its real role for the audit row.
-  const readRole = viewerReadRole(user)
+  let readRole = viewerReadRole(user)
+  // Finance reads as Super Admin, but only an organization assigned to it.
+  const financeScope = await resolveFinanceReadScope({
+    role: readRole,
+    userId: user.id,
+    requestedOrganizationIds: query.organizationId === null ? [] : [query.organizationId],
+  })
+  if (financeScope && !financeScope.ok) return { ok: false, status: financeScope.status, error: financeScope.error }
+  if (financeScope) {
+    if (query.organizationId === null) return { ok: false, status: 400, error: "organizationId is required" }
+    readRole = "SUPER_ADMIN"
+  }
   if (!canReadConsolidatedInvoiceReport(readRole)) return { ok: false, status: 403, error: "Forbidden" }
   const caller: ReportCaller = { userId: user.id, role: String(user.role), session }
 

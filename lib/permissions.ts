@@ -733,5 +733,20 @@ export const ROLE_TEMPLATES = {
       Permission.SUPPORT_MANAGE,
     ],
   },
+  FINANCE: {
+    name: "Finance",
+    description: "Apricart finance: reads orders and reports for its assigned organizations, marks orders paid or unpaid",
+    permissions: [
+      // Descriptive only, like every template here. What confines this role is
+      // `lib/finance-access.ts` — its page areas and an API allowlist enforced
+      // in `proxy.ts` — and each handler's own role and organization fence.
+      // Every key is a read; the one change it makes (Paid / Unpaid) is
+      // admitted by the payment-status route itself. No *_CREATE, *_EDIT,
+      // *_APPROVE, *_MANAGE, PRICING_MANAGE or REPORTS_SCHEDULE.
+      Permission.ORDER_VIEW,
+      Permission.FINANCE_VIEW_REPORTS,
+      Permission.REPORTS_EXPORT,
+    ],
+  },
 }
 

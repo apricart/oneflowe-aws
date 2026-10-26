@@ -34,13 +34,18 @@ import {
   type InitiatorRole,
   type SignupApprover,
   approverListError,
+  createsChildBranch,
   deriveNameFromEmail,
   deriveUsernameFromEmail,
   initiatorRoleForBranchCount,
   joinUsesApprovalLevels,
+  newBranchDecisionHierarchyError,
   type RequestedBranchEntry,
+  type RequestedNewBranch,
   requestedNewBranches,
+  requestedParentBranchIds,
 } from "@/lib/join-department-signup"
+import { type BranchHierarchy, type BranchHierarchyRole, isBranchHierarchyRole } from "@/lib/branch-hierarchy"
 import {
   type ApprovalLevel,
   type ApprovalLevelBand,
@@ -53,6 +58,7 @@ import { totalBlockingOrders } from "@/lib/role-change-preconditions"
 import { assertUniqueUserFields, normalizeEmail } from "@/lib/user-uniqueness"
 import { usernameExists } from "@/lib/user-username-uniqueness"
 import { createBranchInTx } from "@/lib/server/branch-creation"
+import { HIERARCHY_CONFLICT_MESSAGE, isBranchHierarchyConstraintError } from "@/lib/server/branch-hierarchy"
 import {
   addBranchesToScope,
   replaceMultiBranchScope,
@@ -190,6 +196,44 @@ export async function matchCrcsToBranches(
 }
 
 /**
+ * Which of `branchIds` are active Parent branches of the organization. With no
+ * ids, every one of them — what the join page offers a child as its parent
+ * (plans/OF-JOIN-new-branch-parent-child.md), bounded like the lookup's list.
+ */
+export async function activeParentBranchIds(
+  executor: Executor,
+  organizationId: number,
+  branchIds?: readonly number[],
+): Promise<number[]> {
+  if (branchIds?.length === 0) return []
+  const rows = await executor
+    .select({ id: branches.id })
+    .from(branches)
+    .where(and(
+      eq(branches.organizationId, organizationId),
+      eq(branches.status, "active"),
+      eq(branches.hierarchyRole, "PARENT"),
+      ...(branchIds ? [inArray(branches.id, [...branchIds])] : []),
+    ))
+    .orderBy(asc(branches.id))
+    .limit(500)
+  return rows.map((row) => row.id)
+}
+
+/** The proposed type's columns on a request branch row; all null when none was proposed. */
+export function requestedHierarchyColumns(entry: Pick<RequestedNewBranch, "hierarchy">): {
+  requestedHierarchyRole: BranchHierarchyRole | null
+  requestedParentBranchId: number | null
+  requestedParentCrc: string | null
+} {
+  return {
+    requestedHierarchyRole: entry.hierarchy?.hierarchyRole ?? null,
+    requestedParentBranchId: entry.hierarchy?.parentBranchId ?? null,
+    requestedParentCrc: entry.hierarchy?.parentCrc ?? null,
+  }
+}
+
+/**
  * Store a department sign-up. Approver emails are **never looked up** here:
  * the answer to a public caller must not reveal whether a colleague has an
  * account. Head Office sees who they are at review.
@@ -220,6 +264,14 @@ export async function createDepartmentJoinRequest(
     if (found.length !== existingIds.length) {
       return { kind: "scope", message: "A branch you chose is not available in this organization", status: 400 }
     }
+  }
+
+  // A parent named for a new branch is an active Parent branch of this
+  // organization; anything else — another tenant's, missing, not a parent —
+  // reads the same (plans/OF-JOIN-new-branch-parent-child.md).
+  const parentIds = requestedParentBranchIds(newBranches)
+  if (parentIds.length > 0 && (await activeParentBranchIds(db, organizationId, parentIds)).length !== parentIds.length) {
+    return { kind: "scope", message: "A parent branch you chose is not available in this organization", status: 400 }
   }
 
   const branchCount = existingIds.length + newBranches.length
@@ -292,6 +344,7 @@ export async function createDepartmentJoinRequest(
           requestedBranchName: entry.name,
           requestedBranchCity: entry.city,
           requestedBranchProvince: entry.province,
+          ...requestedHierarchyColumns(entry),
         })),
       ])
       await tx.insert(organizationJoinRequestApprovers).values(submission.approvers.map((approver) => ({
@@ -327,6 +380,9 @@ type StoredRequestBranch = {
   requestedBranchName: string | null
   requestedBranchCity: string | null
   requestedBranchProvince: string | null
+  requestedHierarchyRole: string | null
+  requestedParentBranchId: number | null
+  requestedParentCrc: string | null
   resolvedBranchId: number | null
 }
 
@@ -351,6 +407,9 @@ export async function loadRequestChildren(executor: Executor, requestId: number)
         requestedBranchName: organizationJoinRequestBranches.requestedBranchName,
         requestedBranchCity: organizationJoinRequestBranches.requestedBranchCity,
         requestedBranchProvince: organizationJoinRequestBranches.requestedBranchProvince,
+        requestedHierarchyRole: organizationJoinRequestBranches.requestedHierarchyRole,
+        requestedParentBranchId: organizationJoinRequestBranches.requestedParentBranchId,
+        requestedParentCrc: organizationJoinRequestBranches.requestedParentCrc,
         resolvedBranchId: organizationJoinRequestBranches.resolvedBranchId,
       })
       .from(organizationJoinRequestBranches)
@@ -472,6 +531,16 @@ export type DepartmentJoinReview = {
     requestedCity: string | null
     requestedProvince: string | null
     /**
+     * The type the applicant proposed for a branch to create, null when it
+     * proposed none; a child's parent is an existing branch (id and name) or
+     * another branch to create on this request (its CRC)
+     * (plans/OF-JOIN-new-branch-parent-child.md).
+     */
+    requestedHierarchyRole: BranchHierarchyRole | null
+    requestedParentBranchId: number | null
+    requestedParentBranchName: string | null
+    requestedParentCrc: string | null
+    /**
      * A CRC still to resolve that exactly one active branch of this
      * organization already carries: Head Office must choose between that
      * branch and a new one. Null otherwise.
@@ -556,7 +625,7 @@ export async function loadDepartmentJoinReview(input: {
     : new Map<string, number>()
 
   const branchIds = [
-    ...children.requestBranches.flatMap((row) => [row.existingBranchId, row.resolvedBranchId]),
+    ...children.requestBranches.flatMap((row) => [row.existingBranchId, row.resolvedBranchId, row.requestedParentBranchId]),
     ...matchedByCrc.values(),
   ].filter((id): id is number => id !== null)
   const branchNames = new Map<number, string>()
@@ -624,6 +693,10 @@ export async function loadDepartmentJoinReview(input: {
         requestedName: row.requestedBranchName,
         requestedCity: row.requestedBranchCity,
         requestedProvince: row.requestedBranchProvince,
+        requestedHierarchyRole: isBranchHierarchyRole(row.requestedHierarchyRole) ? row.requestedHierarchyRole : null,
+        requestedParentBranchId: row.requestedParentBranchId,
+        requestedParentBranchName: row.requestedParentBranchId === null ? null : branchNames.get(row.requestedParentBranchId) ?? null,
+        requestedParentCrc: row.requestedParentCrc,
         crcMatch: matchedId !== undefined && matchedName !== undefined ? { branchId: matchedId, name: matchedName } : null,
       }
     }),
@@ -758,6 +831,10 @@ export type DepartmentJoinDecisionInput = {
     province?: string
     city?: string
     address?: string
+    /** Absent = Standalone (plans/OF-JOIN-new-branch-parent-child.md). */
+    hierarchyRole?: BranchHierarchyRole
+    parentBranchId?: number
+    parentRequestBranchId?: number
   }>
   addressBranches?: Array<{ requestAddressId: number; requestBranchId: number }>
   expectedResolutions?: Array<{ level: number; kind: ApproverResolutionKind; userId: string | null }>
@@ -890,7 +967,9 @@ async function activeBranchInOrganization(tx: TransactionExecutor, branchId: num
 
 /**
  * Step 1: every request branch becomes a real branch id — an existing branch
- * re-checked, a CRC mapped onto an existing branch or created.
+ * re-checked, a CRC mapped onto an existing branch or created. Child branches
+ * are created last, so a child may name a parent this same approval created
+ * (plans/OF-JOIN-new-branch-parent-child.md).
  */
 async function resolveRequestBranches(
   context: DecisionContext,
@@ -900,7 +979,15 @@ async function resolveRequestBranches(
   const branchByRequestBranch = new Map<number, number>()
   const createdBranches: Array<{ id: number; city: string }> = []
 
-  for (const row of requestBranches) {
+  const hierarchyProblem = newBranchDecisionHierarchyError(input.newBranches ?? [])
+  if (hierarchyProblem) throw new JoinDecisionAbort(400, hierarchyProblem)
+  const choiceFor = (row: StoredRequestBranch) => input.newBranches?.find((entry) => entry.requestBranchId === row.id)
+  const parentsFirst = [
+    ...requestBranches.filter((row) => !createsChildBranch(choiceFor(row))),
+    ...requestBranches.filter((row) => createsChildBranch(choiceFor(row))),
+  ]
+
+  for (const row of parentsFirst) {
     if (row.existingBranchId !== null) {
       if (await activeBranchInOrganization(tx, row.existingBranchId, input.organizationId) === null) {
         throw new JoinDecisionAbort(409, "One of the requested branches is no longer active.")
@@ -909,11 +996,11 @@ async function resolveRequestBranches(
       continue
     }
 
-    const choice = input.newBranches?.find((entry) => entry.requestBranchId === row.id)
+    const choice = choiceFor(row)
     if (!choice) throw new JoinDecisionAbort(400, `Give the details of the new branch for CRC ${row.costCenterId}.`)
     let resolvedId: number | null
     if (choice.mapToBranchId === undefined) {
-      const created = await createRequestedBranch(context, row, choice)
+      const created = await createRequestedBranch(context, row, choice, decidedHierarchy(choice, branchByRequestBranch))
       createdBranches.push(created)
       resolvedId = created.id
     } else {
@@ -930,10 +1017,28 @@ async function resolveRequestBranches(
   return { branchByRequestBranch, createdBranches }
 }
 
+/**
+ * The type a created branch takes from Head Office's choice. A parent named by
+ * request branch was created earlier in this approval (children come last, and
+ * `newBranchDecisionHierarchyError` has proved it is created as Parent).
+ */
+function decidedHierarchy(
+  choice: NonNullable<DepartmentJoinDecisionInput["newBranches"]>[number],
+  branchByRequestBranch: ReadonlyMap<number, number>,
+): BranchHierarchy {
+  const hierarchyRole = choice.hierarchyRole ?? "STANDALONE"
+  if (hierarchyRole !== "CHILD") return { hierarchyRole, parentBranchId: null }
+  if (choice.parentBranchId !== undefined) return { hierarchyRole, parentBranchId: choice.parentBranchId }
+  const created = choice.parentRequestBranchId === undefined ? undefined : branchByRequestBranch.get(choice.parentRequestBranchId)
+  if (created === undefined) throw new JoinDecisionAbort(400, "Choose the parent branch for a child branch.")
+  return { hierarchyRole, parentBranchId: created }
+}
+
 async function createRequestedBranch(
   context: DecisionContext,
   row: StoredRequestBranch,
   choice: NonNullable<DepartmentJoinDecisionInput["newBranches"]>[number],
+  hierarchy: BranchHierarchy,
 ): Promise<{ id: number; city: string }> {
   if (!choice.name || !choice.province || !choice.city || !choice.address) {
     throw new JoinDecisionAbort(400, `Give the name, province, city and address of the new branch for CRC ${row.costCenterId}.`)
@@ -954,9 +1059,15 @@ async function createRequestedBranch(
     costCenterId: row.costCenterId,
     status: "active",
     region: null,
+    hierarchy,
   }, context.input.actor)
   if (creation.kind === "duplicate-name") {
     throw new JoinDecisionAbort(409, `A branch named "${choice.name}" already exists in your organization.`)
+  }
+  // An existing parent re-checked in this transaction: same organization, a
+  // Parent, held FOR SHARE so it cannot be re-typed under the new child.
+  if (creation.kind === "hierarchy-refused") {
+    throw new JoinDecisionAbort(creation.refusal.status, `New branch "${choice.name}": ${creation.refusal.message}.`)
   }
   if (creation.kind !== "created") throw new JoinDecisionAbort(404, "Organization not found")
   return { id: creation.item.id, city: city.name }
@@ -1444,6 +1555,11 @@ export async function decideDepartmentJoinRequest(
   } catch (caughtError) {
     if (caughtError instanceof JoinDecisionAbort) {
       return { ok: false, message: caughtError.message, status: caughtError.status }
+    }
+    // A parent re-typed between the check and the insert: the database guard
+    // refused the child, and the whole approval rolled back.
+    if (isBranchHierarchyConstraintError(caughtError)) {
+      return { ok: false, message: HIERARCHY_CONFLICT_MESSAGE, status: 409 }
     }
     throw caughtError
   }

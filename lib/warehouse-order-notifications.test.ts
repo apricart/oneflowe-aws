@@ -24,6 +24,7 @@ describe("which stages the warehouse is told about", () => {
   it("is every order stage from creation to fulfilment, refunds and cancellations included", () => {
     expect([...WAREHOUSE_ORDER_EVENTS]).toEqual([
       "CREATED", "EDITED", "RETURNED", "RESUBMITTED", "APPROVED", "REJECTED", "CANCELLED", "REFUNDED", "FULFILLED",
+      "TRANSFERRED_IN", "TRANSFERRED_OUT",
     ])
   })
 
@@ -61,7 +62,8 @@ describe("event keys", () => {
   })
 
   it("name the occurrence of a recurring event, and refuse one without it", () => {
-    expect([...RECURRING_WAREHOUSE_ORDER_EVENTS]).toEqual(["EDITED", "RETURNED", "RESUBMITTED", "REFUNDED"])
+    // An order can move between warehouses more than once, so a transfer is recurring too.
+    expect([...RECURRING_WAREHOUSE_ORDER_EVENTS]).toEqual(["EDITED", "RETURNED", "RESUBMITTED", "REFUNDED", "TRANSFERRED_IN", "TRANSFERRED_OUT"])
     expect(warehouseOrderEventKey({ event: "REFUNDED", orderId: 42, recipientUserId: user, occurrence: 7 }))
       .toBe(`WAREHOUSE_ORDER_REFUNDED:42:7:${user}`)
     for (const event of RECURRING_WAREHOUSE_ORDER_EVENTS) {
@@ -99,7 +101,8 @@ describe("wording", () => {
 
   it("links to the order queue only for an order that is the warehouse's work", () => {
     const linked = WAREHOUSE_ORDER_EVENTS.filter((event) => warehouseOrderLink(event, payload) !== null)
-    expect(linked).toEqual(["APPROVED", "FULFILLED"])
+    // A transfer in hands the order to this warehouse; a transfer out takes it away.
+    expect(linked).toEqual(["APPROVED", "FULFILLED", "TRANSFERRED_IN"])
     expect(warehouseOrderLink("CREATED", { ...payload, approvedAtCreation: true })).toBe("/warehouse#orders")
   })
 
@@ -140,6 +143,11 @@ describe("the notification list", () => {
     for (const status of ["PENDING", "REJECTED", "CANCELLED", "REFUNDED", null]) {
       expect(toWarehouseNotificationItem({ ...row, orderStatus: status })?.href, String(status)).toBeNull()
     }
+  })
+
+  it("does not link an order transferred to a warehouse this user does not operate", () => {
+    expect(toWarehouseNotificationItem({ ...row, orderStatus: "APPROVED", orderInReach: false })?.href).toBeNull()
+    expect(toWarehouseNotificationItem({ ...row, orderStatus: "APPROVED", orderInReach: true })?.href).toBe("/warehouse#orders")
   })
 
   it("reports read notices and drops rows that are not warehouse notices", () => {

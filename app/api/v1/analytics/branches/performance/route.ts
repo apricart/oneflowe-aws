@@ -14,11 +14,14 @@ import {
 import { metricExpressions, REVENUE_ELIGIBLE_FILTER } from "@/lib/metric-utils"
 import { redactAnalyticsPrices, shouldHidePricesForRole } from "@/lib/price-visibility"
 import { lacksAnalyticsTenant, resolveMultiBranchAnalyticsIds } from "@/lib/server/analytics-scope"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { loadAnalyticsAssignedBranchIds } from "@/lib/server/analytics-branch-scope"
 import { parseEndDateParam, parseStartDateParam } from "@/lib/date-range-params"
 
 type BranchPerformanceFilters = {
     organizationId: number | null
+    /** Finance's fenced organizations; null for every other caller. Never empty when set. */
+    organizationIds: number[] | null
     groupIds: number[]
     branchIds: number[]
     // Parent / child label filters (plans/OF-BRANCH-parent-child-label.md).
@@ -56,6 +59,7 @@ function parseBranchFilters(
     const isYear = (number: number) => !Number.isNaN(number) && number > 2000
     return {
         organizationId,
+        organizationIds: null,
         groupIds: parseNumberList(searchParams.get("groupIds")),
         branchIds: parseNumberList(searchParams.get("branchIds")),
         hierarchyRoles: hierarchy.hierarchyRoles,
@@ -75,6 +79,7 @@ function getScopeConditions(filters: BranchPerformanceFilters) {
     return [
         REVENUE_ELIGIBLE_FILTER,
         filters.organizationId ? eq(branches.organizationId, filters.organizationId) : undefined,
+        filters.organizationIds ? inArray(branches.organizationId, filters.organizationIds) : undefined,
         filters.groupIds.length > 0 ? inArray(branches.groupId, filters.groupIds) : undefined,
         filters.branchIds.length > 0 ? inArray(branches.id, filters.branchIds) : undefined,
         filters.hierarchyRoles.length > 0 ? inArray(branches.hierarchyRole, filters.hierarchyRoles) : undefined,
@@ -218,8 +223,17 @@ export async function GET(req: NextRequest) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
         // An organization-wide Viewer reads as Head Office; a pinned one is refused.
-        const userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
+        let userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
         if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+        // Finance reads as Super Admin, inside the organizations assigned to it.
+        const requestedOrganizationId = new URL(req.url).searchParams.get("organizationId")
+        const financeScope = await resolveFinanceReadScope({
+            role: userRole,
+            userId: (session.user as any).id,
+            requestedOrganizationIds: requestedOrganizationId ? [requestedOrganizationId] : [],
+        })
+        if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+        if (financeScope) userRole = "SUPER_ADMIN"
         const userOrganizationId = (session.user as any).organizationId
         if (lacksAnalyticsTenant(userRole, userOrganizationId)) {
             return NextResponse.json({ error: "Forbidden" }, { status: 403 })
@@ -234,7 +248,8 @@ export async function GET(req: NextRequest) {
         if (!hierarchyRoles || !parentBranchIds) {
             return NextResponse.json({ error: "Invalid branch type or parent branch filter" }, { status: 400 })
         }
-        const requestedFilters = parseBranchFilters(searchParams, userRole, userOrganizationId, { hierarchyRoles, parentBranchIds })
+        const parsedFilters = parseBranchFilters(searchParams, userRole, userOrganizationId, { hierarchyRoles, parentBranchIds })
+        const requestedFilters = financeScope ? { ...parsedFilters, organizationIds: financeScope.organizationIds } : parsedFilters
 
         // A multi-branch role reports on the branches assigned to it and on
         // nothing else, so its assignments replace whatever branch filter the

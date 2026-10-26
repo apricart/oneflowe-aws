@@ -1,3 +1,4 @@
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { stringifyPrimitive } from "@/lib/stringify-primitive"
 import { NextResponse, type NextRequest } from "next/server"
@@ -61,6 +62,7 @@ const ORDER_REPORT_SORT_SQL: Record<OrderReportSortKey, SQL | AnyColumn> = {
     deliveryStatus: orderSelectColumns.fulfillmentStatus,
     paymentStatus: orderSelectColumns.paymentStatus,
     approvalLevel: orders.approvalLevel,
+    financialApproverLevel: approverUsers.orderApprovalLevel,
     approver: sql`LOWER(${approverUsers.fullName})`,
     quantityOrdered: quantityOrderedSql,
     quantityDelivered: sql`(${quantityOrderedSql} - ${quantityRefundedSql})`,
@@ -98,15 +100,21 @@ function addSummarySearchCondition(conditions: any[], search: string | null) {
     if (normalized.length > 100) return "Search query must be at most 100 characters"
     const escaped = normalized.replace(/[\\%_]/g, String.raw`\$&`)
     const pattern = `%${escaped}%`
-    conditions.push(or(
+    const searchConditions: SQL[] = [
         ilike(orders.tid, pattern),
+        sql`${orders.receiptData} ->> 'invoiceNumber' ILIKE ${pattern}`,
         sql`CAST(${orders.createdByUserId} AS text) ILIKE ${pattern}`,
         sql`EXISTS (
             SELECT 1 FROM ${users} AS report_users
             WHERE report_users.id = ${orders.createdByUserId}
             AND (report_users.full_name ILIKE ${pattern} OR report_users.employee_id ILIKE ${pattern})
         )`,
-    ))
+    ]
+    const numericOrderId = Number(normalized)
+    if (/^\d+$/.test(normalized) && Number.isSafeInteger(numericOrderId)) {
+        searchConditions.push(eq(orders.id, numericOrderId))
+    }
+    conditions.push(or(...searchConditions))
     return null
 }
 
@@ -333,12 +341,18 @@ export async function GET(req: NextRequest) {
     addSummaryPaymentStatusCondition(conditions, paymentStatusParam.status)
 
     // Security: RBAC
-    const normalizedRole = (roleName || "").toUpperCase().replace(/\s+/g, '_')
-    const scopedOrganizationIds = resolveAnalyticsOrganizationIds({
-        role: normalizedRole,
-        userOrganizationId: currentUserOrgId,
-        requestedOrganizationIds,
-    })
+    let normalizedRole = (roleName || "").toUpperCase().replace(/\s+/g, '_')
+    // Finance reads as Super Admin, inside the organizations assigned to it.
+    const financeScope = await resolveFinanceReadScope({ role: normalizedRole, userId, requestedOrganizationIds })
+    if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+    if (financeScope) normalizedRole = "SUPER_ADMIN"
+    const scopedOrganizationIds = financeScope
+        ? financeScope.organizationIds
+        : resolveAnalyticsOrganizationIds({
+            role: normalizedRole,
+            userOrganizationId: currentUserOrgId,
+            requestedOrganizationIds,
+        })
     const pricesHidden = await shouldHidePricesForRole(normalizedRole, currentUserOrgId)
     const respond = (payload: any) => buildSummaryResponse(pricesHidden, payload)
     const requestedSort = parseSortParams(

@@ -47,7 +47,7 @@ const order = (id: number, overrides: Partial<DeskOrder> = {}): DeskOrder => ({
   fulfilledAt: null,
   cancelledAt: null,
   cancellationReason: null,
-  items: [{ id: 9, organizationInventoryId: 3, productName: "Rice", quantity: 2, unit: "kg", priceCents: 75_000 }],
+  items: [{ id: 9, organizationInventoryId: 3, globalProductId: 30, productName: "Rice", productCode: "P-30", allowDecimalQuantity: false, quantityStep: 1, quantity: 2, unit: "kg", priceCents: 75_000 }],
   ...overrides,
 })
 

@@ -2,6 +2,7 @@ import { z } from "zod"
 import { ORDER_APPROVER_ROLES } from "@/lib/order-approver-role"
 import { MAX_BUSINESS_QUANTITY, isUniquePositiveIdList } from "@/lib/business-rules"
 import { ORDER_CORRECTION_TEXT_MAX_LENGTH } from "@/lib/order-correction"
+import { MIN_ENTERED_UNIT_PRICE_CENTS } from "@/lib/order-line-price"
 import {
   DELIVERY_ADDRESS_DECISIONS,
   MAX_DELIVERY_ADDRESS_CITY,
@@ -20,6 +21,12 @@ import {
 import { PROPAGATION_MODES } from "@/lib/group-price-propagation"
 import { BRANCH_REGIONS } from "@/lib/branch-region"
 import { BRANCH_HIERARCHY_ROLES } from "@/lib/branch-hierarchy"
+import {
+  BRANCH_CONTACT_PHONE_HINT,
+  MAX_BRANCH_CONTACT_PHONE,
+  isValidBranchContactPhone,
+  normalizeBranchContactPhone,
+} from "@/lib/branch-contact-phone"
 import {
   HEAD_COUNT_REQUEST_DECISIONS,
   MAX_BRANCH_HEAD_COUNT,
@@ -43,7 +50,28 @@ import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import { CANCELLATION_REASON_MAX_LENGTH, INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH } from "@/lib/order-desk-access"
 import { GROUP_ORDER_CANCEL_REASON_MAX_LENGTH } from "@/lib/group-order-cancel"
 import { APRICART_EXECUTIVE_ASSIGNMENT_MAX } from "@/lib/apricart-executive-access"
-import { WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION, WAREHOUSE_CITY_MAX_LENGTH } from "@/lib/warehouse-access"
+import { FINANCE_ORGANIZATION_MAX } from "@/lib/finance-access"
+import {
+  WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION,
+  WAREHOUSE_CITY_BULK_MAX,
+  WAREHOUSE_CITY_MAX_LENGTH,
+  WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER,
+} from "@/lib/warehouse-access"
+import {
+  APRICART_WAREHOUSE_ADDRESS_MAX_LENGTH,
+  APRICART_WAREHOUSE_CITY_MAX_LENGTH,
+  APRICART_WAREHOUSE_CODE_MAX_LENGTH,
+  APRICART_WAREHOUSE_CODE_PATTERN,
+  APRICART_WAREHOUSE_NAME_MAX_LENGTH,
+  APRICART_WAREHOUSE_PHONE_MAX_LENGTH,
+  APRICART_WAREHOUSE_STATUSES,
+  BRANCH_ROUTE_MAX_PER_ORGANIZATION,
+  normalizeWarehouseCode,
+} from "@/lib/apricart-warehouses"
+import {
+  ORDER_WAREHOUSE_TRANSFER_REASON_MAX_LENGTH,
+  ORDER_WAREHOUSE_TRANSFER_REASON_MIN_LENGTH,
+} from "@/lib/order-warehouse-transfer"
 import { MAX_ALLOWLIST_ENTRIES } from "@/lib/security/ip-allowlist"
 import { MAX_APPROVAL_LEVELS, approvalLevelsError } from "@/lib/order-approval-levels"
 import { USERNAME_BASE_MAX_LENGTH } from "@/lib/username-prefix"
@@ -64,6 +92,12 @@ import {
   SIGNUP_MAX_BRANCHES,
   SIGNUP_PHONE_PATTERN,
   UNLISTED_CITY_MESSAGE,
+  newBranchChoiceHierarchyError,
+  newBranchDecisionHierarchyError,
+  requestedBranchHierarchyError,
+  requestedHierarchyOf,
+  requestedHierarchyPairingError,
+  requestedNewBranches,
 } from "@/lib/join-department-signup"
 import { findPakistanCity } from "@/lib/pakistan-cities"
 import {
@@ -124,6 +158,9 @@ export const systemRoleSchema = z.enum([
   "APRICART_SUPPORT",
   // Apricart's riders: deliver assigned orders (`lib/rider-access.ts`).
   "RIDER",
+  // Apricart finance: reads orders and reports for the organizations Super
+  // Admin assigns, and marks orders Paid or Unpaid (`lib/finance-access.ts`).
+  "FINANCE",
 ])
 
 export type SystemRole = z.infer<typeof systemRoleSchema>
@@ -187,6 +224,13 @@ export const userCreateSchema = z.object({
   // the role and organization admit one is checked inside the creation
   // transaction (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
   orderApprovalLevel: userOrderApprovalLevel.optional().default(null),
+  // FINANCE only: the organizations it reads. Required non-empty for that
+  // role and refused for every other, by the route (`financeOrganizationsError`).
+  financeOrganizationIds: z.array(positiveId)
+    .max(FINANCE_ORGANIZATION_MAX)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" })
+    .optional()
+    .default([]),
 }).strict().refine((input) => input.role === "GROUP_USER" || input.budgetAllocationEnabled === undefined, {
   message: "Budget allocation access applies only to Group Financial Approvers",
   path: ["budgetAllocationEnabled"],
@@ -209,6 +253,16 @@ export const userScopeUpdateSchema = z.object({
 export const orderDeskAssignmentsUpdateSchema = z.object({
   organizationIds: assignedIdList,
   branchIds: assignedIdList,
+}).strict()
+
+/**
+ * Replaces the organizations a Finance account reads. Sending an empty list
+ * withdraws every organization: the account then reads nothing.
+ */
+export const financeOrganizationsUpdateSchema = z.object({
+  organizationIds: z.array(positiveId)
+    .max(FINANCE_ORGANIZATION_MAX)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
 }).strict()
 
 /**
@@ -268,6 +322,18 @@ export const userAccessUpdateSchema = z.object({
  */
 const branchHeadCount = z.number().int().min(0).max(MAX_BRANCH_HEAD_COUNT)
 
+/**
+ * A branch's contact phone as the API takes it: blank or null is "not
+ * provided"; anything else must pass `isValidBranchContactPhone`. Stored
+ * normalised. See plans/OF-BRANCH-contact-phone.md.
+ */
+const branchContactPhone = z.union([
+  z.string().max(MAX_BRANCH_CONTACT_PHONE * 2)
+    .transform((value) => normalizeBranchContactPhone(value) || null)
+    .refine((value) => value === null || isValidBranchContactPhone(value), { message: `Invalid contact phone. ${BRANCH_CONTACT_PHONE_HINT}` }),
+  z.null(),
+])
+
 /** A parent branch id, kept inside a Postgres `integer`; null = no parent. */
 const parentBranchIdField = z.union([z.number().int().positive().max(2_147_483_647), z.null()])
 
@@ -283,6 +349,8 @@ export const branchCreateSchema = z.object({
   region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
   // How many people work there; null or absent = not provided.
   headCount: z.union([branchHeadCount, z.null()]).optional(),
+  // The number the branch is reached on; null or absent = not provided.
+  contactPhone: branchContactPhone.optional(),
   // Parent / child / standalone (absent = standalone); a child names its
   // parent. The pairing is checked by branchHierarchyInputError in the route.
   hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
@@ -301,6 +369,8 @@ export const branchUpdateSchema = z.object({
   region: z.union([z.enum(BRANCH_REGIONS), z.null()]).optional(),
   // Null clears it back to "not provided".
   headCount: z.union([branchHeadCount, z.null()]).optional(),
+  // Null or blank clears it back to "not provided".
+  contactPhone: branchContactPhone.optional(),
   // Either alone or both; planned by planBranchHierarchyChange in the route.
   hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
   parentBranchId: parentBranchIdField.optional(),
@@ -495,8 +565,28 @@ const orderMutationItemsSchema = z.array(z.object({
     "Each product can only appear once in an order",
   )
 
-export const orderCreateSchema = z.object({
-  items: orderMutationItemsSchema,
+/**
+ * An Order Desk line: any active Apricart global product, a quantity, and the
+ * price the customer agreed — required, more than zero, tax-inclusive
+ * (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md).
+ * Only `POST /api/v1/orders` for an `ORDER_DESK` caller and the desk's own edit
+ * accept it; every other order write keeps `orderMutationItemsSchema`, whose
+ * strict lines refuse a price and a global product id outright.
+ */
+const deskOrderItemsSchema = z.array(z.object({
+    globalProductId: positiveId,
+    quantity: z.coerce.number().positive().max(MAX_BUSINESS_QUANTITY),
+    unitPriceCents: z
+      .number({ error: (issue) => (issue.input === undefined ? "Enter a price for every product" : "A price must be a number of paisa") })
+      .int("A price must be a whole number of paisa")
+      .min(MIN_ENTERED_UNIT_PRICE_CENTS, "A price must be more than zero")
+      .max(MAX_PRICE_CENTS, "A price is too large"),
+  }).strict()).min(1).max(500).refine(
+    (items) => isUniquePositiveIdList(items.map((item) => item.globalProductId)),
+    "Each product can only appear once in an order",
+  )
+
+const orderCreateFields = {
   organizationId: positiveId.optional(),
   branchId: positiveId.optional(),
   notes: z.string().trim().max(2_000).optional(),
@@ -521,11 +611,23 @@ export const orderCreateSchema = z.object({
   intakeReference: z.string().trim().min(1).max(INTAKE_REFERENCE_MAX_LENGTH).optional(),
   /** The key the upload route returned for the customer's screenshot. Optional. */
   intakeAttachmentKey: z.string().max(128).optional(),
+}
+
+/** Every role but the Order Desk: lines from the branch's own catalogue, priced by the ladder. */
+export const orderCreateSchema = z.object({
+  items: orderMutationItemsSchema,
+  ...orderCreateFields,
 }).strict()
 
-/** An Order Desk edit of an Active order before delivery: its lines, notes and PO number. */
+/** The Order Desk: lines by global product, each with its agreed tax-inclusive price. */
+export const deskOrderCreateSchema = z.object({
+  items: deskOrderItemsSchema,
+  ...orderCreateFields,
+}).strict()
+
+/** An Order Desk edit of a pending order: its lines, notes and PO number. */
 export const orderDeskEditSchema = z.object({
-  items: orderMutationItemsSchema,
+  items: deskOrderItemsSchema,
   notes: z.string().trim().max(2_000).optional(),
   poNumber: clearablePurchaseOrderNumber.optional(),
 }).strict()
@@ -657,6 +759,95 @@ export const warehouseCityAssignmentUpdateSchema = z.object({
 export const warehouseCityOrganizationUpdateSchema = z.object({
   organizationId: z.number().int().positive().max(2_147_483_647),
   assigned: z.boolean(),
+}).strict()
+
+/**
+ * "Select all" / "Unselect all" in the dialog: the same change as
+ * `warehouseCityAssignmentUpdateSchema` for several cities at once, applied in
+ * one transaction. Bounded so the body stays under the WAF's 8 KB.
+ * See plans/OF-WAREHOUSE-city-bulk-select.md.
+ */
+export const warehouseCityAssignmentBulkUpdateSchema = z.object({
+  cities: z.array(z.string().trim().min(1).max(WAREHOUSE_CITY_MAX_LENGTH)).min(1).max(WAREHOUSE_CITY_BULK_MAX),
+  assigned: z.boolean(),
+}).strict()
+
+/**
+ * The same change as `warehouseCityOrganizationUpdateSchema` for several
+ * organizations at once, applied in one transaction. JSON integers, no repeats.
+ */
+export const warehouseCityOrganizationBulkUpdateSchema = z.object({
+  organizationIds: z.array(z.number().int().positive().max(2_147_483_647))
+    .min(1)
+    .max(WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
+  assigned: z.boolean(),
+}).strict()
+
+/**
+ * An optional free-text field of a warehouse: trimmed, and an empty string
+ * clears it (stored as null).
+ */
+const optionalWarehouseText = (max: number) => z.string().trim().max(max).transform((value) => value || null).nullable()
+
+/** Creating an Apricart warehouse. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md. */
+export const apricartWarehouseCreateSchema = z.object({
+  code: z.string()
+    .transform(normalizeWarehouseCode)
+    .pipe(z.string().min(2).max(APRICART_WAREHOUSE_CODE_MAX_LENGTH).regex(APRICART_WAREHOUSE_CODE_PATTERN, {
+      message: "Use letters and digits, with single hyphens between them",
+    })),
+  name: z.string().trim().min(2).max(APRICART_WAREHOUSE_NAME_MAX_LENGTH),
+  city: optionalWarehouseText(APRICART_WAREHOUSE_CITY_MAX_LENGTH).optional(),
+  address: optionalWarehouseText(APRICART_WAREHOUSE_ADDRESS_MAX_LENGTH).optional(),
+  contactPhone: optionalWarehouseText(APRICART_WAREHOUSE_PHONE_MAX_LENGTH).optional(),
+}).strict()
+
+/** Changing an Apricart warehouse. The code is permanent; at least one field. */
+export const apricartWarehouseUpdateSchema = z.object({
+  name: z.string().trim().min(2).max(APRICART_WAREHOUSE_NAME_MAX_LENGTH).optional(),
+  city: optionalWarehouseText(APRICART_WAREHOUSE_CITY_MAX_LENGTH).optional(),
+  address: optionalWarehouseText(APRICART_WAREHOUSE_ADDRESS_MAX_LENGTH).optional(),
+  contactPhone: optionalWarehouseText(APRICART_WAREHOUSE_PHONE_MAX_LENGTH).optional(),
+  status: z.enum(APRICART_WAREHOUSE_STATUSES).optional(),
+}).strict().refine((input) => Object.values(input).some((value) => value !== undefined), {
+  message: "Nothing to change",
+})
+
+/**
+ * Adds or removes one account at a warehouse. The responsibility is not sent:
+ * the server takes it from the account's role.
+ */
+export const apricartWarehouseMemberUpdateSchema = z.object({
+  userId: z.uuid(),
+  assigned: z.boolean(),
+}).strict()
+
+/**
+ * Replaces the branches **of one organization** whose default warehouse is
+ * this one. One organization per request keeps the body under the WAF's 8 KB.
+ */
+export const branchFulfillmentRoutesUpdateSchema = z.object({
+  organizationId: z.number().int().positive().max(2_147_483_647),
+  branchIds: z.array(z.number().int().positive().max(2_147_483_647))
+    .max(BRANCH_ROUTE_MAX_PER_ORGANIZATION)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
+}).strict()
+
+const warehouseIdOrNull = z.number().int().positive().max(2_147_483_647).nullable()
+
+/**
+ * Super Admin moves one order to another Apricart warehouse, or (null) hands
+ * it back to the accounts serving its branch. `expectedWarehouseId` is the
+ * warehouse the screen showed, so a transfer made meanwhile is not overwritten.
+ * See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ */
+export const orderWarehouseTransferSchema = z.object({
+  targetWarehouseId: warehouseIdOrNull,
+  expectedWarehouseId: warehouseIdOrNull,
+  reason: z.string().trim()
+    .min(ORDER_WAREHOUSE_TRANSFER_REASON_MIN_LENGTH, { message: "Give a reason for the transfer" })
+    .max(ORDER_WAREHOUSE_TRANSFER_REASON_MAX_LENGTH),
 }).strict()
 
 /** Replacing a delivered order's challan with another uploaded one. */
@@ -1309,6 +1500,33 @@ function requestedBranchProvinceIsTheCitys(
   }
 }
 
+/*
+ * The type the applicant proposes for a branch still to be created, and a
+ * child's parent: an existing branch, or the CRC of another branch on the same
+ * request (plans/OF-JOIN-new-branch-parent-child.md). Optional, so a request
+ * from a page that does not ask for it is still accepted.
+ */
+const requestedHierarchyFields = {
+  hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
+  parentBranchId: positiveId.optional(),
+  parentCrc: signupCrcSchema.optional(),
+}
+
+function requestedHierarchyStandsAlone(
+  branch: { crc: string; hierarchyRole?: (typeof BRANCH_HIERARCHY_ROLES)[number]; parentBranchId?: number; parentCrc?: string },
+  context: z.RefinementCtx,
+): void {
+  const hierarchy = requestedHierarchyOf(branch)
+  if (!hierarchy) {
+    if (branch.parentBranchId !== undefined || branch.parentCrc !== undefined) {
+      context.addIssue({ code: "custom", path: ["hierarchyRole"], message: "New branch: a parent branch needs the branch type Child" })
+    }
+    return
+  }
+  const problem = requestedHierarchyPairingError(branch.crc, hierarchy)
+  if (problem) context.addIssue({ code: "custom", path: ["hierarchyRole"], message: `New branch: ${problem}` })
+}
+
 export const departmentJoinSubmitSchema = z.object({
   formVersion: z.literal(DEPARTMENT_SIGNUP_FORM_VERSION),
   code: joinCodeSchema,
@@ -1320,7 +1538,7 @@ export const departmentJoinSubmitSchema = z.object({
   employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
   department: z.enum(DEPARTMENTS),
   // An existing branch picked by name, or a new branch: its name, its CRC
-  // number, and the city and province it is in.
+  // number, the city and province it is in, and its proposed type.
   branches: z.array(z.union([
     z.object({ branchId: positiveId }).strict(),
     z.object({
@@ -1328,8 +1546,15 @@ export const departmentJoinSubmitSchema = z.object({
       crc: signupCrcSchema,
       city: requestedBranchCitySchema,
       province: requestedBranchProvinceSchema,
-    }).strict().superRefine(requestedBranchProvinceIsTheCitys),
-  ])).min(1).max(SIGNUP_MAX_BRANCHES),
+      ...requestedHierarchyFields,
+    }).strict().superRefine(requestedBranchProvinceIsTheCitys).superRefine(requestedHierarchyStandsAlone),
+  ])).min(1).max(SIGNUP_MAX_BRANCHES)
+    // A child may name another branch on the list as its parent, so the list
+    // is judged whole: that branch must be on it, proposed as Parent.
+    .superRefine((list, context) => {
+      const problem = requestedBranchHierarchyError(requestedNewBranches(list))
+      if (problem) context.addIssue({ code: "custom", message: problem })
+    }),
   addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES),
   approvers: z.array(signupApproverSchema).min(1).max(MAX_APPROVAL_LEVELS),
   termsAccepted: z.literal(true),
@@ -1366,12 +1591,25 @@ export const departmentJoinDecisionSchema = z.object({
       .refine((city) => city === undefined || findPakistanCity(city) !== null, `New branch: ${UNLISTED_CITY_MESSAGE.toLowerCase()}`)
       .transform((city) => (city === undefined ? undefined : findPakistanCity(city)?.name ?? city)),
     address: newBranchText("address"),
+    // The created branch's type (plans/OF-JOIN-new-branch-parent-child.md):
+    // absent is Standalone. A child's parent is an existing branch, or another
+    // branch this approval creates as Parent, named by its request branch id.
+    hierarchyRole: z.enum(BRANCH_HIERARCHY_ROLES).optional(),
+    parentBranchId: positiveId.optional(),
+    parentRequestBranchId: positiveId.optional(),
   }).strict().superRefine((branch, context) => {
     const city = branch.city === undefined ? null : findPakistanCity(branch.city)
     if (city && branch.province !== undefined && branch.province !== city.province) {
       context.addIssue({ code: "custom", path: ["province"], message: `New branch: ${city.name} is in ${city.province}` })
     }
-  })).max(SIGNUP_MAX_BRANCHES).optional(),
+    const hierarchyProblem = newBranchChoiceHierarchyError(branch)
+    if (hierarchyProblem) context.addIssue({ code: "custom", path: ["hierarchyRole"], message: `New branch: ${hierarchyProblem}` })
+  })).max(SIGNUP_MAX_BRANCHES)
+    .superRefine((list, context) => {
+      const problem = newBranchDecisionHierarchyError(list)
+      if (problem) context.addIssue({ code: "custom", message: problem })
+    })
+    .optional(),
   addressBranches: z.array(z.object({
     requestAddressId: positiveId,
     requestBranchId: positiveId,
@@ -1415,9 +1653,10 @@ export const departmentJoinUpdateSchema = z.object({
     ipExtension: z.string().trim().regex(SIGNUP_IP_EXTENSION_PATTERN, "Enter an IP extension of 3 to 6 digits"),
     employeeId: z.string().trim().min(1).max(SIGNUP_EMPLOYEE_ID_MAX_LENGTH),
     department: z.enum(DEPARTMENTS),
-    // A new branch's name and city are optional here: a request submitted
-    // before they were asked for has none, and Head Office gives both at
-    // approval anyway.
+    // A new branch's name, city and type are optional here: a request
+    // submitted before they were asked for has none, and Head Office gives
+    // them at approval anyway. A type left out keeps the stored one, so the
+    // list is judged whole by the server once merged with the stored rows.
     branches: z.array(z.union([
       z.object({ branchId: positiveId }).strict(),
       z.object({
@@ -1425,7 +1664,8 @@ export const departmentJoinUpdateSchema = z.object({
         name: requestedBranchNameSchema.optional(),
         city: requestedBranchCitySchema.optional(),
         province: requestedBranchProvinceSchema.optional(),
-      }).strict().superRefine(requestedBranchProvinceIsTheCitys),
+        ...requestedHierarchyFields,
+      }).strict().superRefine(requestedBranchProvinceIsTheCitys).superRefine(requestedHierarchyStandsAlone),
     ])).min(1).max(SIGNUP_MAX_BRANCHES)
       .refine((list) => editedBranchListError(list) === null, { message: "The same branch is listed twice" }),
     addresses: z.array(z.string().trim().min(5).max(SIGNUP_ADDRESS_MAX_LENGTH)).min(1).max(SIGNUP_MAX_ADDRESSES)

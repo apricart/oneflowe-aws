@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useAPI } from "@/lib/hooks/use-api"
 import {
   MEASURE_METRIC,
+  budgetBesideScopeNote,
   budgetBesideWithheldReason,
   metricDefinitionForStatusSet,
   panelSegmentation,
@@ -53,9 +54,8 @@ import { SideBySideExportButton } from "./side-by-side-export-button"
  *
  * So this screen fixes the subject — a product, or a few — and varies the
  * dimension instead. Every ranking and trend panel is the *existing*
- * comparison endpoint with a different `dimension`; the one grid — requester
- * against product, uncombined, which "By product" becomes once people are
- * compared — is the `/matrix` endpoint under the same registry and the same
+ * comparison endpoint with a different `dimension`; the requester grids for
+ * products and categories are the `/matrix` endpoint under the same registry and the same
  * scope, so there is no new authorization surface behind any of it: the same
  * whitelist decides what may be asked, and the same fence decides which rows
  * may answer.
@@ -65,11 +65,10 @@ import { SideBySideExportButton } from "./side-by-side-export-button"
  * other. With one product ticked, "By product" stays visible with that
  * product's total while the broader product views give way to day-by-day.
  *
- * With several requesters picked to compare, "By product" becomes that grid:
- * one cluster per product, one column per person inside it, one figure per
- * pair and never combined, so "who consumed how much of this product" is read
- * across a cluster. The registry decides which panel does this (`segmentBy`),
- * and below two people the panel draws its plain ranking.
+ * With several requesters picked to compare, "By product" and "By category"
+ * become grids: one cluster per product/category, one column per person inside
+ * it, one figure per pair and never combined. The registry decides which panel
+ * does this (`segmentBy`), and below two people the panel draws its plain ranking.
  *
  * Two things are shared across every panel, deliberately:
  *
@@ -80,6 +79,7 @@ import { SideBySideExportButton } from "./side-by-side-export-button"
  */
 
 type ComparisonResponse = {
+  dimension?: ExecutiveDimensionId
   rows: ComparisonRow[]
   series: EntitySeries[]
   periods: string[]
@@ -433,6 +433,52 @@ function useFilterNames(filters: ExecutiveFilterState): {
   }
 }
 
+type ComparePanelPresentation = {
+  dimension: ExecutiveDimensionId
+  chart: ChartTypeId
+  limit: number
+  question: string
+  seriesVariant?: "grouped-columns"
+}
+
+/** The request and visual form a panel takes under the current comparison. */
+function comparePanelPresentation(panel: SideBySidePanel, comparedRequesterCount: number): ComparePanelPresentation {
+  if (panel.id === "by-month" && comparedRequesterCount > 0) {
+    return {
+      dimension: "user",
+      chart: "line",
+      limit: comparedRequesterCount,
+      question: "How much each selected requester ordered in each month. Every requester has a separate bar.",
+      seriesVariant: "grouped-columns",
+    }
+  }
+
+  return {
+    dimension: panel.dimension,
+    chart: panel.chart,
+    limit: panel.chart === "line" ? SERIES_PANEL_ROWS : RANK_PANEL_ROWS,
+    question: panel.question,
+  }
+}
+
+/**
+ * Whether a panel asks for the Total Budget beside its columns.
+ *
+ * Only a budget-bearing panel, and only while the rule allows it — money, no
+ * product focus, and no requester narrowing except beside a branch or a
+ * requester; otherwise the panel tells the reader why the budget is not
+ * there. The server applies the same rule, so the panel never asks for what
+ * it would be refused.
+ */
+function panelBudget(panel: SideBySidePanel, metric: ExecutiveMetricId, filters: ExecutiveFilterState) {
+  const narrowing = {
+    lineScoped: (filters.productIds?.length ?? 0) > 0 || filters.categoryIds.length > 0,
+    userScoped: (filters.userIds?.length ?? 0) > 0,
+  }
+  const withheld = panel.budgetBeside ? budgetBesideWithheldReason(panel.dimension, metric, narrowing) : null
+  return { narrowing, withheld, ask: Boolean(panel.budgetBeside) && withheld === null }
+}
+
 /**
  * One panel: one dimension, the shared subject, the shared measure.
  *
@@ -452,8 +498,13 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
   /** Reports what the panel holds, for the download; `null` when it leaves the grid. */
   onSnapshot: (panelId: string, snapshot: SideBySidePanelSnapshot | null) => void
 }>) {
-  const isSeries = panel.chart === "line"
-  const limit = isSeries ? SERIES_PANEL_ROWS : RANK_PANEL_ROWS
+  // Once people are explicitly compared, the month panel changes from one
+  // combined monthly column into one column per selected requester in each
+  // month. The comparison endpoint already serves exactly that shape as a
+  // requester series; only its visual form changes here.
+  const presentation = comparePanelPresentation(panel, compareUsers.length)
+  const requestDimension = presentation.dimension
+  const requestChart = presentation.chart
   const fullWidth = expanded === null || expanded
   const expandId = `expand-${panel.id}`
   const statusSet = productPerformanceStatusSet(metric)
@@ -461,31 +512,24 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
 
   // A requester panel honours the people picked to compare; every other
   // dimension ranks whatever is in scope.
-  const keys = panel.dimension === "user" ? compareUsers.join(",") : ""
+  const keys = requestDimension === "user" ? compareUsers.join(",") : ""
 
-  // A budget-bearing panel asks for the Total Budget beside each column only
-  // while the rule allows it — money, no product or requester narrowing — and
-  // otherwise tells the reader why the budget is not there. The server applies
-  // the same rule, so the panel never asks for what it would be refused.
-  const budgetWithheld = panel.budgetBeside
-    ? budgetBesideWithheldReason(panel.dimension, metric, {
-      lineScoped: (filters.productIds?.length ?? 0) > 0 || filters.categoryIds.length > 0,
-      userScoped: (filters.userIds?.length ?? 0) > 0,
-    })
-    : null
-  const askBudget = Boolean(panel.budgetBeside) && budgetWithheld === null
+  const { narrowing: budgetNarrowing, withheld: budgetWithheld, ask: askBudget } = panelBudget(panel, metric, filters)
 
   const url = `/api/v1/analytics/executive/compare?${toQuery(filters, {
-    dimension: panel.dimension,
+    dimension: requestDimension,
     metric,
-    chart: panel.chart,
+    chart: requestChart,
     keys,
-    limit: String(limit),
+    limit: String(presentation.limit),
     budget: askBudget ? "1" : "",
     statuses: statusSet,
+    presentation: presentation.seriesVariant ? "requester-bars" : "",
   })}`
 
   const { data, error, isLoading } = useAPI<ComparisonResponse>(url)
+  // What the budget beside these columns stands for, once it is drawn.
+  const budgetScopeNote = data?.budgetBeside ? budgetBesideScopeNote(panel.dimension, budgetNarrowing) : null
 
   const requestError = error ? "This comparison could not be loaded." : data?.error ?? null
   const rows = data?.rows ?? []
@@ -503,7 +547,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
   return (
     <ChartCard
       title={panel.title}
-      question={panel.question}
+      question={presentation.question}
       formula={data?.formula ?? panelMetric.formula}
       loading={isLoading && !data}
       refreshing={isLoading && Boolean(data)}
@@ -522,7 +566,7 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
             periods={data?.periods ?? []}
             format={data?.format ?? "currency"}
             onSelectEntity={(key, index) => onDrillDown({
-              dimension: panel.dimension,
+              dimension: requestDimension,
               key,
               label: series[index]?.label ?? key,
             })}
@@ -533,29 +577,30 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
             rows={rows}
             format={data?.format ?? "currency"}
             metricLabel={data?.label ?? panelMetric.label}
-            dimensionLabel={panelDimensionLabel(panel.dimension)}
+            dimensionLabel={panelDimensionLabel(requestDimension)}
             concentrationEligible={Boolean(data?.concentrationEligible)}
             budgetBeside={Boolean(data?.budgetBeside)}
-            dimension={panel.dimension}
+            dimension={requestDimension}
             onDrillDown={onDrillDown}
           />
         )}
     >
       <ComparisonChart
-        chart={data?.chart ?? panel.chart}
+        chart={data?.chart ?? requestChart}
         rows={rows}
         series={series}
         periods={data?.periods ?? []}
         format={data?.format ?? "currency"}
         metricLabel={data?.label ?? panelMetric.label}
-        dimensionLabel={panelDimensionLabel(panel.dimension)}
+        dimensionLabel={panelDimensionLabel(requestDimension)}
         unit={data?.quantityUnit.selected ?? null}
         concentrationEligible={Boolean(data?.concentrationEligible)}
         budgetBeside={Boolean(data?.budgetBeside)}
         colorful={panel.colorful}
         dualValueLabels={panel.dualValueLabels}
         fullWidth={fullWidth}
-        dimension={panel.dimension}
+        dimension={requestDimension}
+        seriesVariant={presentation.seriesVariant}
         onDrillDown={onDrillDown}
       />
       {data?.quantityUnit.selected ? (
@@ -566,6 +611,9 @@ function ComparePanel({ panel, filters, metric, compareUsers, expanded, onToggle
       ) : null}
       {budgetWithheld && !isEmpty ? (
         <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{budgetWithheld}</p>
+      ) : null}
+      {budgetScopeNote && !isEmpty ? (
+        <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{budgetScopeNote}</p>
       ) : null}
     </ChartCard>
   )

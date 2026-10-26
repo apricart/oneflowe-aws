@@ -34,6 +34,9 @@ export type BranchCreationValues = {
   region: BranchRegion | null
   // Absent for callers that do not ask for one (the department sign-up).
   headCount?: number | null
+  // Absent for callers that do not ask for one (the department sign-up);
+  // already normalised by branchCreateSchema. plans/OF-BRANCH-contact-phone.md.
+  contactPhone?: string | null
   // Absent = standalone, which is every caller but the branch form
   // (plans/OF-BRANCH-parent-child-label.md). Already paired by
   // branchHierarchyInputError; the parent is checked here, in this tenant.
@@ -121,6 +124,7 @@ export async function createBranchInTx(
       status,
       region: values.region,
       headCount: values.headCount ?? null,
+      contactPhone: values.contactPhone ?? null,
       hierarchyRole: hierarchy.hierarchyRole,
       parentBranchId: hierarchy.parentBranchId,
     })
@@ -139,6 +143,7 @@ export async function createBranchInTx(
       code: item.code,
       status: item.status,
       headCount: item.headCount,
+      contactPhone: item.contactPhone,
       hierarchyRole: item.hierarchyRole,
       parentBranchId: item.parentBranchId,
     },

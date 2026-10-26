@@ -47,21 +47,31 @@ const order = (overrides: Partial<DeskOrder> = {}): DeskOrder => ({
   cancelledAt: null,
   cancellationReason: null,
   items: [
-    { id: 9, organizationInventoryId: 3, productName: "Rice", quantity: 2, unit: "kg", priceCents: 75_000 },
-    { id: 10, organizationInventoryId: 4, productName: "Boxes", quantity: 1, unit: "piece", priceCents: 1_000 },
+    // Rice: carried by the branch, charged its catalogue price.
+    { id: 9, organizationInventoryId: 3, globalProductId: 30, productName: "Rice", productCode: "P-30", allowDecimalQuantity: false, quantityStep: 1, quantity: 2, unit: "kg", priceCents: 75_000, priceEnteredManually: false, cataloguePriceCents: null },
+    // Tape: an Apricart product the branch does not carry, priced by the desk.
+    { id: 10, organizationInventoryId: null, globalProductId: 40, productName: "Tape", productCode: "P-40", allowDecimalQuantity: false, quantityStep: 1, quantity: 1, unit: "roll", priceCents: 1_250, priceEnteredManually: true, cataloguePriceCents: null },
   ],
   ...overrides,
 })
 
-const catalogueItem = (organizationInventoryId: number, name: string, priceCents = 1_000) => ({
-  organizationInventoryId,
+/** One row of the desk's product picker, as the catalogue route returns it. */
+const catalogueItem = (globalProductId: number, name: string, assigned: { organizationInventoryId: number; cataloguePriceCents: number } | null = null) => ({
+  globalProductId,
+  organizationInventoryId: assigned?.organizationInventoryId ?? null,
   name,
-  productCode: `P-${organizationInventoryId}`,
+  productCode: `P-${globalProductId}`,
   unit: "piece",
   allowDecimalQuantity: false,
   quantityStep: 1,
   stockQuantity: 100,
-  priceCents,
+  assignedToBranch: assigned !== null,
+  cataloguePriceCents: assigned?.cataloguePriceCents ?? null,
+})
+
+const cataloguePage = (items: ReturnType<typeof catalogueItem>[]) => ({
+  items,
+  pagination: { page: 1, limit: 25, total: items.length, totalPages: 1 },
 })
 
 const fetchMock = vi.fn()
@@ -86,48 +96,87 @@ afterEach(() => {
 })
 
 describe("editing a desk order", () => {
-  it("loads the order's own branch catalogue and prefills what the order holds", () => {
-    swr.catalogue = { items: [catalogueItem(3, "Rice", 75_000), catalogueItem(4, "Boxes")] }
+  const priceBox = (name: string, unit: string) => screen.getByLabelText(`Price per ${unit} of ${name}, in rupees including tax`) as HTMLInputElement
+
+  it("opens on the order's own lines, each with the price it is charged now, without loading the catalogue", () => {
     render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={vi.fn()} />)
-    expect(swr.keys).toContain("/api/v1/order-desk/catalogue?organizationId=1&branchId=2")
-    expect((screen.getByLabelText("Quantity for Rice") as HTMLInputElement).value).toBe("2")
-    expect((screen.getByLabelText("Quantity for Boxes") as HTMLInputElement).value).toBe("1")
-    expect(screen.queryByRole("alert")).toBeNull()
+    expect(priceBox("Rice", "kg").value).toBe("750.00")
+    expect(priceBox("Tape", "roll").value).toBe("12.50")
+    expect((screen.getByLabelText("Quantity of Rice") as HTMLInputElement).value).toBe("2")
+    expect(screen.getByRole("button", { name: "Selected (2)" }).getAttribute("aria-pressed")).toBe("true")
+    // A product the branch does not carry says so; one it carries shows its price there.
+    const tape = screen.getByText("Tape").closest("li")!
+    expect(within(tape).getByText("Not in branch catalogue")).toBeTruthy()
+    expect(within(screen.getByText("Rice").closest("li")!).getByText("Branch price Rs 750.00", { exact: false })).toBeTruthy()
+    // The whole catalogue is only fetched when the desk asks for it.
+    expect(swr.keys).toEqual([])
   })
 
-  it("does not call a line unavailable while the catalogue is still loading", () => {
-    render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={vi.fn()} />)
-    expect(screen.queryByText(/No longer available/)).toBeNull()
-    expect((screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it("names a line the branch no longer offers and lets it be removed, so the edit can be saved", async () => {
-    // Rice (3) was hidden at the branch after the order was placed.
-    swr.catalogue = { items: [catalogueItem(4, "Boxes")] }
+  it("saves unchanged lines by global product, each at the price it is charged", async () => {
     const onSaved = vi.fn()
+    respond(200, { message: "Order updated", totalCents: 151_250 })
     render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={onSaved} />)
-
-    const notice = screen.getByRole("alert")
-    expect(within(notice).getByText("Rice")).toBeTruthy()
-
-    // Saving before removing it says why, and sends nothing.
-    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
-    expect(await screen.findByText("A product in this order is no longer available for this branch")).toBeTruthy()
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole("button", { name: "Remove Rice" }))
-    expect(screen.queryByText(/No longer available/)).toBeNull()
-
-    respond(200, { message: "Order updated", totalCents: 1_000 })
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
     await waitFor(() => expect(onSaved).toHaveBeenCalled())
     expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/order-desk/orders/41")
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("PUT")
-    expect(sentBody()).toEqual({ items: [{ organizationInventoryId: 4, quantity: 1 }], notes: "", poNumber: "PO-1" })
+    expect(sentBody()).toEqual({
+      items: [
+        { globalProductId: 30, quantity: 2, unitPriceCents: 75_000 },
+        { globalProductId: 40, quantity: 1, unitPriceCents: 1_250 },
+      ],
+      notes: "",
+      poNumber: "PO-1",
+    })
+  })
+
+  it("refuses a cleared price, and says which product needs one, without sending anything", async () => {
+    render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.change(priceBox("Rice", "kg"), { target: { value: "" } })
+    expect(priceBox("Rice", "kg").getAttribute("aria-invalid")).toBe("true")
+    expect(screen.getByText("Price required")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    expect(await screen.findByText("Enter the price for Rice, including tax")).toBeTruthy()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("refuses a zero price", async () => {
+    render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={vi.fn()} />)
+    fireEvent.change(priceBox("Tape", "roll"), { target: { value: "0" } })
+    expect(screen.getByText("The price for Tape must be more than zero")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    expect(await screen.findAllByText("The price for Tape must be more than zero")).toHaveLength(2)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it("adds any Apricart product from the whole catalogue, with an empty price box that must be filled", async () => {
+    swr.catalogue = cataloguePage([catalogueItem(50, "Gloves"), catalogueItem(30, "Rice", { organizationInventoryId: 3, cataloguePriceCents: 75_000 })])
+    const onSaved = vi.fn()
+    render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={onSaved} />)
+    fireEvent.click(screen.getByRole("button", { name: "All products" }))
+    expect(swr.keys).toContain("/api/v1/order-desk/catalogue?organizationId=1&branchId=2")
+
+    // The catalogue's row for a product already on the order shows the order's own line.
+    expect(priceBox("Rice", "kg").value).toBe("750.00")
+    const gloves = priceBox("Gloves", "piece")
+    expect(gloves.value).toBe("")
+    expect(gloves.placeholder).toBe("Price incl. tax")
+
+    fireEvent.click(screen.getByRole("button", { name: "Increase Quantity of Gloves" }))
+    expect(screen.getByText("Price required")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    expect(await screen.findByText("Enter the price for Gloves, including tax")).toBeTruthy()
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    fireEvent.change(gloves, { target: { value: "45.5" } })
+    expect(screen.getByRole("button", { name: "Selected (3)" })).toBeTruthy()
+    respond(200, { message: "Order updated", totalCents: 155_800 })
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(sentBody().items).toContainEqual({ globalProductId: 50, quantity: 1, unitPriceCents: 4_550 })
   })
 
   it("clears the PO number when it is emptied, and shows the server's refusal", async () => {
-    swr.catalogue = { items: [catalogueItem(3, "Rice", 75_000), catalogueItem(4, "Boxes")] }
     const onSaved = vi.fn()
     render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={onSaved} />)
     fireEvent.change(screen.getByLabelText("Customer PO number"), { target: { value: "  " } })
@@ -140,10 +189,10 @@ describe("editing a desk order", () => {
   })
 
   it("refuses to save an order with no lines left", async () => {
-    swr.catalogue = { items: [catalogueItem(3, "Rice"), catalogueItem(4, "Boxes")] }
     render(<EditDeskOrderDialog order={order()} onClose={vi.fn()} onSaved={vi.fn()} />)
-    fireEvent.change(screen.getByLabelText("Quantity for Rice"), { target: { value: "" } })
-    fireEvent.change(screen.getByLabelText("Quantity for Boxes"), { target: { value: "" } })
+    fireEvent.change(screen.getByLabelText("Quantity of Rice"), { target: { value: "0" } })
+    fireEvent.blur(screen.getByLabelText("Quantity of Rice"))
+    fireEvent.click(screen.getByRole("button", { name: "Decrease Quantity of Tape" }))
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }))
     expect(await screen.findByText("Add at least one product")).toBeTruthy()
     expect(fetchMock).not.toHaveBeenCalled()

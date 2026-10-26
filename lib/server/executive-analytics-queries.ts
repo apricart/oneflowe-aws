@@ -116,6 +116,48 @@ const lineRefundQuantity = sql`COALESCE((
 ), 0)`
 
 /**
+ * This line's share of a refund the order carries but no line names.
+ *
+ * Legacy imports recorded some refunds on `orders.refund_amount_cents` and the
+ * refund header only, with no `refund_items`. Order grain nets them
+ * (`netOrderCentsSql`); line grain would not, so a branch bar and the
+ * drill-down behind it disagreed, and the same branch read higher once a
+ * product was in focus. The un-itemised part — the order's refund less what its
+ * lines already name, capped at what the lines still charge — is shared across
+ * the lines in proportion to what each still charges, as the invoice ledger
+ * does (`planIssuedInvoice`). Shares are cumulative roundings in line-id order,
+ * so they add up to the un-itemised amount to the paisa and none exceeds its
+ * line; the line grain then sums to exactly the order grain.
+ *
+ * The CASE keeps the sibling scan off every order that carries no refund.
+ */
+const lineUnitemisedRefundShare = sql`CASE WHEN COALESCE(${orders.refundAmountCents}, 0) > 0 THEN COALESCE((
+  SELECT ROUND(shared.amount * shared.through_this / NULLIF(shared.remaining, 0))
+       - ROUND(shared.amount * shared.before_this / NULLIF(shared.remaining, 0))
+  FROM (
+    SELECT
+      LEAST(GREATEST(0, ${orders.refundAmountCents} - SUM(sibling.itemised)), SUM(sibling.remaining)) AS amount,
+      SUM(sibling.remaining) AS remaining,
+      COALESCE(SUM(sibling.remaining) FILTER (WHERE sibling.id <= ${orderItems.id}), 0) AS through_this,
+      COALESCE(SUM(sibling.remaining) FILTER (WHERE sibling.id < ${orderItems.id}), 0) AS before_this
+    FROM (
+      SELECT line.id,
+             COALESCE(named.cents, 0) AS itemised,
+             GREATEST(0, ROUND(line.price_cents * line.quantity) - COALESCE(named.cents, 0)) AS remaining
+      FROM order_items AS line
+      LEFT JOIN LATERAL (
+        SELECT SUM(refund_items.amount_cents) AS cents
+        FROM refund_items
+        INNER JOIN refunds ON refunds.id = refund_items.refund_id
+        WHERE refund_items.order_item_id = line.id
+          AND UPPER(refunds.status) IN ('APPROVED', 'COMPLETED')
+      ) AS named ON TRUE
+      WHERE line.order_id = ${orderItems.orderId}
+    ) AS sibling
+  ) AS shared
+), 0) ELSE 0 END`
+
+/**
  * Line value, net of approved refunds and floored at zero.
  *
  * `price_cents` is the tax-inclusive rate snapshotted at sale time, so
@@ -124,7 +166,7 @@ const lineRefundQuantity = sql`COALESCE((
  * order total without restating either.
  */
 export const lineNetValue = sql<number>`COALESCE(SUM(GREATEST(0,
-  ROUND(${orderItems.priceCents} * ${orderItems.quantity}) - ${lineRefundValue}
+  ROUND(${orderItems.priceCents} * ${orderItems.quantity}) - ${lineRefundValue} - ${lineUnitemisedRefundShare}
 )), 0)`.mapWith(Number)
 
 /** Ordered item count, net of approved refunds, regardless of each line's unit label. */
@@ -422,8 +464,16 @@ const ENTITY_DIMENSION_COLUMNS: Record<Exclude<ExecutiveDimensionId, "category" 
  * previous month — so the month comparison and the budget it was being read
  * against disagreed at every boundary. It matters far more at day grain, where
  * five hours is a fifth of the bucket.
+ *
+ * `created_at` is `timestamptz`, so one `AT TIME ZONE 'Asia/Karachi'` yields
+ * the Karachi wall-clock time whatever the session zone is. The double form
+ * other analytics routes use — `(x AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi'`
+ * — is the conversion for a column *without* a zone: applied to this one it
+ * reads the UTC wall time as Karachi's and converts back, landing ten hours
+ * behind Karachi on a UTC session. That filed an order placed at 08:00 on the
+ * 1st under the previous month, outside the range the reader had chosen.
  */
-const APP_LOCAL_CREATED_AT = sql`((${orders.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Karachi')`
+const APP_LOCAL_CREATED_AT = sql`(${orders.createdAt} AT TIME ZONE 'Asia/Karachi')`
 
 const MONTH_DIMENSION_COLUMN: DimensionColumn = {
   key: sql<string>`TO_CHAR(${APP_LOCAL_CREATED_AT}, 'YYYY-MM')`,
@@ -941,12 +991,48 @@ async function loadMonthBudgets(scope: ExecutiveScope, filters: ExecutiveFilters
 }
 
 /**
+ * Total Budget per requester: the budget of each branch their counted orders
+ * in the window were placed at, summed over those branches.
+ *
+ * "Their branch" is read from the orders, never from `users.branch_id`, so a
+ * group requester ordering for three branches stands beside those three, and
+ * a person moved since stands beside the branch the money came from. The
+ * pairs come from the same conditions as the comparison itself, so a branch
+ * appears only where the bar beside it has orders there. Each branch's figure
+ * is the "By branch" panel's own (`loadBudgetRollup`), so the two agree.
+ */
+async function loadRequesterBudgets(
+  scope: ExecutiveScope,
+  filters: ExecutiveFilters,
+  userIds: string[],
+): Promise<Map<string, number>> {
+  if (userIds.length === 0) return new Map()
+
+  const [pairs, branchBudgets] = await Promise.all([
+    db
+      .selectDistinct({ userId: orders.createdByUserId, branchId: orders.branchId })
+      .from(orders)
+      .where(and(...orderConditions(scope, filters), inArray(orders.createdByUserId, userIds))),
+    loadBudgetRollup(scope, filters, "branch"),
+  ])
+
+  const budgetOfBranch = new Map(branchBudgets.map((row) => [row.branchId, row.totalBudgetCents]))
+  const budgetOfUser = new Map<string, number>()
+  for (const pair of pairs) {
+    if (!pair.userId || pair.branchId === null) continue
+    budgetOfUser.set(pair.userId, (budgetOfUser.get(pair.userId) ?? 0) + (budgetOfBranch.get(pair.branchId) ?? 0))
+  }
+  return budgetOfUser
+}
+
+/**
  * Sets each entity's Total Budget beside its ranked figure.
  *
  * A branch, group or tenant takes the rollup the Overview is built from, so
  * the budget beside a bar is the same number as the budget on the Overview's
- * chart for the same window. A month takes the ledger summed by period over
- * the fenced branches.
+ * chart for the same window. A requester takes the budget of the branches
+ * they ordered at (`loadRequesterBudgets`). A month takes the ledger summed by
+ * period over the fenced branches.
  *
  * The month axis is also **filled**: a month inside the window that nobody
  * ordered in has no row from the order read, but a budget it was given is
@@ -967,6 +1053,11 @@ export async function attachBudgetBeside(
   if (isBudgetRollupDimension(dimension)) {
     const rollup = await loadBudgetRollup(scope, filters, dimension)
     const budgetOf = new Map(rollup.map((row) => [row.key, row.totalBudgetCents]))
+    return rows.map((row) => ({ ...row, totalBudgetCents: budgetOf.get(row.key) ?? 0 }))
+  }
+
+  if (dimension === "user") {
+    const budgetOf = await loadRequesterBudgets(scope, filters, rows.map((row) => row.key))
     return rows.map((row) => ({ ...row, totalBudgetCents: budgetOf.get(row.key) ?? 0 }))
   }
 
@@ -1642,7 +1733,7 @@ export type DrillDownResult = {
  * with the bar it was opened from. A drill-down that did not add up to its own
  * chart would be worse than no drill-down at all.
  */
-const rowNetValue = sql<number>`GREATEST(0, ROUND(${orderItems.priceCents} * ${orderItems.quantity}) - ${lineRefundValue})`
+const rowNetValue = sql<number>`GREATEST(0, ROUND(${orderItems.priceCents} * ${orderItems.quantity}) - ${lineRefundValue} - ${lineUnitemisedRefundShare})`
 const rowNetQuantity = sql<number>`GREATEST(0, ${orderItems.quantity} - ${lineRefundQuantity})`
 
 /** Sortable expressions, selected by an allowlisted key — never built from input. */

@@ -6,12 +6,14 @@ import { getRequestScope, getSharedServerSession, type RequestScope } from "@/li
 import type { Role } from "@/lib/rbac"
 import {
   invoiceScopeNeedsAssignedBranches,
+  invoiceScopeNeedsAssignedOrganizations,
   ORDER_NOT_FOUND,
   resolveInvoiceAccess,
   type InvoiceAccessDenial,
   type InvoiceRequesterScope,
 } from "@/lib/invoice-access-policy"
 import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
+import { loadFinanceOrganizationIds } from "@/lib/server/finance-scope"
 
 export type InvoiceOrder = typeof orders.$inferSelect
 
@@ -57,6 +59,10 @@ export async function authorizeInvoiceRequest(
         ...scope,
         scopedBranchIds: invoiceScopeNeedsAssignedBranches(role)
           ? await resolveScopedBranchIds(db, scope.userId)
+          : null,
+        // Finance reaches the organizations assigned to it, re-read here.
+        assignedOrganizationIds: invoiceScopeNeedsAssignedOrganizations(role)
+          ? await loadFinanceOrganizationIds(db, scope.userId)
           : null,
       }
     : null

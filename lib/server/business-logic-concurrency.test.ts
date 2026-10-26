@@ -58,13 +58,15 @@ describe("concurrency protection contracts", () => {
     expect(autoFulfil).toContain("if (!claimedOrder) return false")
   })
 
-  it("keeps payment status updates atomically restricted to fulfilled, delivered orders", () => {
+  // Any approved order since plans/OF-FINANCE-finance-role.md; the claim in
+  // SQL must still restate the rule, so a status change in between loses.
+  it("keeps payment status updates atomically restricted to approved orders", () => {
     const paymentRoute = source("app/api/v1/orders/[id]/payment-status/route.ts")
     const orderTransitions = source("lib/order-select.ts")
 
     expect(paymentRoute).toContain("isPaymentStatusUpdateEligible(order.status, order.fulfillmentStatus)")
-    expect(orderTransitions).toContain(`UPPER(TRIM("status")) = 'FULFILLED'`)
-    expect(orderTransitions).toContain(`UPPER(TRIM(COALESCE("fulfillment_status", 'NOT_STARTED'))) = 'DELIVERED'`)
+    expect(orderTransitions).toContain(`UPPER(TRIM("status")) IN ('APPROVED', 'FULFILLED')`)
+    expect(orderTransitions).toContain(`COALESCE("payment_status", 'UNPAID') = ${"${currentStatus}"}`)
   })
 
   it("serializes budget allocation and preserves committed quantity usage", () => {

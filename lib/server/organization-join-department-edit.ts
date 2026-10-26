@@ -16,6 +16,8 @@ import {
   changedPersonFields,
   planAddressEdit,
   planRequestBranchEdit,
+  type StoredRequestBranchRow,
+  withKeptHierarchy,
 } from "@/lib/join-department-edit"
 import {
   DEPARTMENT_SIGNUP_FORM_VERSION,
@@ -24,7 +26,9 @@ import {
   type SignupApprover,
   approverListError,
   initiatorRoleForBranchCount,
+  requestedBranchHierarchyError,
   requestedNewBranches,
+  requestedParentBranchIds,
 } from "@/lib/join-department-signup"
 import { joinEmailDomainRefusal } from "@/lib/organization-join"
 import { organizationUsername } from "@/lib/username-prefix"
@@ -35,6 +39,7 @@ import {
   type JoinFailure,
   loadDepartmentJoinSettings,
   loadRequestChildren,
+  requestedHierarchyColumns,
 } from "@/lib/server/organization-join-department"
 
 /**
@@ -154,11 +159,17 @@ async function assertEditedIdentityFree(
   if (other) throw new JoinEditAbort(409, "Another pending request already uses this email or username.")
 }
 
-/** The edited branches as existing branch ids and branches still to create, all of this organization. */
+/**
+ * The edited branches as existing branch ids and branches still to create, all
+ * of this organization. A branch to create keeps its stored type unless the
+ * edit gives one, and the resulting types are judged as a whole
+ * (plans/OF-JOIN-new-branch-parent-child.md).
+ */
 async function resolveEditedBranches(
   tx: TransactionExecutor,
   organizationId: number,
   edited: DepartmentJoinUpdate["branches"],
+  current: StoredRequestBranchRow[],
 ): Promise<{ existingIds: number[]; newBranches: RequestedNewBranch[] }> {
   const pickedIds = [...new Set(edited.flatMap((entry) => ("branchId" in entry ? [entry.branchId] : [])))]
 
@@ -178,20 +189,31 @@ async function resolveEditedBranches(
 
   // As at submission: a typed CRC stays a branch to create, even when an
   // existing branch carries it; the review asks which (plans/OF-JOIN-crc-match-at-review.md).
-  return { existingIds: pickedIds, newBranches: requestedNewBranches(edited) }
+  const newBranches = withKeptHierarchy(current, requestedNewBranches(edited))
+  const hierarchyProblem = requestedBranchHierarchyError(newBranches)
+  if (hierarchyProblem) throw new JoinEditAbort(400, hierarchyProblem)
+
+  // An existing parent is held to this organization only. Whether it is still
+  // a Parent is judged at approval, where Head Office chooses the type; an
+  // edit that carries the applicant's choice through must not fail on it.
+  const parentIds = requestedParentBranchIds(newBranches)
+  if (parentIds.length > 0) {
+    const found = await tx
+      .select({ id: branches.id })
+      .from(branches)
+      .where(and(eq(branches.organizationId, organizationId), inArray(branches.id, parentIds)))
+    if (found.length !== parentIds.length) {
+      throw new JoinEditAbort(400, "A parent branch named on this request is not in your organization.")
+    }
+  }
+  return { existingIds: pickedIds, newBranches }
 }
 
 async function writeBranchEdit(
   tx: TransactionExecutor,
   requestId: number,
   organizationId: number,
-  current: Array<{
-    id: number
-    existingBranchId: number | null
-    costCenterId: string | null
-    requestedBranchName: string | null
-    requestedBranchCity: string | null
-  }>,
+  current: StoredRequestBranchRow[],
   next: { existingIds: number[]; newBranches: RequestedNewBranch[] },
 ): Promise<boolean> {
   const plan = planRequestBranchEdit(current, next)
@@ -210,6 +232,7 @@ async function writeBranchEdit(
       requestedBranchName: entry.name,
       requestedBranchCity: entry.city,
       requestedBranchProvince: entry.province,
+      ...requestedHierarchyColumns(entry),
     })),
   ]
   if (inserts.length > 0) await tx.insert(organizationJoinRequestBranches).values(inserts)
@@ -219,6 +242,7 @@ async function writeBranchEdit(
       id: move.id,
       set: { requestedBranchCity: move.city, requestedBranchProvince: move.province },
     })),
+    ...plan.retypes.map((retype) => ({ id: retype.id, set: requestedHierarchyColumns(retype) })),
   ]
   for (const update of updates) {
     await tx
@@ -333,7 +357,7 @@ export async function updateDepartmentJoinRequest(input: {
       const changedFields = changedPersonFields(stored, nextPerson)
       await assertEditedIdentityFree(tx, input, nextPerson, new Set(changedFields))
 
-      const nextBranches = await resolveEditedBranches(tx, input.organizationId, input.update.branches)
+      const nextBranches = await resolveEditedBranches(tx, input.organizationId, input.update.branches, children.requestBranches)
       const branchCount = nextBranches.existingIds.length + nextBranches.newBranches.length
       const role = initiatorRoleForBranchCount(branchCount)
 

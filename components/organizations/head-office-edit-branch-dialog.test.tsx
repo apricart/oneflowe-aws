@@ -89,6 +89,38 @@ describe("HeadOfficeEditBranchDialog", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ headCount: null })
   })
 
+  it("starts from the stored phone, sends a changed one, and clears it to null", async () => {
+    const withPhone = { ...branch, contactPhone: "042-35453651" }
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({ item: withPhone }),
+    } as Response)
+
+    render(<HeadOfficeEditBranchDialog branch={withPhone} parentOptions={parents} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+    expect((screen.getByLabelText("Contact phone") as HTMLInputElement).value).toBe("042-35453651")
+
+    fireEvent.change(screen.getByLabelText("Contact phone"), { target: { value: "0300-1234567" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ contactPhone: "0300-1234567" })
+
+    cleanup()
+    render(<HeadOfficeEditBranchDialog branch={withPhone} parentOptions={parents} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+    fireEvent.change(screen.getByLabelText("Contact phone"), { target: { value: "" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ contactPhone: null })
+  })
+
+  it("will not save a contact phone that is not a phone number", () => {
+    render(<HeadOfficeEditBranchDialog branch={branch} parentOptions={parents} onSaved={vi.fn()} />)
+    fireEvent.click(screen.getByRole("button", { name: "Edit Branch" }))
+    fireEvent.change(screen.getByLabelText("Contact phone"), { target: { value: "12" } })
+    expect((screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it("sends nothing when nothing changed", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
 

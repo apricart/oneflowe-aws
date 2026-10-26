@@ -18,9 +18,10 @@ import {
  * (plans/OF-JOIN-department-signup-multi-user.md). The review previews with
  * this and the approval re-runs it, so these cases are both screens.
  *
- * The role rule: an approver reaching one branch is a Branch Admin, one
- * reaching more is a Group User — for a new approver, and for an existing
- * Branch Admin (converted). No other existing account changes role.
+ * The role rule: Levels 1 and 2 are Group Users. At later levels, an approver
+ * reaching one branch is a Branch Admin and one reaching more is a Group User
+ * — for a new approver, and for an existing Branch Admin (converted). No other
+ * existing account changes role.
  */
 
 const ORG = 7

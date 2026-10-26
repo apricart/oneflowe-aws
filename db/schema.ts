@@ -161,6 +161,11 @@ export const branches = pgTable(
     // by Super Admin / Head Office, or by Head Office approving a
     // branch_head_count_requests row. See plans/OF-BRANCH-head-count.md.
     headCount: integer("head_count"),
+    // The number the branch is reached on; NULL = not provided. Written by Super
+    // Admin / Head Office through the branch create and edit routes, held to
+    // isValidBranchContactPhone (lib/branch-contact-phone.ts). See
+    // plans/OF-BRANCH-contact-phone.md.
+    contactPhone: varchar("contact_phone", { length: 32 }),
     // Parent / child / standalone: a label only, read by no access, budget,
     // price or catalogue rule. One of BRANCH_HIERARCHY_ROLES
     // (lib/branch-hierarchy.ts); a child names its parent, a parent of its own
@@ -963,7 +968,7 @@ export const orders = pgTable(
       .notNull(),
     status: varchar("status", { length: 32 }).notNull().default("PENDING"), // PENDING/APPROVED/REJECTED/FULFILLED/REFUNDED
     fulfillmentStatus: varchar("fulfillment_status", { length: 32 }).notNull().default("NOT_STARTED"), // NOT_STARTED/IN_PROCESS/OUT_FOR_DELIVERY/DELIVERED
-    paymentStatus: varchar("payment_status", { length: 16 }).notNull().default("UNPAID"), // UNPAID/PAID — toggled by SUPER_ADMIN only
+    paymentStatus: varchar("payment_status", { length: 16 }).notNull().default("UNPAID"), // UNPAID/PAID — toggled by SUPER_ADMIN and FINANCE (plans/OF-FINANCE-finance-role.md)
     paidAt: timestamp("paid_at", { withTimezone: true }),
     paidByUserId: uuid("paid_by_user_id").references(() => users.id),
     subtotalCents: bigint("subtotal_cents", { mode: "number" }).notNull().default(0),
@@ -1015,6 +1020,12 @@ export const orders = pgTable(
     // not use approval levels, which means "decided exactly as today".
     // See plans/OF-APPROVAL-LEVELS-route-orders-by-level.md.
     approvalLevel: integer("approval_level"),
+    // The Apricart warehouse this order was transferred to, whose operators
+    // now pick, dispatch and deliver it. Null on every order nobody has
+    // transferred, which means "worked by whoever serves its branch, as
+    // before". Written only by `transferOrderWarehouse`.
+    // See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+    fulfillmentWarehouseId: integer("fulfillment_warehouse_id").references(() => apricartWarehouses.id),
     // Where an Order Desk order came from — the customer's email, WhatsApp
     // message or call — so it can be traced back to its source. Required for a
     // desk order and null on every portal order (lib/order-desk-access.ts).
@@ -1132,6 +1143,10 @@ export const orders = pgTable(
     index("orders_delivery_address_idx")
       .on(t.deliveryAddressId)
       .where(sql`${t.deliveryAddressId} IS NOT NULL`),
+    // Partial: only a transferred order carries the column.
+    index("orders_fulfillment_warehouse_idx")
+      .on(t.fulfillmentWarehouseId, t.status)
+      .where(sql`${t.fulfillmentWarehouseId} IS NOT NULL`),
     uniqueIndex("orders_creator_idempotency_uq").on(t.createdByUserId, t.idempotencyKey),
     check("orders_amounts_nonnegative_ck", sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} >= 0 AND COALESCE(${t.refundAmountCents}, 0) >= 0 AND COALESCE(${t.refundAmountCents}, 0) <= ${t.totalCents}`),
     check("orders_idempotency_pair_ck", sql`(${t.idempotencyKey} IS NULL AND ${t.requestFingerprint} IS NULL) OR (${t.idempotencyKey} IS NOT NULL AND ${t.requestFingerprint} IS NOT NULL)`),
@@ -1314,6 +1329,12 @@ export const orderItems = pgTable(
     // restate invoices that have already been issued.
     taxRateBp: integer("tax_rate_bp"),
     taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0),
+    // The Order Desk typed this line's price (plans/OF-ORDER-DESK-line-price-entry.md).
+    // priceCents is then the entered figure, and cataloguePriceCents what the
+    // price ladder said at that moment (null when it had none). Every other
+    // line: false and null.
+    priceEnteredManually: boolean("price_entered_manually").notNull().default(false),
+    cataloguePriceCents: bigint("catalogue_price_cents", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (t) => [
@@ -1324,6 +1345,7 @@ export const orderItems = pgTable(
     index("order_items_product_order_idx").on(t.globalProductId, t.orderId),
     check("order_items_values_valid_ck", sql`${t.quantity} > 0 AND ${t.quantity} <= 1000000 AND ${t.priceCents} >= 0`),
     check("order_items_tax_valid_ck", sql`${t.taxCents} >= 0 AND (${t.taxRateBp} IS NULL OR (${t.taxRateBp} >= 0 AND ${t.taxRateBp} <= 10000))`),
+    check("order_items_manual_price_ck", sql`${t.cataloguePriceCents} IS NULL OR (${t.priceEnteredManually} AND ${t.cataloguePriceCents} >= 0)`),
   ],
 )
 
@@ -2689,6 +2711,31 @@ export const apricartExecutiveAssignments = pgTable(
 )
 
 /**
+ * Which organizations a Finance user reads orders and reports for, and marks
+ * orders Paid or Unpaid in. Super Admin writes these rows
+ * (`lib/server/finance-scope.ts`); the reach is re-read on every request, and
+ * an account with none reads nothing. See plans/OF-FINANCE-finance-role.md.
+ */
+export const financeOrganizationAssignments = pgTable(
+  "finance_organization_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("finance_organization_assignments_user_org_uq").on(t.userId, t.organizationId),
+    index("finance_organization_assignments_org_idx").on(t.organizationId),
+  ],
+)
+
+/**
  * Which branches a Warehouse user picks, dispatches and delivers for. One row
  * per user per branch — there is deliberately no organization-wide row, and no
  * organization column: the organization is always the branch's own, read
@@ -2771,6 +2818,121 @@ export const warehouseCityOrganizations = pgTable(
   (t) => [
     uniqueIndex("warehouse_city_organizations_user_org_uq").on(t.userId, t.organizationId),
     index("warehouse_city_organizations_org_idx").on(t.organizationId),
+  ],
+)
+
+/**
+ * Apricart's warehouses, as places rather than accounts: the stable owner an
+ * order will be fulfilled by, which keeps existing when the people working it
+ * are deactivated or replaced. Never deleted — made `INACTIVE` instead.
+ *
+ * An order Super Admin has transferred names one in
+ * `orders.fulfillment_warehouse_id`, and is then worked by its operator
+ * members only. Every other order is still worked through `loadWarehouseReach`
+ * (branch reach), and routes are still configuration only.
+ * See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ */
+export const apricartWarehouses = pgTable(
+  "apricart_warehouses",
+  {
+    id: serial("id").primaryKey(),
+    code: varchar("code", { length: 20 }).notNull(),
+    name: varchar("name", { length: 150 }).notNull(),
+    city: varchar("city", { length: 100 }),
+    address: varchar("address", { length: 500 }),
+    contactPhone: varchar("contact_phone", { length: 30 }),
+    status: varchar("status", { length: 20 }).notNull().default("ACTIVE"),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("apricart_warehouses_code_uq").on(t.code),
+    check("apricart_warehouses_status_ck", sql`${t.status} IN ('ACTIVE', 'INACTIVE')`),
+  ],
+)
+
+/**
+ * Who works at a warehouse: `WAREHOUSE_OPERATOR` for a `WAREHOUSE` account,
+ * `EXECUTIVE` for an `APRICART_EXECUTIVE` account. The responsibility follows
+ * the account's role, decided on the server (`lib/apricart-warehouses.ts`).
+ * One person may belong to several warehouses.
+ */
+export const apricartWarehouseMemberships = pgTable(
+  "apricart_warehouse_memberships",
+  {
+    id: serial("id").primaryKey(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    responsibility: varchar("responsibility", { length: 30 }).notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("apricart_warehouse_memberships_warehouse_user_uq").on(t.warehouseId, t.userId),
+    index("apricart_warehouse_memberships_user_idx").on(t.userId),
+    check(
+      "apricart_warehouse_memberships_responsibility_ck",
+      sql`${t.responsibility} IN ('WAREHOUSE_OPERATOR', 'EXECUTIVE')`,
+    ),
+  ],
+)
+
+/**
+ * The one warehouse a customer branch's new orders will default to. A route
+ * is a default for orders created later, never an owner of existing ones.
+ */
+export const branchFulfillmentRoutes = pgTable(
+  "branch_fulfillment_routes",
+  {
+    branchId: integer("branch_id")
+      .primaryKey()
+      .references(() => branches.id, { onDelete: "cascade" }),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    updatedByUserId: uuid("updated_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("branch_fulfillment_routes_warehouse_idx").on(t.warehouseId),
+  ],
+)
+
+/**
+ * Every time an order moved from one warehouse to another, oldest first.
+ * `from_warehouse_id` / `to_warehouse_id` null means "whoever serves the
+ * order's branch" — an order not yet transferred, or one handed back. Written
+ * only by `transferOrderWarehouse`, in the transaction that moves the order,
+ * beside its `ORDER_WAREHOUSE_TRANSFERRED` audit row; never updated.
+ * See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ */
+export const orderWarehouseTransfers = pgTable(
+  "order_warehouse_transfers",
+  {
+    id: serial("id").primaryKey(),
+    orderId: integer("order_id")
+      .references(() => orders.id, { onDelete: "cascade" })
+      .notNull(),
+    fromWarehouseId: integer("from_warehouse_id").references(() => apricartWarehouses.id),
+    toWarehouseId: integer("to_warehouse_id").references(() => apricartWarehouses.id),
+    reason: varchar("reason", { length: 500 }).notNull(),
+    // Null once that account is deleted; the audit row still names it.
+    transferredByUserId: uuid("transferred_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("order_warehouse_transfers_order_idx").on(t.orderId, t.id),
+    check(
+      "order_warehouse_transfers_moves_ck",
+      sql`${t.fromWarehouseId} IS DISTINCT FROM ${t.toWarehouseId}`,
+    ),
   ],
 )
 
@@ -3311,6 +3473,14 @@ export const organizationJoinRequestBranches = pgTable(
     // asked for (plans/OF-JOIN-applicant-new-branch-city.md).
     requestedBranchCity: varchar("requested_branch_city", { length: 100 }),
     requestedBranchProvince: varchar("requested_branch_province", { length: 100 }),
+    // The type the applicant proposes for a branch to be created — STANDALONE,
+    // PARENT or CHILD — and a child's parent: an existing branch of this
+    // organization, or the CRC of another branch to be created on this request.
+    // All null for an existing branch and for a request submitted before the
+    // type was asked for (plans/OF-JOIN-new-branch-parent-child.md).
+    requestedHierarchyRole: varchar("requested_hierarchy_role", { length: 16 }),
+    requestedParentBranchId: integer("requested_parent_branch_id"),
+    requestedParentCrc: varchar("requested_parent_crc", { length: 64 }),
     resolvedBranchId: integer("resolved_branch_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -3338,6 +3508,26 @@ export const organizationJoinRequestBranches = pgTable(
           AND length(btrim(${t.requestedBranchCity})) > 0
           AND length(btrim(${t.requestedBranchProvince})) > 0)`,
     ),
+    check(
+      "organization_join_request_branches_hierarchy_ck",
+      // A type only on a branch to be created; a child names exactly one
+      // parent and nothing else names one; a parent CRC is never the row's own.
+      sql`(${t.requestedHierarchyRole} IS NULL
+          AND ${t.requestedParentBranchId} IS NULL
+          AND ${t.requestedParentCrc} IS NULL)
+        OR (${t.costCenterId} IS NOT NULL
+          AND ${t.requestedHierarchyRole} IN ('STANDALONE', 'PARENT', 'CHILD')
+          AND (${t.requestedHierarchyRole} = 'CHILD')
+            = ((${t.requestedParentBranchId} IS NOT NULL) <> (${t.requestedParentCrc} IS NOT NULL))
+          AND (${t.requestedHierarchyRole} = 'CHILD'
+            OR (${t.requestedParentBranchId} IS NULL AND ${t.requestedParentCrc} IS NULL))
+          AND (${t.requestedParentCrc} IS NULL OR ${t.requestedParentCrc} <> ${t.costCenterId}))`,
+    ),
+    foreignKey({
+      name: "organization_join_request_branches_parent_org_fk",
+      columns: [t.requestedParentBranchId, t.organizationId],
+      foreignColumns: [branches.id, branches.organizationId],
+    }),
     foreignKey({
       name: "organization_join_request_branches_branch_org_fk",
       columns: [t.existingBranchId, t.organizationId],

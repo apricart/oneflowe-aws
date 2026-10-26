@@ -17,6 +17,12 @@ import { apricartExecutiveUserShapeError, isApricartExecutiveRole } from "@/lib/
 import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access"
 import { apricartSupportUserShapeError, isApricartSupportRole } from "@/lib/apricart-support-access"
 import { isRiderRole, riderUserShapeError } from "@/lib/rider-access"
+import { financeOrganizationsError, financeUserShapeError, isFinanceRole } from "@/lib/finance-access"
+import {
+  FinanceOrganizationsInvalidError,
+  loadFinanceOrganizationsForUsers,
+  writeFinanceOrganizationsInTx,
+} from "@/lib/server/finance-scope"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { USER_MANAGEMENT_ROLES } from "@/lib/user-management-access"
 import { usernameExists } from "@/lib/user-username-uniqueness"
@@ -61,6 +67,7 @@ function apricartStaffShapeError(
   else if (isWarehouseRole(role)) shapeError = warehouseUserShapeError(organizationId, branchId)
   else if (isApricartSupportRole(role)) shapeError = apricartSupportUserShapeError(organizationId, branchId)
   else if (isRiderRole(role)) shapeError = riderUserShapeError(organizationId, branchId)
+  else if (isFinanceRole(role)) shapeError = financeUserShapeError(organizationId, branchId)
   else return undefined
   return shapeError ? { message: shapeError, status: 400 } : null
 }
@@ -173,6 +180,7 @@ async function writeUserCreationAudit(createdUser: any, scope: any, role: string
 function handleUserCreationError(caughtError: any) {
   if (caughtError instanceof UserUniqueFieldError) return error(caughtError.message, 400)
   if (caughtError instanceof ApprovalLevelRefusedError) return error(caughtError.message, 400)
+  if (caughtError instanceof FinanceOrganizationsInvalidError) return error(caughtError.message, 400)
   const errorCode = String(caughtError.code || caughtError.cause?.code || "")
   const errorMessage = String(caughtError.message || "").toLowerCase()
   const detail = String(caughtError.detail || caughtError.cause?.detail || "").toLowerCase()
@@ -252,6 +260,11 @@ export async function GET(req: Request) {
       db,
       rows.filter((r: any) => usesMultiBranchScope(r.role)).map((r: any) => r.id),
     )
+    // A Finance account's organizations, shown and edited on Users. Only
+    // Super Admin lists such accounts: they have no organization of their own.
+    const financeOrganizations = await loadFinanceOrganizationsForUsers(
+      rows.filter((r: any) => isFinanceRole(r.role)).map((r: any) => r.id),
+    )
 
     return rows.map((r: any) => ({
       id: r.id,
@@ -281,6 +294,8 @@ export async function GET(req: Request) {
       orderApprovalLevel: r.orderApprovalLevel ?? null,
       // Null for every role pinned to (or not using) a single branch.
       assignedBranches: usesMultiBranchScope(r.role) ? (scopedBranches.get(r.id) ?? []) : null,
+      // Null for every role but Finance.
+      financeOrganizationIds: isFinanceRole(r.role) ? (financeOrganizations.get(r.id) ?? []) : null,
     }))
   }
 
@@ -330,6 +345,11 @@ export async function POST(req: Request) {
     branchId,
   )
   if (assignmentError) return error(assignmentError.message, assignmentError.status)
+
+  // Finance is given its organizations here, and only Finance is.
+  const financeOrganizationIds = input.financeOrganizationIds ?? []
+  const financeError = financeOrganizationsError(role, financeOrganizationIds)
+  if (financeError) return error(financeError, 400)
 
   const strayScopeError = rejectScopeForSingleBranchRole(role, groupIds, assignedBranchIds)
   if (strayScopeError) return error(strayScopeError.message, strayScopeError.status)
@@ -413,6 +433,16 @@ export async function POST(req: Request) {
           groupIds,
           branchIds: assignedBranchIds,
           createdByUserId: scope?.userId ?? null,
+        })
+      }
+
+      // Same transaction, so a Finance account never exists without the
+      // organizations it was created with, and the grant is audited with it.
+      if (isFinanceRole(role) && scope?.userId) {
+        await writeFinanceOrganizationsInTx(tx, {
+          userId: created.id,
+          organizationIds: financeOrganizationIds,
+          actor: { id: scope.userId, role: scope.role },
         })
       }
 

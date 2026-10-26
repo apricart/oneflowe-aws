@@ -266,6 +266,15 @@ export function isOrderIntakeAttachmentKey(value: unknown): value is string {
   return typeof value === "string" && ORDER_INTAKE_ATTACHMENT_KEY_PATTERN.test(value)
 }
 
+/**
+ * Whether an order shows its readers the customer's screenshot: one the desk
+ * entered, holding a key. Only the answer leaves the server, never the key;
+ * the image itself is served by each reader's own route, under its own rule.
+ */
+export function hasDeskIntakeScreenshot(order: { createdByRole?: string | null; intakeAttachmentKey?: string | null }): boolean {
+  return isOrderDeskRole(order.createdByRole) && isOrderIntakeAttachmentKey(order.intakeAttachmentKey)
+}
+
 /** Audit action of a desk screenshot upload; order creation checks it to bind a key to its uploader. */
 export const ORDER_INTAKE_UPLOAD_AUDIT_ACTION = "UPLOAD_ORDER_INTAKE_ATTACHMENT"
 

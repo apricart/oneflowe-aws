@@ -235,29 +235,27 @@ function BudgetChartTooltip({ active, payload, label, branches }: Readonly<Budge
 
             {branches.length > 0 && (
                 <div className="mt-4 pt-3 border-t border-slate-100 dark:border-slate-800">
-                    <div className="flex justify-between items-center mb-2 px-1">
-                        <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Branch Details</p>
-                        <div className="flex gap-4">
-                            <span className="text-[8px] font-bold text-emerald-500 tracking-tighter uppercase opacity-70">Base</span>
-                            <span className="text-[8px] font-bold text-amber-500 tracking-tighter uppercase opacity-70">Addon</span>
-                            <span className="text-[8px] font-bold text-indigo-500 tracking-tighter uppercase opacity-70">Total</span>
-                            <span className="text-[8px] font-bold text-violet-500 tracking-tighter uppercase opacity-70">Consumed</span>
+                    {/* One grid shared by the header and every row (each a subgrid), so a column's
+                        label and its figures line up whatever width the amounts take. */}
+                    <div className="grid grid-cols-[minmax(0,1fr)_repeat(4,max-content)] gap-x-3 gap-y-1.5">
+                        <div className="col-span-5 grid grid-cols-subgrid items-center mb-0.5 px-2">
+                            <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Branch Details</p>
+                            <span className="text-right text-[8px] font-bold text-emerald-500 tracking-tighter uppercase opacity-70">Base</span>
+                            <span className="text-right text-[8px] font-bold text-amber-500 tracking-tighter uppercase opacity-70">Addon</span>
+                            <span className="text-right text-[8px] font-bold text-indigo-500 tracking-tighter uppercase opacity-70">Total</span>
+                            <span className="text-right text-[8px] font-bold text-violet-500 tracking-tighter uppercase opacity-70">Consumed</span>
                         </div>
-                    </div>
-                    <div className="space-y-1.5">
                         {branches.slice(0, 5).map((branch) => {
                             const baseline = Number(data[`${branch.id}_baseline`]) || 0
                             const addon = Number(data[`${branch.id}_addon`]) || 0
                             const spent = Number(data[`${branch.id}_spent`]) || 0
                             return (
-                                <div key={branch.id} className="flex justify-between items-center py-1.5 px-2 bg-slate-50/50 dark:bg-slate-800/30 rounded-lg group transition-colors hover:bg-slate-100/50 dark:hover:bg-slate-800/50">
-                                    <span className="text-[10px] text-slate-600 dark:text-slate-300 font-bold truncate max-w-[80px]">{branch.name}</span>
-                                    <div className="flex gap-3">
-                                        <span className="text-[10px] font-black text-emerald-600/80">{formatPKR(baseline)}</span>
-                                        <span className="text-[10px] font-black text-amber-600/80">{formatPKR(addon)}</span>
-                                        <span className="text-[10px] font-black text-indigo-600">{formatPKR(baseline + addon)}</span>
-                                        <span className="text-[10px] font-black text-violet-600">{formatPKR(spent)}</span>
-                                    </div>
+                                <div key={branch.id} className="col-span-5 grid grid-cols-subgrid items-center py-1.5 px-2 bg-slate-50/50 dark:bg-slate-800/30 rounded-lg group transition-colors hover:bg-slate-100/50 dark:hover:bg-slate-800/50">
+                                    <span className="text-[10px] text-slate-600 dark:text-slate-300 font-bold truncate max-w-[110px]" title={branch.name}>{branch.name}</span>
+                                    <span className="text-right tabular-nums text-[10px] font-black text-emerald-600/80">{formatPKR(baseline)}</span>
+                                    <span className="text-right tabular-nums text-[10px] font-black text-amber-600/80">{formatPKR(addon)}</span>
+                                    <span className="text-right tabular-nums text-[10px] font-black text-indigo-600">{formatPKR(baseline + addon)}</span>
+                                    <span className="text-right tabular-nums text-[10px] font-black text-violet-600">{formatPKR(spent)}</span>
                                 </div>
                             )
                         })}

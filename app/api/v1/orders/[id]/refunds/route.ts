@@ -39,6 +39,8 @@ import {
   isApricartSupportRole,
 } from "@/lib/apricart-support-access"
 import { getRequestScope } from "@/lib/auth"
+import { isFinanceRole } from "@/lib/finance-access"
+import { financeReachesOrganization } from "@/lib/server/finance-scope"
 
 const refundRequestRoles = new Set([
   "SUPER_ADMIN",
@@ -533,9 +535,15 @@ export async function GET(
     const allowedBranchIds = await resolveRefundBranchIds(userRole, userId, userBranchId)
     const deskOrderInReach = isOrderDeskRole(userRole) && Boolean(await loadDeskOrder(db, userId, orderId))
 
-    const canReadRefunds = isApricartSupportRole(userRole)
-      ? hasApricartSupportOrderReadScope(userRole, userId, await getRequestScope())
-      : canAccessOrderForRefund(userRole, order, userOrgId, allowedBranchIds, userId, deskOrderInReach)
+    let canReadRefunds: boolean
+    if (isApricartSupportRole(userRole)) {
+      canReadRefunds = hasApricartSupportOrderReadScope(userRole, userId, await getRequestScope())
+    } else if (isFinanceRole(userRole)) {
+      // Finance reads the refunds of an order in an organization assigned to it.
+      canReadRefunds = await financeReachesOrganization(db, userId, order.organizationId)
+    } else {
+      canReadRefunds = canAccessOrderForRefund(userRole, order, userOrgId, allowedBranchIds, userId, deskOrderInReach)
+    }
 
     if (!canReadRefunds) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 })

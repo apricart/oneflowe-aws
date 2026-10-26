@@ -50,6 +50,7 @@ type Branch = {
   groupId?: number | null
   groupName?: string | null
   headCount?: number | null
+  contactPhone?: string | null
   hierarchyRole?: string | null
   parentBranchId?: number | null
   parentBranchName?: string | null
@@ -808,6 +809,10 @@ export default function BranchesPage() {
                       <div className="flex items-center justify-between group">
                         <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5"><Users className="h-3.5 w-3.5" /> Head count</span>
                         <span className="text-sm font-bold text-slate-800 dark:text-slate-200">{formatBranchHeadCount(viewingBranch.headCount)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5 shrink-0"><Phone className="h-3.5 w-3.5" /> Contact phone</span>
+                        <span className="text-sm font-bold text-slate-800 dark:text-slate-200 text-right">{viewingBranch.contactPhone || "Not provided"}</span>
                       </div>
                       <div className="flex items-center justify-between gap-3">
                         <span className="text-xs font-semibold text-slate-500 flex items-center gap-1.5 shrink-0"><Building2 className="h-3.5 w-3.5" /> Branch type</span>

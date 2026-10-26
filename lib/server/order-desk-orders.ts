@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, count, desc, eq, gte, ilike, inArray, isNotNull, or, sql, sum, type SQL } from "drizzle-orm"
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNotNull, or, sql, sum, type SQL } from "drizzle-orm"
 
 import { branches, budgets, globalProducts, orderItems, orders, organizations, refunds, users } from "@/db/schema"
 import { db } from "@/lib/db"
@@ -75,7 +75,23 @@ export type DeskOrderSummary = DeskOrderActions & {
   fulfilledAt: Date | null
   cancelledAt: Date | null
   cancellationReason: string | null
-  items: { id: number; organizationInventoryId: number | null; productName: string; quantity: number; unit: string | null; priceCents: number }[]
+  items: {
+    id: number
+    /** The branch's catalogue entry the line was ordered against; null when it was outside the branch catalogue. */
+    organizationInventoryId: number | null
+    globalProductId: number
+    productName: string
+    productCode: string | null
+    /** The product's quantity rules today, so an edit is checked the way the server will check it. */
+    allowDecimalQuantity: boolean
+    quantityStep: number
+    quantity: number
+    unit: string | null
+    priceCents: number
+    /** The desk typed this line's price; `cataloguePriceCents` is what it replaced. */
+    priceEnteredManually: boolean
+    cataloguePriceCents: number | null
+  }[]
 }
 
 export type DeskOrderPage = {
@@ -183,13 +199,21 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
           id: orderItems.id,
           orderId: orderItems.orderId,
           organizationInventoryId: orderItems.organizationInventoryId,
+          globalProductId: orderItems.globalProductId,
           productName: orderItems.productName,
+          productCode: orderItems.productCode,
+          allowDecimalQuantity: globalProducts.allowDecimalQuantity,
+          quantityStep: globalProducts.quantityStep,
           quantity: orderItems.quantity,
           unit: orderItems.unit,
           priceCents: orderItems.priceCents,
+          priceEnteredManually: orderItems.priceEnteredManually,
+          cataloguePriceCents: orderItems.cataloguePriceCents,
         })
         .from(orderItems)
-        .where(inArray(orderItems.orderId, orderIds)),
+        .leftJoin(globalProducts, eq(globalProducts.id, orderItems.globalProductId))
+        .where(inArray(orderItems.orderId, orderIds))
+        .orderBy(asc(orderItems.id)),
       db
         .select({ orderId: refunds.orderId, amount: sum(refunds.amountCents) })
         .from(refunds)
@@ -214,10 +238,13 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
       hasAttachment: intakeAttachmentKey !== null,
       items: lineRows
         .filter((line) => line.orderId === row.id)
-        .map(({ orderId: _orderId, quantity, priceCents, ...line }) => ({
+        .map(({ orderId: _orderId, quantity, priceCents, cataloguePriceCents, allowDecimalQuantity, quantityStep, ...line }) => ({
           ...line,
+          allowDecimalQuantity: allowDecimalQuantity ?? false,
+          quantityStep: quantityStep === null ? 1 : Number(quantityStep),
           quantity: Number(quantity),
           priceCents: Number(priceCents),
+          cataloguePriceCents: cataloguePriceCents === null ? null : Number(cataloguePriceCents),
         })),
     })),
     pagination: {

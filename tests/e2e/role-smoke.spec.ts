@@ -15,7 +15,7 @@ import {
   SMOKE_PRODUCT_CODE,
   SMOKE_USERNAMES,
 } from "./support/role-smoke-seed"
-import { closeRoleRenameNoticeWhenShown, markDelivered } from "./support/session"
+import { closeRoleRenameNoticeWhenShown, getReconnecting, markDelivered } from "./support/session"
 
 type JsonBody = Record<string, any>
 
@@ -84,7 +84,7 @@ async function authenticatedContext(
 }
 
 async function expectSessionRole(page: Page, role: string): Promise<void> {
-  const body = await expectJsonStatus(await page.request.get("/api/auth/session"))
+  const body = await expectJsonStatus(await getReconnecting(page, "/api/auth/session"))
   expect(body.user?.role).toBe(role)
 }
 
@@ -169,7 +169,7 @@ test.describe("role deployment smoke checks", () => {
         await expect(page.getByRole("heading", { name: roleCase.heading })).toBeVisible()
       }
 
-      const body = await expectJsonStatus(await page.request.get(roleCase.probe))
+      const body = await expectJsonStatus(await getReconnecting(page, roleCase.probe))
       if (roleCase.role === "GROUP_ORDER_PORTAL") {
         expect(body.items).toEqual(expect.arrayContaining([
           expect.objectContaining({ name: SMOKE_GROUP_NAME }),
@@ -186,7 +186,7 @@ test.describe("role deployment smoke checks", () => {
   test("Group User resolves only its assigned scope and approval capability", async ({ page }) => {
     await signIn(page, SMOKE_USERNAMES.groupUser, /\/dashboard$/)
 
-    const body = await expectJsonStatus(await page.request.get("/api/v1/group-portal/scope"))
+    const body = await expectJsonStatus(await getReconnecting(page, "/api/v1/group-portal/scope"))
     expect(body.item).toEqual(expect.objectContaining({
       role: "GROUP_USER",
       canApproveOrders: true,
@@ -221,7 +221,8 @@ test("an order can be created, approved, and fulfilled only by the correct roles
 
   try {
     const inventory = await expectJsonStatus(
-      await requester.page.request.get(
+      await getReconnecting(
+        requester.page,
         `/api/v1/branch/inventory?limit=10&search=${SMOKE_PRODUCT_CODE}`,
       ),
     )
@@ -252,7 +253,7 @@ test("an order can be created, approved, and fulfilled only by the correct roles
     )
 
     const approverView = await expectJsonStatus(
-      await approver.page.request.get(`/api/v1/orders?id=${orderId}`),
+      await getReconnecting(approver.page, `/api/v1/orders?id=${orderId}`),
     )
     expect(approverView.items).toEqual([
       expect.objectContaining({ id: orderId, status: "PENDING" }),
@@ -289,7 +290,7 @@ test("an order can be created, approved, and fulfilled only by the correct roles
     )
 
     const requesterView = await expectJsonStatus(
-      await requester.page.request.get(`/api/v1/orders?id=${orderId}`),
+      await getReconnecting(requester.page, `/api/v1/orders?id=${orderId}`),
     )
     expect(requesterView.items).toEqual([
       expect.objectContaining({ id: orderId, status: "FULFILLED" }),

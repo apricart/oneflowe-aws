@@ -95,6 +95,32 @@ describe("an executive's approvals", () => {
       .toBe("/api/v1/executive/approvals/1/attachment")
   })
 
+  it("marks a line the Order Desk priced, beside the catalogue price it replaced", () => {
+    swr.page = page([order(1, {
+      items: [
+        { id: 9, productName: "Rice", productCode: "P-1", quantity: 2, unit: "kg", priceCents: 70_000, priceEnteredManually: true, cataloguePriceCents: 75_000 },
+        { id: 10, productName: "Tape", productCode: "P-2", quantity: 1, unit: "roll", priceCents: 900, priceEnteredManually: true, cataloguePriceCents: null, inBranchCatalogue: false },
+      ],
+    })])
+    render(<ExecutiveApprovals />)
+    const card = screen.getByRole("article")
+    expect(within(card).getByText("Custom prices")).toBeTruthy()
+    expect(within(card).getAllByText(/Price set by Order Desk/)).toHaveLength(2)
+    expect(within(card).getByText("Rs 750.00", { exact: false }).className).toContain("line-through")
+    expect(within(card).getByText(/no catalogue price/)).toBeTruthy()
+    // A product the branch does not carry is named as such, beside its line.
+    const tape = within(card).getByText("Tape").closest("tr")!
+    expect(within(tape).getByText("Not in branch catalogue")).toBeTruthy()
+    expect(within(within(card).getByText("Rice").closest("tr")!).queryByText("Not in branch catalogue")).toBeNull()
+  })
+
+  it("marks nothing on an order charged at catalogue prices", () => {
+    swr.page = page([order(1)])
+    render(<ExecutiveApprovals />)
+    expect(screen.queryByText("Custom prices")).toBeNull()
+    expect(screen.queryByText(/Price set by Order Desk/)).toBeNull()
+  })
+
   it("approves the version it showed, after a confirmation, and refreshes every approvals read", async () => {
     swr.page = page([order(1)])
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "Order approved" }), { status: 200 }))

@@ -3,6 +3,7 @@ import "server-only"
 import { and, eq, exists, isNull, or, sql } from "drizzle-orm"
 
 import {
+  apricartWarehouseMemberships,
   branches,
   emailOutbox,
   notifications,
@@ -24,6 +25,7 @@ import {
   WAREHOUSE_NOTIFICATION_ROLE,
   warehouseOrderCopy,
   warehouseOrderEventKey,
+  warehouseOrderEventOf,
   warehouseOrderTemplate,
   type WarehouseOrderEvent,
   type WarehouseOrderPayload,
@@ -36,7 +38,7 @@ import {
   type ClaimedOutboxRow,
   type DeliveryOutcome,
 } from "@/lib/server/email-outbox-runtime"
-import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
+import { isOrderInWarehouseReach } from "@/lib/server/warehouse-scope"
 
 /**
  * Tell the warehouse users who serve an order's branch that the order reached
@@ -61,15 +63,57 @@ export type QueuedWarehouseNotifications = { eventKeys: string[]; recipientCount
 
 const NONE: QueuedWarehouseNotifications = { eventKeys: [], recipientCount: 0 }
 
+export type WarehouseRecipient = { id: string; email: string }
+
 /**
- * Every active warehouse user whose reach covers the branch: assigned it one by
- * one, or assigned its city with its organization chosen. The same union `loadWarehouseReach` computes, asked
- * the other way round — by branch, not by user.
+ * Every active warehouse user who works the order now. For an order Super Admin
+ * transferred to a warehouse, that warehouse's operators. For any other, every
+ * user whose reach covers its branch: assigned it one by one, or assigned its
+ * city with its organization chosen — the same union `loadWarehouseReach`
+ * computes, asked the other way round, by branch rather than by user.
  */
-async function loadWarehouseRecipients(
+export async function loadWarehouseOrderRecipients(
+  client: DbClient,
+  orderId: number,
+): Promise<WarehouseRecipient[]> {
+  const [order] = await client
+    .select({ branchId: orders.branchId, fulfillmentWarehouseId: orders.fulfillmentWarehouseId })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1)
+  if (!order) return []
+  const { branchId, fulfillmentWarehouseId } = order
+  if (fulfillmentWarehouseId !== null) {
+    return client
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .innerJoin(roles, eq(users.roleId, roles.id))
+      .where(and(
+        eq(roles.name, WAREHOUSE_ROLE),
+        eq(users.isActive, true),
+        isNull(users.deletedAt),
+        exists(
+          client.select({ one: sql`1` })
+            .from(apricartWarehouseMemberships)
+            .where(and(
+              eq(apricartWarehouseMemberships.userId, users.id),
+              eq(apricartWarehouseMemberships.warehouseId, fulfillmentWarehouseId),
+              eq(apricartWarehouseMemberships.responsibility, "WAREHOUSE_OPERATOR"),
+            )),
+        ),
+      ))
+  }
+  return loadBranchWarehouseRecipients(client, branchId)
+}
+
+/**
+ * Every active warehouse user whose branch reach covers the branch — who works
+ * an order there that names no warehouse.
+ */
+export async function loadBranchWarehouseRecipients(
   client: DbClient,
   branchId: number,
-): Promise<Array<{ id: string; email: string }>> {
+): Promise<WarehouseRecipient[]> {
   return client
     .select({ id: users.id, email: users.email })
     .from(users)
@@ -104,6 +148,11 @@ export async function queueWarehouseOrderNotifications(
     occurrence?: string | number | null
     /** CREATED only: the order was approved at creation. */
     approvedAtCreation?: boolean
+    /**
+     * Who to tell, when it is not "whoever works the order now" — a transfer
+     * tells the accounts that lost it and the ones that gained it apart.
+     */
+    recipients?: WarehouseRecipient[]
   },
 ): Promise<QueuedWarehouseNotifications> {
   const { order, event } = input
@@ -117,7 +166,7 @@ export async function queueWarehouseOrderNotifications(
     .limit(1)
   if (!context) return NONE
 
-  const recipients = await loadWarehouseRecipients(client, order.branchId)
+  const recipients = input.recipients ?? await loadWarehouseOrderRecipients(client, order.id)
   if (recipients.length === 0) return NONE
 
   const payload: WarehouseOrderPayload = {
@@ -160,14 +209,27 @@ export async function queueWarehouseOrderNotifications(
   return { eventKeys: rows.map((row) => row.eventKey), recipientCount: rows.length }
 }
 
+async function isActiveWarehouseUser(userId: string): Promise<boolean> {
+  const [account] = await db
+    .select({ id: users.id })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(and(eq(users.id, userId), eq(roles.name, WAREHOUSE_ROLE), eq(users.isActive, true), isNull(users.deletedAt)))
+    .limit(1)
+  return Boolean(account)
+}
+
 export function isWarehouseEmailTemplate(template: string): boolean {
   return isWarehouseOrderTemplate(template)
 }
 
 /**
  * Send one claimed warehouse email, or retire it if the recipient no longer
- * serves the order's branch, is no longer an active warehouse user, or the
- * order is no longer at that branch of that tenant.
+ * works the order (its branch, or for a transferred order its warehouse), is no
+ * longer an active warehouse user, or the order is no longer at that branch of
+ * that tenant. A "moved to another warehouse" email is the one exception: it
+ * goes to a user who no longer works the order, and is retired if the order
+ * has come back to it since.
  */
 export async function deliverClaimedWarehouseEmail(row: ClaimedOutboxRow): Promise<DeliveryOutcome> {
   const payload = parseWarehouseOrderPayload(row.payload)
@@ -190,11 +252,14 @@ export async function deliverClaimedWarehouseEmail(row: ClaimedOutboxRow): Promi
       eq(orders.branchId, row.branchId),
     ))
     .limit(1)
-  // `loadWarehouseReach` re-reads the account too: a deactivated, deleted or
-  // re-roled user reaches nothing.
-  const reach = recipient ? await loadWarehouseReach(db, row.recipientUserId, { branchId: row.branchId }) : []
-  if (!recipient || !reach.includes(row.branchId) || !isValidEmailAddress(recipient.email)) {
-    await markSkipped(row.id, "Recipient no longer serves this order's branch")
+  // The reach checks re-read the account too: a deactivated, deleted or
+  // re-roled user reaches nothing, and is no active warehouse user.
+  const movedAway = warehouseOrderEventOf(row.template) === "TRANSFERRED_OUT"
+  const stillRelevant = recipient !== undefined && (movedAway
+    ? await isActiveWarehouseUser(row.recipientUserId) && !await isOrderInWarehouseReach(row.recipientUserId, row.orderId)
+    : await isOrderInWarehouseReach(row.recipientUserId, row.orderId))
+  if (!recipient || !stillRelevant || !isValidEmailAddress(recipient.email)) {
+    await markSkipped(row.id, "Recipient no longer works this order")
     return "skipped"
   }
 

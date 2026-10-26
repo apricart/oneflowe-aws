@@ -33,6 +33,9 @@ describe("a new desk order", () => {
     expect(within(checklist).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       "Organization and branchstill needed",
       "At least one productstill needed",
+      // Every product needs the price typed, including tax
+      // (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md).
+      "A price for every productstill needed",
       "Order channelstill needed",
       "Message referencestill needed",
       // Required on every new desk order (plans/OF-ORDER-DESK-internal-order-entry.md).
@@ -40,6 +43,9 @@ describe("a new desk order", () => {
     ])
     expect((screen.getByRole("button", { name: "Create order" }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText(/Choose the organization and branch first/)).toBeTruthy()
+    // The desk is told the price includes tax and the customer's budget is not used.
+    expect(screen.getByText(/Prices you type include tax; nothing is added on top/)).toBeTruthy()
+    expect(screen.getByText(/does not use the customer.s budget/)).toBeTruthy()
   })
 
   it("labels the channel 'Order channel' and marks the choice", () => {

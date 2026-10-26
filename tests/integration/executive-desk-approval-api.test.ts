@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { NextRequest } from "next/server"
 import * as mockedNextAuth from "next-auth"
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 
 import * as ordersRoute from "@/app/api/v1/orders/route"
 import * as orderRoute from "@/app/api/v1/orders/[id]/route"
@@ -135,13 +135,21 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
   const createOrder = async (body: unknown) =>
     read(await ordersRoute.POST(jsonRequest("http://localhost/api/v1/orders", "POST", body, { "Idempotency-Key": idempotencyKey() })))
 
-  /** A desk order at A1 (or B1 with `atB`), created by the desk; returns its id. */
-  const deskOrder = async (options: { atB?: boolean; quantity?: number } = {}) => {
+  /**
+   * A desk order at A1 (or B1 with `atB`), created by the desk; returns its id.
+   * Its line is the fixture product at the branch's own catalogue price, typed
+   * by the desk as every desk line now is, unless `items` says otherwise.
+   */
+  const deskOrder = async (options: { atB?: boolean; quantity?: number; items?: unknown[] } = {}) => {
     signIn("desk")
     const created = await createOrder({
       organizationId: options.atB ? f.organizationB : f.organizationA,
       branchId: options.atB ? f.branchB1 : f.branchA1,
-      items: [{ organizationInventoryId: options.atB ? f.inventoryB : f.inventoryA, quantity: options.quantity ?? 2 }],
+      items: options.items ?? [{
+        globalProductId: f.productId,
+        quantity: options.quantity ?? 2,
+        unitPriceCents: options.atB ? ORDER_DESK_FIXTURE_PRICE_CENTS.base : ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA,
+      }],
       intakeChannel: "EMAIL",
       intakeReference: `Executive approvals ${f.suffix}`,
       intakeAttachmentKey: await stageIntakeAttachment(f.deskId),
@@ -172,6 +180,13 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
     const [row] = await db.select({ held: budgets.amountHeldCents }).from(budgets).where(eq(budgets.id, f.budgetB1))
     return Number(row.held)
   }
+  /** A desk order made to look like one placed before the budget exemption: tracked, its hold on B1. */
+  const asLegacyTrackedOrder = async (orderId: number) => {
+    await db.transaction(async (tx) => {
+      const [order] = await tx.update(orders).set({ budgetTracked: true }).where(eq(orders.id, orderId)).returning({ total: orders.totalCents })
+      await tx.update(budgets).set({ amountHeldCents: sql`${budgets.amountHeldCents} + ${order.total}` }).where(eq(budgets.id, f.budgetB1))
+    })
+  }
 
   const list = async (query = "") => read(await approvalsRoute.GET(get(`http://localhost/api/v1/executive/approvals?${query}`)))
   const approve = async (orderId: number | string, body?: unknown) => {
@@ -196,7 +211,9 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
   const tenantDecision = async (route: { POST: (req: any, props: any) => Promise<Response> }, orderId: number, body: unknown) =>
     read(await route.POST(jsonRequest(`http://localhost/api/v1/orders/${orderId}/x`, "POST", body), params(orderId)))
   const deskEdit = async (orderId: number, quantity: number) => read(await deskEditRoute.PUT(
-    jsonRequest(`http://localhost/api/v1/order-desk/orders/${orderId}`, "PUT", { items: [{ organizationInventoryId: f.inventoryA, quantity }] }),
+    jsonRequest(`http://localhost/api/v1/order-desk/orders/${orderId}`, "PUT", {
+      items: [{ globalProductId: f.productId, quantity, unitPriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA }],
+    }),
     params(orderId),
   ))
   const deskCancel = async (orderId: number) => read(await deskCancelRoute.POST(
@@ -311,8 +328,41 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
         canReturn: true,
       })
       expect(row.items).toHaveLength(1)
+      expect(row.items[0]).toMatchObject({ inBranchCatalogue: true, priceEnteredManually: false, cataloguePriceCents: null })
       // Never the fulfilment token, never the screenshot's storage key.
       expect(JSON.stringify(body)).not.toMatch(/approvalToken|intakeAttachmentKey/)
+    })
+
+    it("shows each line's price beside the branch's own, and which products the branch does not carry", async () => {
+      const orderId = await deskOrder({
+        items: [
+          { globalProductId: f.productId, quantity: 1, unitPriceCents: 1_400 },
+          { globalProductId: f.unassignedProductId, quantity: 2, unitPriceCents: 4_567 },
+        ],
+      })
+      signIn("executive")
+      const row = (await list("status=all&limit=50")).body.items.find((item: any) => item.id === orderId)
+      const byName = new Map<string, any>(row.items.map((line: any) => [line.productName, line]))
+      expect(byName.get(`ITD Product ${f.suffix}`)).toMatchObject({
+        priceCents: 1_400,
+        priceEnteredManually: true,
+        cataloguePriceCents: ORDER_DESK_FIXTURE_PRICE_CENTS.organizationA,
+        inBranchCatalogue: true,
+      })
+      expect(byName.get(`ITD Uncatalogued ${f.suffix}`)).toMatchObject({
+        priceCents: 4_567,
+        priceEnteredManually: true,
+        cataloguePriceCents: null,
+        inBranchCatalogue: false,
+      })
+      // The line's catalogue entry is how the list knows; the id itself is not shown.
+      expect(row.items.every((line: any) => !("organizationInventoryId" in line))).toBe(true)
+      expect(row.totalCents).toBe(1_400 + 2 * 4_567)
+
+      // And the executive approves exactly that total.
+      const approved = await approve(orderId)
+      expect(approved.status).toBe(200)
+      expect(Number((await storedOrder(orderId)).totalCents)).toBe(1_400 + 2 * 4_567)
     })
 
     it("cannot be widened by naming an organization outside the reach", async () => {
@@ -484,11 +534,14 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
   })
 
   describe("rejecting", () => {
-    it("requires a reason, and releases the order's stock and budget hold", async () => {
+    it("requires a reason, and releases the order's stock and the hold of one placed before the exemption", async () => {
       const stockBefore = await stock()
       const heldBefore = await heldAtB1()
       const orderId = await deskOrder({ atB: true, quantity: 4 })
       expect(await stock()).toBe(stockBefore - 4)
+      // A desk order takes no budget (plans/OF-ORDER-DESK-assigned-reach-global-catalogue-budget-exemption.md).
+      expect(await heldAtB1()).toBe(heldBefore)
+      await asLegacyTrackedOrder(orderId)
       expect(await heldAtB1()).toBe(heldBefore + 4 * ORDER_DESK_FIXTURE_PRICE_CENTS.base)
 
       signIn("executive")

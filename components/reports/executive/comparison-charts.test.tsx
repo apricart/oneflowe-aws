@@ -19,6 +19,8 @@ import {
   dualColumnLabel,
   dualColumnLabelLines,
   entityColor,
+  seriesDrillTarget,
+  seriesLabelRows,
   trendPointLabel,
   type ComparisonRow,
   type EntitySeries,
@@ -437,6 +439,53 @@ describe("the trend form", () => {
     expect(screen.getByText("2026-08")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Sana" }))
     expect(onSelectEntity).toHaveBeenCalledWith("b", 1)
+  })
+
+  it("draws selected requesters as separate bars in every month", () => {
+    render(
+      <ComparisonChart
+        {...base}
+        chart="line"
+        rows={[]}
+        series={series}
+        periods={["2026-07", "2026-08"]}
+        dimension="user"
+        dimensionLabel="Requester"
+        seriesVariant="grouped-columns"
+      />,
+    )
+
+    expect(screen.getByText("Ahmed")).toBeTruthy()
+    expect(screen.getByText("Sana")).toBeTruthy()
+    expect(screen.getByText(/Each selected requester has a separate bar/)).toBeTruthy()
+    expect(screen.getByText(/Each column is labelled with its quantity before its value in ₨/)).toBeTruthy()
+  })
+
+  it("aligns each requester's quantity and amount labels with the correct month", () => {
+    const labelled: EntitySeries = {
+      key: "a",
+      label: "Ahmed",
+      points: [
+        { period: "2026-07", value: 1_000, quantity: 4, spendCents: 1_000 },
+        { period: "2026-09", value: 3_000, quantity: 8, spendCents: 3_000 },
+      ],
+    }
+
+    expect(seriesLabelRows(labelled, ["2026-07", "2026-08", "2026-09"])).toEqual([
+      { quantity: 4, spendCents: 1_000 },
+      { quantity: 0, spendCents: 0 },
+      { quantity: 8, spendCents: 3_000 },
+    ])
+  })
+
+  it("drills a requester bar into that requester and month", () => {
+    expect(seriesDrillTarget("user", series[1], "2026-08")).toEqual({
+      dimension: "user",
+      key: "b",
+      label: "Sana · 2026-08",
+      period: "2026-08",
+    })
+    expect(seriesDrillTarget("user", series[1], "")).toBeNull()
   })
 })
 

@@ -238,3 +238,75 @@ describe("DepartmentSignupForm — an address already verified by an emailed cod
     expect(byId("signup-username").value).toBe("ubl-huzaifa.abid")
   })
 })
+
+describe("DepartmentSignupForm — a new branch's type (plans/OF-JOIN-new-branch-parent-child.md)", () => {
+  const WITH_PARENT: DepartmentSignupOptions = { ...OPTIONS, parentBranchIds: [5] }
+
+  /** Start a new branch, give its CRC and city, and stop before adding it. */
+  async function startNewBranch(name: string, crc: string) {
+    change("signup-branch", name)
+    fireEvent.click(screen.getByRole("option", { name: `Add “${name}” as a new branch` }))
+    change("signup-new-branch-crc", crc)
+    await chooseCity("Karachi")
+  }
+
+  it("starts every new branch Standalone, and asks a child for its parent", async () => {
+    render(<DepartmentSignupForm options={WITH_PARENT} onSubmit={vi.fn()} onBack={vi.fn()} />)
+    await startNewBranch("North Kiosk", "KID-2")
+    expect((byId("signup-new-branch-type") as unknown as HTMLSelectElement).value).toBe("STANDALONE")
+    expect(byId("signup-new-branch-parent")).toBeNull()
+
+    change("signup-new-branch-type", "CHILD")
+    fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
+    expect(screen.getByText("Choose the parent branch")).toBeTruthy()
+    expect(screen.getByText("No branches added yet.")).toBeTruthy()
+
+    // Only the organization's parent branches are offered, by name.
+    const parent = byId("signup-new-branch-parent") as unknown as HTMLSelectElement
+    expect([...parent.options].map((option) => option.textContent)).toEqual(["Select the parent branch", "Saddar Branch"])
+    change("signup-new-branch-parent", "branch:5")
+    fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
+    expect(screen.getByRole("checkbox", { name: /North Kiosk.*Child of Saddar Branch/ })).toBeTruthy()
+  })
+
+  it("offers a new branch added here as Parent, and sends the family", async () => {
+    const onSubmit = vi.fn(async (_payload: Record<string, unknown>) => {})
+    render(<DepartmentSignupForm options={OPTIONS} onSubmit={onSubmit} onBack={vi.fn()} />)
+    await fillValidForm()
+
+    await startNewBranch("Gulshan Hub", "PAR-1")
+    change("signup-new-branch-type", "PARENT")
+    fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
+    await startNewBranch("Gulshan Block 2", "KID-1")
+    change("signup-new-branch-type", "CHILD")
+    change("signup-new-branch-parent", "crc:PAR-1")
+    fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
+    expect(screen.getByRole("checkbox", { name: /Gulshan Block 2.*Child of Gulshan Hub/ })).toBeTruthy()
+    await send()
+
+    expect(onSubmit.mock.calls[0][0].branches).toEqual([
+      { branchId: 4 },
+      { name: "Korangi Depot", crc: "AB-ABC-123", city: "Karachi", province: "Sindh", hierarchyRole: "STANDALONE" },
+      { name: "Gulshan Hub", crc: "PAR-1", city: "Karachi", province: "Sindh", hierarchyRole: "PARENT" },
+      { name: "Gulshan Block 2", crc: "KID-1", city: "Karachi", province: "Sindh", hierarchyRole: "CHILD", parentCrc: "PAR-1" },
+    ])
+  })
+
+  it("does not send a child whose parent on the form was unchecked", async () => {
+    const onSubmit = vi.fn(async (_payload: Record<string, unknown>) => {})
+    render(<DepartmentSignupForm options={OPTIONS} onSubmit={onSubmit} onBack={vi.fn()} />)
+    await fillValidForm()
+    await startNewBranch("Gulshan Hub", "PAR-1")
+    change("signup-new-branch-type", "PARENT")
+    fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
+    await startNewBranch("Gulshan Block 2", "KID-1")
+    change("signup-new-branch-type", "CHILD")
+    change("signup-new-branch-parent", "crc:PAR-1")
+    fireEvent.click(screen.getByRole("button", { name: "Add branch" }))
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /^Gulshan Hub/ }))
+    await send()
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(screen.getByText(/Gulshan Block 2: its parent must be a new branch on this request marked Parent/)).toBeTruthy()
+  })
+})

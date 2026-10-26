@@ -5,7 +5,7 @@ import { NextResponse } from "next/server"
 
 import { auditLogs, orders } from "@/db/schema"
 import { db } from "@/lib/db"
-import { isOrderIntakeAttachmentKey, ORDER_INTAKE_UPLOAD_AUDIT_ACTION } from "@/lib/order-desk-access"
+import { isOrderIntakeAttachmentKey, ORDER_DESK_ROLE, ORDER_INTAKE_UPLOAD_AUDIT_ACTION } from "@/lib/order-desk-access"
 import { contentTypeForKey, getImage, isImageStorageConfigured } from "@/lib/server/image-storage"
 
 /**
@@ -53,10 +53,27 @@ export async function deskAttachmentRefusal(input: {
 }
 
 /**
+ * The screenshot key of one order the Order Desk entered, or null for any other
+ * order. Reads by id only: the caller must already have decided the reader may
+ * see this order — the order detail's rule (`canReadOrderDetail`) or the
+ * warehouse's branch reach. A key on an order the desk did not enter is never
+ * served, whatever the column holds.
+ */
+export async function loadDeskOrderIntakeAttachmentKey(orderId: number): Promise<string | null> {
+  const [row] = await db
+    .select({ key: orders.intakeAttachmentKey })
+    .from(orders)
+    .where(and(eq(orders.id, orderId), eq(orders.createdByRole, ORDER_DESK_ROLE)))
+    .limit(1)
+  return row?.key ?? null
+}
+
+/**
  * Stream one intake screenshot back, for a caller that has already decided
  * the reader may see this order — the desk through its reach, an Apricart
- * Executive through its approval reach. Anything unservable is a 404, the same
- * as "no such order", so the response cannot be used to probe.
+ * Executive through its approval reach, the order's readers through the order
+ * detail's rule, the warehouse through its branches. Anything unservable is a
+ * 404, the same as "no such order", so the response cannot be used to probe.
  *
  * It carries a customer's personal details: never in a shared cache, never
  * sniffed, and sandboxed so it can run nothing even if it were not an image.

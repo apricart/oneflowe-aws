@@ -9,10 +9,16 @@
  * financial approver per approval level. Nothing is created until Head Office
  * approves.
  *
+ * A new branch may also be given a type — Standalone, Parent, or Child of an
+ * existing parent branch or of another new branch on the same request
+ * (plans/OF-JOIN-new-branch-parent-child.md). Like the city it is a proposal:
+ * Head Office confirms or changes it at review.
+ *
  * Shared by the join page and the endpoints, so the two cannot disagree. The
  * server re-validates everything the page checks.
  */
 
+import type { BranchHierarchyRole } from "@/lib/branch-hierarchy"
 import { emailMatchesDomain } from "@/lib/organization-email-domain"
 import { findPakistanCity } from "@/lib/pakistan-cities"
 
@@ -90,10 +96,53 @@ export function requestedBranchNameError(value: unknown): string | null {
  */
 export type RequestedBranchEntry =
   | { branchId: number }
-  | { crc: string; name?: string | null; city?: string | null; province?: string | null }
+  | {
+      crc: string
+      name?: string | null
+      city?: string | null
+      province?: string | null
+      hierarchyRole?: BranchHierarchyRole | null
+      parentBranchId?: number | null
+      parentCrc?: string | null
+    }
 
-/** `city` and `province` are both null, or a listed city and its own province. */
-export type RequestedNewBranch = { crc: string; name: string | null; city: string | null; province: string | null }
+/**
+ * The type the applicant proposes for a branch to create: a child's parent is
+ * an existing branch of the organization (`parentBranchId`) or another branch
+ * to create on the same request (`parentCrc`), never both. Held as given, so
+ * `requestedBranchHierarchyError` can refuse a pairing rather than repair it.
+ */
+export type RequestedHierarchy = {
+  hierarchyRole: BranchHierarchyRole
+  parentBranchId: number | null
+  parentCrc: string | null
+}
+
+/**
+ * `city` and `province` are both null, or a listed city and its own province.
+ * `hierarchy` is null (or absent) when no type was proposed.
+ */
+export type RequestedNewBranch = {
+  crc: string
+  name: string | null
+  city: string | null
+  province: string | null
+  hierarchy?: RequestedHierarchy | null
+}
+
+/** The type one entry proposes, normalised; null when it proposes none. */
+export function requestedHierarchyOf(entry: Readonly<{
+  hierarchyRole?: BranchHierarchyRole | null
+  parentBranchId?: number | null
+  parentCrc?: string | null
+}>): RequestedHierarchy | null {
+  if (entry.hierarchyRole === undefined || entry.hierarchyRole === null) return null
+  return {
+    hierarchyRole: entry.hierarchyRole,
+    parentBranchId: entry.parentBranchId ?? null,
+    parentCrc: normalizeCrc(entry.parentCrc) || null,
+  }
+}
 
 /**
  * A requested city as Pakistan's list spells it, with the list's province; or
@@ -107,7 +156,8 @@ export function requestedBranchLocation(city: unknown): { city: string | null; p
 
 /**
  * The branches to create, one per CRC, normalised. A CRC listed twice is one
- * branch, and the first name and the first city given for it are kept.
+ * branch, and the first name, the first city and the first type given for it
+ * are kept.
  */
 export function requestedNewBranches(entries: readonly RequestedBranchEntry[]): RequestedNewBranch[] {
   const byCrc = new Map<string, RequestedNewBranch>()
@@ -116,15 +166,119 @@ export function requestedNewBranches(entries: readonly RequestedBranchEntry[]): 
     const crc = normalizeCrc(entry.crc)
     const name = normalizeBranchName(entry.name) || null
     const location = requestedBranchLocation(entry.city)
+    const hierarchy = requestedHierarchyOf(entry)
     const known = byCrc.get(crc)
     if (!known) {
-      byCrc.set(crc, { crc, name, ...location })
+      byCrc.set(crc, { crc, name, ...location, hierarchy })
       continue
     }
     if (known.name === null && name !== null) known.name = name
     if (known.city === null && location.city !== null) Object.assign(known, location)
+    if (!known.hierarchy && hierarchy) known.hierarchy = hierarchy
   }
   return [...byCrc.values()]
+}
+
+/**
+ * Why the types proposed for the branches to create cannot stand together, or
+ * null. Judged on the whole list, because a child may name another branch on
+ * it: a child names exactly one parent; a parent CRC is another branch on the
+ * list proposed as Parent; nothing but a child names a parent. Whether an
+ * existing parent id is a Parent of the organization needs the database and is
+ * the caller's to check.
+ */
+export function requestedBranchHierarchyError(newBranches: readonly RequestedNewBranch[]): string | null {
+  const byCrc = new Map(newBranches.map((branch) => [normalizeCrc(branch.crc), branch]))
+  for (const branch of newBranches) {
+    const hierarchy = branch.hierarchy
+    if (!hierarchy) continue
+    const label = branch.name ?? `The new branch for CRC ${normalizeCrc(branch.crc)}`
+    const pairing = requestedHierarchyPairingError(branch.crc, hierarchy)
+    if (pairing) return `${label}: ${pairing}`
+    if (hierarchy.parentCrc !== null && byCrc.get(hierarchy.parentCrc)?.hierarchy?.hierarchyRole !== "PARENT") {
+      return `${label}: its parent must be a new branch on this request marked Parent`
+    }
+  }
+  return null
+}
+
+/**
+ * Why one proposed type cannot stand on its own, or null: a child names
+ * exactly one parent, never its own CRC, and nothing else names one. What the
+ * parent is needs the rest of the list, or the database.
+ */
+export function requestedHierarchyPairingError(crc: string, hierarchy: Readonly<RequestedHierarchy>): string | null {
+  const namesExisting = hierarchy.parentBranchId !== null
+  const namesNew = hierarchy.parentCrc !== null
+  if (hierarchy.hierarchyRole !== "CHILD") {
+    return namesExisting || namesNew ? "only a child branch has a parent branch" : null
+  }
+  if (namesExisting && namesNew) return "choose one parent branch"
+  if (!namesExisting && !namesNew) return "choose its parent branch"
+  if (hierarchy.parentCrc === normalizeCrc(crc)) return "a branch cannot be its own parent"
+  return null
+}
+
+/** The existing branches the proposed types name as parents, once each. */
+export function requestedParentBranchIds(newBranches: readonly RequestedNewBranch[]): number[] {
+  return [...new Set(newBranches.flatMap((branch) => (
+    branch.hierarchy?.parentBranchId ? [branch.hierarchy.parentBranchId] : []
+  )))]
+}
+
+/**
+ * Head Office's choice for one branch to create at approval: an existing
+ * branch to map the CRC onto (which keeps its own type), or a type for the
+ * branch it creates, whose parent is an existing branch or another branch this
+ * same approval creates as Parent.
+ */
+export type NewBranchHierarchyChoice = {
+  requestBranchId: number
+  mapToBranchId?: number
+  hierarchyRole?: BranchHierarchyRole
+  parentBranchId?: number
+  parentRequestBranchId?: number
+}
+
+/** Why one choice's type and parent cannot stand together, or null. */
+export function newBranchChoiceHierarchyError(choice: Readonly<NewBranchHierarchyChoice>): string | null {
+  const namesExisting = choice.parentBranchId !== undefined
+  const namesNew = choice.parentRequestBranchId !== undefined
+  if (choice.mapToBranchId !== undefined) {
+    return choice.hierarchyRole !== undefined || namesExisting || namesNew
+      ? "A branch mapped onto an existing one keeps that branch's type"
+      : null
+  }
+  if (choice.hierarchyRole !== "CHILD") {
+    return namesExisting || namesNew ? "Only a child branch has a parent branch" : null
+  }
+  if (namesExisting && namesNew) return "Choose one parent branch for a child branch"
+  if (!namesExisting && !namesNew) return "Choose the parent branch for a child branch"
+  if (choice.parentRequestBranchId === choice.requestBranchId) return "A branch cannot be its own parent"
+  return null
+}
+
+/**
+ * Why Head Office's choices cannot be applied together, or null: each holds on
+ * its own, and a parent named among them is a branch this approval creates as
+ * Parent.
+ */
+export function newBranchDecisionHierarchyError(choices: readonly NewBranchHierarchyChoice[]): string | null {
+  for (const choice of choices) {
+    const own = newBranchChoiceHierarchyError(choice)
+    if (own) return own
+    if (choice.parentRequestBranchId === undefined) continue
+    const parent = choices.find((other) => other.requestBranchId === choice.parentRequestBranchId)
+    if (!parent || parent.mapToBranchId !== undefined || parent.hierarchyRole !== "PARENT") {
+      return "A child branch's parent must be an existing parent branch or a new branch created here as Parent"
+    }
+  }
+  return null
+}
+
+/** Whether a choice creates a child branch, which the approval creates after every parent. */
+export function createsChildBranch(choice: Readonly<NewBranchHierarchyChoice> | undefined): boolean {
+  return choice?.mapToBranchId === undefined && choice?.hierarchyRole === "CHILD"
 }
 
 /**

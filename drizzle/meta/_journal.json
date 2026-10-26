@@ -727,21 +727,63 @@
       "idx": 103,
       "version": "7",
       "when": 1791104400000,
-      "tag": "20261028120000_add_rider_delivery",
+      "tag": "20261028120000_join_request_branch_hierarchy",
       "breakpoints": true
     },
     {
       "idx": 104,
       "version": "7",
-      "when": 1791108000000,
-      "tag": "20261029120000_rider_city_warehouse",
+      "when": 1791104400001,
+      "tag": "20261028120000_add_rider_delivery",
       "breakpoints": true
     },
     {
       "idx": 105,
       "version": "7",
+      "when": 1791108000000,
+      "tag": "20261029120000_apricart_warehouses",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1791108000001,
+      "tag": "20261029120000_rider_city_warehouse",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
       "when": 1791111600000,
+      "tag": "20261030120000_branch_contact_phone",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1791111600001,
       "tag": "20261030120000_pod_proof_of_delivery_prefix",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1791115200000,
+      "tag": "20261031120000_order_item_entered_price",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1791118800000,
+      "tag": "20261101120000_order_warehouse_transfers",
+      "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1791122400000,
+      "tag": "20261102120000_finance_role",
       "breakpoints": true
     }
   ]

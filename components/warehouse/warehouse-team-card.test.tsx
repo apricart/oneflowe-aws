@@ -13,6 +13,13 @@ vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }))
 
 import { WarehouseTeamCard } from "./warehouse-team-card"
 
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver
+Element.prototype.scrollIntoView ??= vi.fn()
+
 const organizations = [
   { id: 1, name: "Meezan", code: "MEZ", status: "active" },
   { id: 2, name: "UBL", code: "UBL", status: "active" },
@@ -198,7 +205,123 @@ describe("Warehouse team", () => {
     })
   })
 
+  describe("select all / unselect all", () => {
+    const saved = (item: Record<string, unknown>) => new Response(JSON.stringify({ item }), { status: 200 })
+
+    it("chooses every organization not yet chosen with one request, and keeps the server's answer", async () => {
+      swr.data = team([member({ cityOrganizationIds: [1] })])
+      fetchMock.mockResolvedValueOnce(saved({ organizationIds: [1, 2] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Select all (1)" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/warehouse-team/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4/city-organizations")
+      expect(sentBody(0)).toEqual({ organizationIds: [2], assigned: true })
+      expect(within(dialog).getByText("2 organizations chosen.")).toBeTruthy()
+      expect((within(dialog).getByRole("button", { name: "Select all (0)" }) as HTMLButtonElement).disabled).toBe(true)
+    })
+
+    it("acts only on the organizations the filter shows", async () => {
+      swr.data = team([member()])
+      fetchMock.mockResolvedValueOnce(saved({ organizationIds: [2] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      fireEvent.change(within(dialog).getByLabelText("Filter organizations"), { target: { value: "ub" } })
+      fireEvent.click(within(dialog).getByRole("button", { name: "Select all shown (1)" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ organizationIds: [2], assigned: true })
+    })
+
+    it("asks before withdrawing every organization, and sends nothing when kept", async () => {
+      swr.data = team([member({ cityOrganizationIds: [1, 2] })])
+      fetchMock.mockResolvedValueOnce(saved({ organizationIds: [] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unselect all (2)" }))
+      fireEvent.click(await screen.findByRole("button", { name: "Keep them" }))
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unselect all (2)" }))
+      expect(await screen.findByText("Withdraw 2 organizations?")).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Withdraw" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ organizationIds: [1, 2], assigned: false })
+      expect(within(dialog).getByText("0 organizations chosen.")).toBeTruthy()
+    })
+
+    it("assigns every city of the chosen organizations, never one outside them", async () => {
+      // Lahore is assigned but outside the chosen organization; Karachi is not yet assigned.
+      swr.data = team([member({ cityKeys: ["lahore"], cityOrganizationIds: [2] })])
+      fetchMock.mockResolvedValueOnce(saved({ cityKeys: ["karachi", "lahore"] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Assign all (1)" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/warehouse-team/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4/cities")
+      expect(sentBody(0)).toEqual({ cities: ["karachi"], assigned: true })
+      expect(within(dialog).getByText("2 cities assigned.")).toBeTruthy()
+    })
+
+    it("asks before unassigning every city, including one outside the chosen organizations", async () => {
+      swr.data = team([member({ cityKeys: ["karachi", "lahore"], cityOrganizationIds: [2] })])
+      fetchMock.mockResolvedValueOnce(saved({ cityKeys: [] }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unassign all (2)" }))
+      expect(await screen.findByText("Unassign 2 cities?")).toBeTruthy()
+      fireEvent.click(screen.getByRole("button", { name: "Unassign" }))
+      await waitFor(() => expect(swr.mutate).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ cities: ["karachi", "lahore"], assigned: false })
+      expect(within(dialog).getByText("0 cities assigned.")).toBeTruthy()
+    })
+
+    it("keeps the reach unchanged with the server's reason when refused", async () => {
+      swr.data = team([member({ cityOrganizationIds: [1] })])
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "A warehouse user can be assigned at most 200 cities" }), { status: 409 }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      fireEvent.click(within(dialog).getByRole("button", { name: "Assign all (2)" }))
+      expect(await within(dialog).findByText("A warehouse user can be assigned at most 200 cities")).toBeTruthy()
+      expect(within(dialog).getByText("0 cities assigned.")).toBeTruthy()
+      expect(swr.mutate).not.toHaveBeenCalled()
+    })
+  })
+
   describe("by branch", () => {
+    it("searches organizations before switching the branch list", () => {
+      swr.data = team([member()])
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      showTab(dialog, "By branch")
+
+      fireEvent.click(within(dialog).getByRole("combobox", { name: "Organization" }))
+      fireEvent.change(screen.getByLabelText("Search organizations"), { target: { value: "ubl" } })
+      fireEvent.click(screen.getByRole("option", { name: /UBL/ }))
+
+      expect(within(dialog).getByLabelText(/Clifton/)).toBeTruthy()
+      expect(within(dialog).queryByLabelText(/North/)).toBeNull()
+    })
+
+    it("selects only filtered branches and preserves hidden selections", async () => {
+      swr.data = team([member({ branchIds: [11] })])
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ item: {} }), { status: 200 }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      showTab(dialog, "By branch")
+
+      fireEvent.change(within(dialog).getByLabelText("Filter branches"), { target: { value: "south" } })
+      fireEvent.click(within(dialog).getByRole("button", { name: "Select all shown" }))
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ organizationId: 1, branchIds: [11, 12] })
+    })
+
     it("replaces one organization's branches with what is ticked, once, and refreshes", async () => {
       swr.data = team([member()])
       let finish: (value: Response) => void = () => {}
@@ -236,7 +359,7 @@ describe("Warehouse team", () => {
       expect(save.disabled).toBe(true)
     })
 
-    it("shows a branch an assigned city covers as served and locked, and leaves it out of All / none", async () => {
+    it("shows a branch an assigned city covers as served and leaves it out of the bulk action", async () => {
       swr.data = team([member({ branchIds: [11], cityKeys: ["karachi"], cityOrganizationIds: [1] })])
       fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ item: {} }), { status: 200 }))
       render(<WarehouseTeamCard />)
@@ -249,8 +372,8 @@ describe("Warehouse team", () => {
       expect(within(dialog).getAllByText("via Karachi")).toHaveLength(2)
       expect(within(dialog).getByText("3 of 3 served in this organization (2 through a city).")).toBeTruthy()
 
-      // North is the only branch no city covers: All / none withdraws just it.
-      fireEvent.click(within(dialog).getByRole("button", { name: "All / none" }))
+      // North is the only branch no city covers: unselecting all withdraws just it.
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unselect all" }))
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
       expect(sentBody(0)).toEqual({ organizationId: 1, branchIds: [] })

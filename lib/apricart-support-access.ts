@@ -111,6 +111,11 @@ export const APRICART_SUPPORT_API_RULES: readonly ApricartSupportApiRule[] = [
     pattern: /^\/api\/v1\/orders\/\d+\/delivery-challan\/\d+\/file$/,
   },
   {
+    route: `${ORDERS_ROUTE}/[id]/intake-screenshot/route.ts`,
+    methods: ["GET"],
+    pattern: /^\/api\/v1\/orders\/\d+\/intake-screenshot$/,
+  },
+  {
     route: "app/api/v1/analytics/earliest-record/route.ts",
     methods: ["GET"],
     pattern: /^\/api\/v1\/analytics\/earliest-record$/,

@@ -25,14 +25,24 @@ import {
   type BranchChip,
   type DepartmentSignupDraft,
   addressDraftError,
+  chipHierarchyText,
   departmentSignupErrors,
   emptyDepartmentSignupDraft,
   newBranchChipError,
   newBranchNameChipError,
+  parentChoiceOptions,
+  parseParentChoice,
   payloadSizeError,
   sameBranchName,
   toDepartmentSignupPayload,
 } from "@/lib/join-department-signup-form"
+import {
+  BRANCH_HIERARCHY_LABELS,
+  BRANCH_HIERARCHY_ROLES,
+  DEFAULT_BRANCH_HIERARCHY_ROLE,
+  type BranchHierarchyRole,
+  isBranchHierarchyRole,
+} from "@/lib/branch-hierarchy"
 import { type ApprovalLevelBand, approvalLevelBandText } from "@/lib/order-approval-levels"
 import { EMAIL_LOCAL_PART_MAX_LENGTH } from "@/lib/organization-email-domain"
 import type { PakistanCity } from "@/lib/pakistan-cities"
@@ -62,7 +72,18 @@ export type DepartmentSignupOptions = {
   emailDomain: string
   branches: JoinOption[]
   approvalLevels: ApprovalLevelBand[]
+  /** Which of `branches` are parent branches; absent from older lookups. */
+  parentBranchIds?: number[]
 }
+
+/** What each type means, under the select. A label only: no access or budget follows it. */
+const BRANCH_TYPE_HINTS: Record<BranchHierarchyRole, string> = {
+  STANDALONE: "Not part of a parent / child family.",
+  PARENT: "Other branches can be added as its children, here or later.",
+  CHILD: "Belongs to a parent branch: one of your organization's, or a new branch you add here as Parent.",
+}
+
+const NO_PARENT_BRANCHES: number[] = []
 
 const INPUT_SELECT_CLASS =
   "flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-red-500"
@@ -138,6 +159,72 @@ function ChipRemove({ label, onClick }: Readonly<{ label: string; onClick: () =>
 }
 
 /**
+ * A new branch's type, and a child's parent: one of the organization's parent
+ * branches, or a new branch already added here as Parent
+ * (plans/OF-JOIN-new-branch-parent-child.md).
+ */
+function NewBranchTypeFields({
+  hierarchyRole,
+  onHierarchyRoleChange,
+  parentValue,
+  onParentChange,
+  parentOptions,
+  parentProblem,
+}: Readonly<{
+  hierarchyRole: BranchHierarchyRole
+  onHierarchyRoleChange: (role: BranchHierarchyRole) => void
+  parentValue: string
+  onParentChange: (value: string) => void
+  parentOptions: Array<{ value: string; label: string }>
+  parentProblem?: string
+}>) {
+  const noParentYet = hierarchyRole === "CHILD" && parentOptions.length === 0
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      <div className="space-y-1">
+        <label htmlFor="signup-new-branch-type" className="text-sm font-medium text-slate-700">Branch type</label>
+        <select
+          id="signup-new-branch-type"
+          value={hierarchyRole}
+          onChange={(event) => {
+            if (isBranchHierarchyRole(event.target.value)) onHierarchyRoleChange(event.target.value)
+          }}
+          className={cn(INPUT_SELECT_CLASS, "bg-white")}
+          aria-describedby="signup-new-branch-type-hint"
+        >
+          {BRANCH_HIERARCHY_ROLES.map((role) => <option key={role} value={role}>{BRANCH_HIERARCHY_LABELS[role]}</option>)}
+        </select>
+      </div>
+      {hierarchyRole === "CHILD" && (
+        <div className="space-y-1">
+          <label htmlFor="signup-new-branch-parent" className="text-sm font-medium text-slate-700">
+            Parent branch<span className="text-red-500"> *</span>
+          </label>
+          <select
+            id="signup-new-branch-parent"
+            value={parentValue}
+            onChange={(event) => onParentChange(event.target.value)}
+            disabled={parentOptions.length === 0}
+            className={cn(INPUT_SELECT_CLASS, "bg-white")}
+            aria-invalid={Boolean(parentProblem)}
+            aria-describedby={parentProblem ? "signup-new-branch-parent-error" : undefined}
+          >
+            <option value="">Select the parent branch</option>
+            {parentOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+          {parentProblem && <p id="signup-new-branch-parent-error" className="text-xs font-medium text-red-600">{parentProblem}</p>}
+        </div>
+      )}
+      <p id="signup-new-branch-type-hint" className="text-xs text-slate-500 sm:col-span-2">
+        {noParentYet
+          ? "There is no parent branch to choose yet. Add the parent as a new branch with the type Parent first."
+          : BRANCH_TYPE_HINTS[hierarchyRole]}
+      </p>
+    </div>
+  )
+}
+
+/**
  * The Branch field: the applicant searches the organization's branches by name
  * and picks one. A branch that is not listed is added as new, and only then are
  * its CRC (cost centre) number and its city asked for, so a new branch always
@@ -147,11 +234,13 @@ function BranchChipsField({
   chips,
   onChange,
   branches,
+  parentBranchIds,
   error,
 }: Readonly<{
   chips: BranchChip[]
   onChange: (chips: BranchChip[]) => void
   branches: JoinOption[]
+  parentBranchIds: number[]
   error?: string
 }>) {
   const [text, setText] = useState("")
@@ -159,7 +248,18 @@ function BranchChipsField({
   const [newBranchName, setNewBranchName] = useState<string | null>(null)
   const [crc, setCrc] = useState("")
   const [city, setCity] = useState<PakistanCity | null>(null)
-  const [problem, setProblem] = useState<{ field: "name" | "crc" | "city"; message: string } | null>(null)
+  const [hierarchyRole, setHierarchyRole] = useState<BranchHierarchyRole>(DEFAULT_BRANCH_HIERARCHY_ROLE)
+  const [parentValue, setParentValue] = useState("")
+  const [problem, setProblem] = useState<{ field: "name" | "crc" | "city" | "parent"; message: string } | null>(null)
+  const parentOptions = useMemo(() => parentChoiceOptions(branches, parentBranchIds, chips), [branches, parentBranchIds, chips])
+
+  const resetNewBranch = () => {
+    setCrc("")
+    setCity(null)
+    setHierarchyRole(DEFAULT_BRANCH_HIERARCHY_ROLE)
+    setParentValue("")
+    setProblem(null)
+  }
 
   const chosenIds = useMemo(
     () => new Set(chips.flatMap((chip) => (chip.kind === "existing" ? [chip.branchId] : []))),
@@ -199,14 +299,13 @@ function BranchChipsField({
     }
     setNewBranchName(typed)
     setText("")
-    setCrc("")
-    setCity(null)
-    setProblem(null)
+    resetNewBranch()
   }
 
   const addNewBranch = () => {
     if (newBranchName === null) return
-    const refusal = newBranchChipError(chips, knownNames, { name: newBranchName, crc, city: city?.name ?? "" })
+    const parent = hierarchyRole === "CHILD" ? parseParentChoice(parentValue) : { parentBranchId: null, parentCrc: null }
+    const refusal = newBranchChipError(chips, knownNames, { name: newBranchName, crc, city: city?.name ?? "", hierarchyRole, parent })
     if (refusal || !city) {
       setProblem(refusal)
       return
@@ -219,26 +318,23 @@ function BranchChipsField({
       name: newBranchName,
       city: city.name,
       province: city.province,
+      hierarchyRole,
+      ...parent,
       label: newBranchName,
       checked: true,
     }])
     setNewBranchName(null)
-    setCrc("")
-    setCity(null)
-    setProblem(null)
+    resetNewBranch()
   }
 
   const cancelNewBranch = () => {
     setText(newBranchName ?? "")
     setNewBranchName(null)
-    setCrc("")
-    setCity(null)
-    setProblem(null)
+    resetNewBranch()
   }
 
-  const nameError = problem?.field === "name" ? problem.message : undefined
-  const crcProblem = problem?.field === "crc" ? problem.message : undefined
-  const cityProblem = problem?.field === "city" ? problem.message : undefined
+  const problems: Partial<Record<"name" | "crc" | "city" | "parent", string>> = problem ? { [problem.field]: problem.message } : {}
+  const { name: nameError, crc: crcProblem, city: cityProblem, parent: parentProblem } = problems
   return (
     <div className="space-y-2">
       {newBranchName === null
@@ -357,6 +453,21 @@ function BranchChipsField({
                 <ReadOnlyValue id="signup-new-branch-province" value={city?.province ?? ""} placeholder="Filled in from the city" />
               </div>
             </div>
+            <NewBranchTypeFields
+              hierarchyRole={hierarchyRole}
+              onHierarchyRoleChange={(role) => {
+                setHierarchyRole(role)
+                setParentValue("")
+                setProblem(null)
+              }}
+              parentValue={parentValue}
+              onParentChange={(value) => {
+                setParentValue(value)
+                setProblem(null)
+              }}
+              parentOptions={parentOptions}
+              parentProblem={parentProblem}
+            />
             <div className="flex flex-wrap gap-2">
               <Button type="button" onClick={addNewBranch} className="shrink-0">Add branch</Button>
               <Button type="button" variant="outline" onClick={cancelNewBranch} className="shrink-0">Cancel</Button>
@@ -364,7 +475,7 @@ function BranchChipsField({
           </div>
         )}
       <p id="signup-branch-hint" className="text-xs text-slate-500">
-        Pick your branch if it is listed. If it is not, add it as a new branch and give its CRC number and city.
+        Pick your branch if it is listed. If it is not, add it as a new branch and give its CRC number, city and type.
         One branch places your orders through the shop; more than one through the group storefront.
       </p>
       {chips.length === 0
@@ -389,7 +500,11 @@ function BranchChipsField({
                 <label htmlFor={`signup-branch-${chip.key}`} className="cursor-pointer">
                   {chip.label}
                   {chip.kind === "crc" && (
-                    <span className="ml-1 text-xs text-slate-500">(new · CRC {chip.crc} · {chip.city}, {chip.province})</span>
+                    <span className="ml-1 text-xs text-slate-500">
+                      ({["new", `CRC ${chip.crc}`, `${chip.city}, ${chip.province}`, chipHierarchyText(chip, chips, branches)]
+                        .filter(Boolean)
+                        .join(" · ")})
+                    </span>
                   )}
                 </label>
                 <ChipRemove label={chip.label} onClick={() => onChange(chips.filter((item) => item.key !== chip.key))} />
@@ -727,6 +842,7 @@ export function DepartmentSignupForm({
           chips={draft.branches}
           onChange={(branches) => set("branches", branches)}
           branches={options.branches}
+          parentBranchIds={options.parentBranchIds ?? NO_PARENT_BRANCHES}
           error={errors.branches}
         />
       </Field>

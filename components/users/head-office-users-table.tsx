@@ -40,6 +40,8 @@ import {
 } from "@/components/users/approval-level-field"
 import { UserBranchCell } from "@/components/users/user-branch-cell"
 import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
+import { FinanceOrganizationsDialog } from "@/components/finance/finance-organizations-dialog"
+import { FINANCE_LABEL, FINANCE_ROLE } from "@/lib/finance-access"
 import {
   describeUserBranches,
   userBranchExportText,
@@ -72,6 +74,8 @@ type UserRow = {
   orderApprovalLevel?: number | null
   /** A group-based user's effective branches; null for every other role. */
   assignedBranches?: DirectoryBranch[] | null
+  /** A Finance account's organizations; null for every other role. */
+  financeOrganizationIds?: number[] | null
 }
 
 type HeadOfficeUsersTableProps = {
@@ -871,6 +875,9 @@ function RoleAssignmentFields({
                 {/* And for a support account, whose role is fixed and whose
                     reach is the whole support queue. */}
                 <SelectItem value="APRICART_SUPPORT">Apricart Support</SelectItem>
+                {/* And for a Finance account, whose organizations are edited
+                    from its details panel. */}
+                <SelectItem value={FINANCE_ROLE}>{FINANCE_LABEL}</SelectItem>
               </>
             )}
           </SelectContent>
@@ -954,6 +961,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
   const [page, setPage] = useState(1)
   const [editingUser, setEditingUser] = useState<UserRow | null>(null)
   const [viewingUser, setViewingUser] = useState<UserRow | null>(null)
+  const [financeOrganizationsUser, setFinanceOrganizationsUser] = useState<UserRow | null>(null)
   const [editErrors, setEditErrors] = useState<Record<string, string>>({})
   const [submittingUserId, setSubmittingUserId] = useState<string | null>(null)
   const [statusSubmittingUserId, setStatusSubmittingUserId] = useState<string | null>(null)
@@ -1082,6 +1090,21 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
     if (!organizationId) return "—"
     return organizationMap.get(organizationId as number) || "Unknown"
   }
+
+  // A Finance account has no organization of its own; it reads the ones assigned to it.
+  const financeOrganizationNames = (user: UserRow) => {
+    const ids = user.financeOrganizationIds ?? []
+    if (ids.length === 0) return "None assigned"
+    return ids.map((id) => organizationMap.get(id) || `#${id}`).join(", ")
+  }
+
+  const financeOrganizationOptions = useMemo(
+    () => organizations
+      .filter((org: any) => org?.id)
+      .map((org: any) => ({ id: org.id as number, label: String(org.name), keywords: org.code ?? null }))
+      .sort((a: { label: string }, b: { label: string }) => a.label.localeCompare(b.label)),
+    [organizations],
+  )
 
   // Open edit dialog
   const openEditDialog = (user: UserRow) => {
@@ -1332,6 +1355,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
         return <Badge className="bg-lime-100 text-lime-800">Warehouse</Badge>
       case "APRICART_SUPPORT":
         return <Badge className="bg-sky-100 text-sky-800">Apricart Support</Badge>
+      case FINANCE_ROLE:
+        return <Badge className="bg-emerald-100 text-emerald-800">{FINANCE_LABEL}</Badge>
       default:
         return <Badge variant="outline">{role}</Badge>
     }
@@ -1446,6 +1471,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
             <SelectItem value="APRICART_EXECUTIVE">Apricart Executive</SelectItem>
             <SelectItem value="WAREHOUSE">Warehouse (Apricart)</SelectItem>
             <SelectItem value="APRICART_SUPPORT">Apricart Support</SelectItem>
+            <SelectItem value={FINANCE_ROLE}>{FINANCE_LABEL}</SelectItem>
           </SelectContent>
         </Select>
 
@@ -1783,7 +1809,23 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
                     <div className="flex items-start justify-between">
                       <div className="space-y-0.5">
                          <p className="text-xs text-muted-foreground">Organization</p>
-                         <p className="text-sm font-semibold">{getOrganizationName(viewingUser.organizationId)}</p>
+                         <p className="text-sm font-semibold">
+                           {viewingUser.role === FINANCE_ROLE
+                             ? financeOrganizationNames(viewingUser)
+                             : getOrganizationName(viewingUser.organizationId)}
+                         </p>
+                         {viewingUser.role === FINANCE_ROLE && userRole === "SUPER_ADMIN" && !readOnly && (
+                           <Button
+                             type="button"
+                             variant="outline"
+                             size="sm"
+                             className="mt-2 h-8 gap-2"
+                             onClick={() => setFinanceOrganizationsUser(viewingUser)}
+                           >
+                             <Building2 className="h-3.5 w-3.5" aria-hidden="true" />
+                             Edit organizations
+                           </Button>
+                         )}
                       </div>
                       <div className="space-y-0.5 text-right">
                          <p className="text-xs text-muted-foreground">Branch</p>
@@ -2300,6 +2342,20 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {financeOrganizationsUser && (
+        <FinanceOrganizationsDialog
+          open
+          onOpenChange={(open) => { if (!open) setFinanceOrganizationsUser(null) }}
+          userId={financeOrganizationsUser.id}
+          userName={financeOrganizationsUser.fullName || `${financeOrganizationsUser.firstName} ${financeOrganizationsUser.lastName}`}
+          initialOrganizationIds={financeOrganizationsUser.financeOrganizationIds ?? []}
+          options={financeOrganizationOptions}
+          onSaved={() => {
+            setViewingUser(null)
+            onUserUpdate()
+          }}
+        />
+      )}
     </div>
   )
 }

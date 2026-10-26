@@ -221,6 +221,25 @@ function withAssignedCities(rows: WarehouseAssignableCity[], assignedKeys: strin
   return [...rows, ...orphaned].sort((a, b) => a.label.localeCompare(b.label))
 }
 
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/**
+ * Row-locks the target account and confirms it is an undeleted warehouse
+ * account. Every change to one person's reach takes this lock first, so two
+ * changes for the same person serialize and the caps hold. False is answered
+ * as "not found", so no route can probe other accounts with it.
+ */
+async function lockWarehouseTarget(tx: Transaction, userId: string): Promise<boolean> {
+  const [target] = await tx
+    .select({ role: roles.name, deletedAt: users.deletedAt })
+    .from(users)
+    .innerJoin(roles, eq(users.roleId, roles.id))
+    .where(eq(users.id, userId))
+    .for("update", { of: users })
+    .limit(1)
+  return Boolean(target && target.role === WAREHOUSE_ROLE && target.deletedAt === null)
+}
+
 export type WarehouseAssignmentOutcome =
   | { kind: "updated"; branchIds: number[] }
   | { kind: "not-found" }
@@ -241,14 +260,7 @@ export async function replaceWarehouseBranches(input: {
 }): Promise<WarehouseAssignmentOutcome> {
   return db.transaction(async (tx) => {
     // Serializes two concurrent replacements for the same person.
-    const [target] = await tx
-      .select({ id: users.id, role: roles.name, deletedAt: users.deletedAt })
-      .from(users)
-      .innerJoin(roles, eq(users.roleId, roles.id))
-      .where(eq(users.id, input.userId))
-      .for("update", { of: users })
-      .limit(1)
-    if (!target || target.role !== WAREHOUSE_ROLE || target.deletedAt !== null) return { kind: "not-found" }
+    if (!(await lockWarehouseTarget(tx, input.userId))) return { kind: "not-found" }
 
     const [organization] = await tx
       .select({ id: organizations.id })
@@ -341,14 +353,7 @@ export async function setWarehouseCity(input: {
 }): Promise<WarehouseCityOutcome> {
   return db.transaction(async (tx) => {
     // Serializes two concurrent changes for the same person, so the cap holds.
-    const [target] = await tx
-      .select({ id: users.id, role: roles.name, deletedAt: users.deletedAt })
-      .from(users)
-      .innerJoin(roles, eq(users.roleId, roles.id))
-      .where(eq(users.id, input.userId))
-      .for("update", { of: users })
-      .limit(1)
-    if (!target || target.role !== WAREHOUSE_ROLE || target.deletedAt !== null) return { kind: "not-found" }
+    if (!(await lockWarehouseTarget(tx, input.userId))) return { kind: "not-found" }
 
     const cityKey = branchCityKeySql(branches.city)
     const requestedKey = branchCityKeySql(input.city)
@@ -444,14 +449,7 @@ export async function setWarehouseCityOrganization(input: {
   actor: AuditActor & { id: string }
 }): Promise<WarehouseCityOrganizationOutcome> {
   return db.transaction(async (tx) => {
-    const [target] = await tx
-      .select({ id: users.id, role: roles.name, deletedAt: users.deletedAt })
-      .from(users)
-      .innerJoin(roles, eq(users.roleId, roles.id))
-      .where(eq(users.id, input.userId))
-      .for("update", { of: users })
-      .limit(1)
-    if (!target || target.role !== WAREHOUSE_ROLE || target.deletedAt !== null) return { kind: "not-found" }
+    if (!(await lockWarehouseTarget(tx, input.userId))) return { kind: "not-found" }
 
     const before = (await tx
       .select({ organizationId: warehouseCityOrganizations.organizationId })
@@ -509,5 +507,185 @@ export async function setWarehouseCityOrganization(input: {
     }
 
     return { kind: "updated", organizationId: input.organizationId, assigned: input.assigned, organizationIds: after }
+  })
+}
+
+export type WarehouseBulkOutcome<Item> =
+  | { kind: "updated"; assigned: boolean; changed: Item[]; after: Item[] }
+  | { kind: "not-found" }
+  | { kind: "invalid"; message: string }
+  | { kind: "limit" }
+
+/**
+ * "Select all" / "Unselect all" for the organizations a warehouse user's cities
+ * apply to: `setWarehouseCityOrganization` for several organizations, in one
+ * transaction under the same lock, all or nothing. An organization already in
+ * the wanted state changes nothing. Each organization that does change gets the
+ * audit row a single tick would have written, in id order, so the trail — and
+ * each tenant's own activity log — reads exactly as if they had been ticked one
+ * by one. See plans/OF-WAREHOUSE-city-bulk-select.md.
+ */
+export async function setWarehouseCityOrganizations(input: {
+  userId: string
+  organizationIds: number[]
+  assigned: boolean
+  actor: AuditActor & { id: string }
+}): Promise<WarehouseBulkOutcome<number>> {
+  return db.transaction(async (tx) => {
+    if (!(await lockWarehouseTarget(tx, input.userId))) return { kind: "not-found" }
+
+    const requested = [...new Set(input.organizationIds)].sort((a, b) => a - b)
+    const before = (await tx
+      .select({ organizationId: warehouseCityOrganizations.organizationId })
+      .from(warehouseCityOrganizations)
+      .where(eq(warehouseCityOrganizations.userId, input.userId)))
+      .map((row) => row.organizationId)
+      .sort((a, b) => a - b)
+
+    let changed: number[]
+    if (input.assigned) {
+      const existing = await tx
+        .select({ id: organizations.id })
+        .from(organizations)
+        .where(inArray(organizations.id, requested))
+      if (existing.length !== requested.length) return { kind: "invalid", message: "One or more organizations do not exist" }
+      changed = requested.filter((id) => !before.includes(id))
+      if (before.length + changed.length > WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER) return { kind: "limit" }
+      if (changed.length > 0) {
+        await tx.insert(warehouseCityOrganizations)
+          .values(changed.map((organizationId) => ({ userId: input.userId, organizationId, createdByUserId: input.actor.id })))
+          .onConflictDoNothing()
+      }
+    } else {
+      // A write in flight holds FOR SHARE on these rows, so the removal waits for it.
+      changed = (await tx.delete(warehouseCityOrganizations)
+        .where(and(
+          eq(warehouseCityOrganizations.userId, input.userId),
+          inArray(warehouseCityOrganizations.organizationId, requested),
+        ))
+        .returning({ organizationId: warehouseCityOrganizations.organizationId }))
+        .map((row) => row.organizationId)
+        .sort((a, b) => a - b)
+    }
+
+    let current = before
+    if (changed.length > 0) {
+      const cityKeys = (await tx
+        .select({ cityKey: warehouseCityAssignments.cityKey })
+        .from(warehouseCityAssignments)
+        .where(eq(warehouseCityAssignments.userId, input.userId)))
+        .map((row) => row.cityKey)
+        .sort((a, b) => a.localeCompare(b))
+      for (const organizationId of changed) {
+        const next = input.assigned
+          ? [...current, organizationId].sort((a, b) => a - b)
+          : current.filter((id) => id !== organizationId)
+        await recordAuditEvent(tx, {
+          action: WAREHOUSE_CITY_ORGANIZATION_AUDIT_ACTION,
+          entity: "user",
+          entityId: input.userId,
+          actor: input.actor,
+          organizationId,
+          before: { organizationIds: current },
+          after: { organizationIds: next },
+          context: { organizationId, assigned: input.assigned, cityKeys, bulk: true },
+        })
+        current = next
+      }
+    }
+
+    return { kind: "updated", assigned: input.assigned, changed, after: current }
+  })
+}
+
+/**
+ * "Assign all" / "Unassign all" for cities: `setWarehouseCity` for several
+ * cities at once, in one transaction under the same lock, all or nothing. Each
+ * city is normalised in SQL by `branchCityKeySql`, as a single one is. A city
+ * newly assigned must have a branch in the chosen organizations, exactly as one
+ * ticked alone must; one already assigned is left as it is, so "Assign all"
+ * over a list that still shows a city outside the chosen organizations does not
+ * fail on it. Each city that changes gets the audit row a single tick would
+ * have written. See plans/OF-WAREHOUSE-city-bulk-select.md.
+ */
+export async function setWarehouseCities(input: {
+  userId: string
+  cities: string[]
+  assigned: boolean
+  actor: AuditActor & { id: string }
+}): Promise<WarehouseBulkOutcome<string>> {
+  return db.transaction(async (tx) => {
+    if (!(await lockWarehouseTarget(tx, input.userId))) return { kind: "not-found" }
+
+    const listed = sql`unnest(ARRAY[${sql.join(input.cities.map((city) => sql`${city}`), sql`, `)}]::text[])`
+    const requested = (await tx.execute<{ key: string }>(sql`
+      SELECT DISTINCT ${branchCityKeySql(sql`listed.name`)} AS key
+      FROM ${listed} AS listed(name)
+    `)).rows
+      .map((row) => row.key)
+      .filter((key) => key !== "")
+      .sort((a, b) => a.localeCompare(b))
+    if (requested.length === 0) return { kind: "invalid", message: "Name at least one city" }
+
+    const cityKey = branchCityKeySql(branches.city)
+    // Each city's branches in the user's chosen organizations: the ones it reaches.
+    const matches = new Map((await tx
+      .select({ key: sql<string>`${cityKey}`, branchCount: sql<number>`count(*)::int` })
+      .from(branches)
+      .innerJoin(warehouseCityOrganizations, and(
+        eq(warehouseCityOrganizations.userId, input.userId),
+        eq(warehouseCityOrganizations.organizationId, branches.organizationId),
+      ))
+      .where(inArray(cityKey, requested))
+      .groupBy(cityKey))
+      .map((row) => [row.key, row.branchCount]))
+
+    const before = (await tx
+      .select({ cityKey: warehouseCityAssignments.cityKey })
+      .from(warehouseCityAssignments)
+      .where(eq(warehouseCityAssignments.userId, input.userId)))
+      .map((row) => row.cityKey)
+      .sort((a, b) => a.localeCompare(b))
+
+    let changed: string[]
+    if (input.assigned) {
+      changed = requested.filter((key) => !before.includes(key))
+      if (changed.some((key) => !matches.has(key))) {
+        return { kind: "invalid", message: "No branch of the chosen organizations is in one or more of those cities" }
+      }
+      if (before.length + changed.length > WAREHOUSE_CITY_MAX_PER_USER) return { kind: "limit" }
+      if (changed.length > 0) {
+        await tx.insert(warehouseCityAssignments)
+          .values(changed.map((key) => ({ userId: input.userId, cityKey: key, createdByUserId: input.actor.id })))
+          .onConflictDoNothing()
+      }
+    } else {
+      // A write in flight holds FOR SHARE on these rows, so the removal waits for it.
+      changed = (await tx.delete(warehouseCityAssignments)
+        .where(and(eq(warehouseCityAssignments.userId, input.userId), inArray(warehouseCityAssignments.cityKey, requested)))
+        .returning({ cityKey: warehouseCityAssignments.cityKey }))
+        .map((row) => row.cityKey)
+        .sort((a, b) => a.localeCompare(b))
+    }
+
+    let current = before
+    for (const key of changed) {
+      const next = input.assigned
+        ? [...current, key].sort((a, b) => a.localeCompare(b))
+        : current.filter((existing) => existing !== key)
+      await recordAuditEvent(tx, {
+        action: WAREHOUSE_CITY_ASSIGNMENT_AUDIT_ACTION,
+        entity: "user",
+        entityId: input.userId,
+        actor: input.actor,
+        // A city spans the chosen organizations and changes with them: no single one.
+        before: { cityKeys: current },
+        after: { cityKeys: next },
+        context: { city: key, assigned: input.assigned, branchCount: matches.get(key) ?? 0, bulk: true },
+      })
+      current = next
+    }
+
+    return { kind: "updated", assigned: input.assigned, changed, after: current }
   })
 }

@@ -1,6 +1,7 @@
 "use client"
 import { viewerAccessFor } from "@/lib/viewer-access"
 import { renamedRoleName } from "@/lib/role-display-names"
+import { FINANCE_LABEL, isFinanceRole } from "@/lib/finance-access"
 import { useAppContext } from "@/components/context/app-context"
 import { MultiBranchFilter } from "@/components/dashboard/multi-branch-filter"
 import { NotificationBell } from "@/components/notifications/notification-center"
@@ -41,7 +42,10 @@ export function Topbar() {
   const { organizationId, branchIds, setBranchIds } = useAppContext()
   // An organization-wide Viewer gets Head Office's filters and links; it reads
   // the same pages, read-only.
-  const { viewRole: userRole } = viewerAccessFor(session?.user)
+  const { role: sessionRole, viewRole: userRole } = viewerAccessFor(session?.user)
+  // Finance reads pages as Super Admin but reaches only orders and reports, so
+  // the links to everything else, and its own label, follow the real role.
+  const isFinance = isFinanceRole(sessionRole)
   const isGlobalInventory = userRole === "SUPER_ADMIN" && pathname === "/inventory"
 
   useEffect(() => {
@@ -73,7 +77,7 @@ export function Topbar() {
       <div className="flex items-center gap-3">
 
         {/* Group Analytics link */}
-        {(userRole === "SUPER_ADMIN" || userRole === "HEAD_OFFICE") && (
+        {(userRole === "SUPER_ADMIN" || userRole === "HEAD_OFFICE") && !isFinance && (
           <Link href="/groups/analytics">
             <Button
               variant="outline"
@@ -86,7 +90,7 @@ export function Topbar() {
           </Link>
         )}
         {/* Notifications */}
-        <NotificationBell />
+        {!isFinance && <NotificationBell />}
 
         {/* Theme Toggle */}
         {(() => {
@@ -159,18 +163,20 @@ export function Topbar() {
                   {(session?.user as any)?.email || "user@example.com"}
                 </p>
                 <p className="text-[10px] leading-none text-muted-foreground mt-1 capitalize font-normal bg-slate-100 dark:bg-slate-800 w-fit px-1.5 py-0.5 rounded">
-                  {renamedRoleName(userRole) ?? userRole?.toLowerCase().replaceAll("_", " ")}
+                  {isFinance ? FINANCE_LABEL : (renamedRoleName(userRole) ?? userRole?.toLowerCase().replaceAll("_", " "))}
                 </p>
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator className="mx-0 my-1" />
-            <DropdownMenuItem
-              onClick={() => router.push("/settings")}
-              className="gap-2 px-3 py-2 cursor-pointer"
-            >
-              <SettingsIcon className="h-4 w-4" />
-              Settings
-            </DropdownMenuItem>
+            {!isFinance && (
+              <DropdownMenuItem
+                onClick={() => router.push("/settings")}
+                className="gap-2 px-3 py-2 cursor-pointer"
+              >
+                <SettingsIcon className="h-4 w-4" />
+                Settings
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem asChild className="gap-2 px-3 py-2 cursor-pointer">
               <Link href="/forgot-password">
                 <KeyRound className="h-4 w-4" />

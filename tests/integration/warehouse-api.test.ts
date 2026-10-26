@@ -972,4 +972,117 @@ describe.skipIf(!hasTestDatabase)("the Warehouse role through the API", () => {
       expect((await detail(actors.whInactive, orderR)).status).toBe(404)
     })
   })
+
+  /**
+   * "Select all" / "Unselect all" in the dialog: several organizations or
+   * cities in one request, one transaction, all or nothing, with the audit rows
+   * single ticks would have written. See plans/OF-WAREHOUSE-city-bulk-select.md.
+   */
+  describe("Super Admin changing several organizations or cities at once", () => {
+    let target: string
+
+    const rowsOf = async () => ({
+      organizationIds: (await db.select({ id: warehouseCityOrganizations.organizationId }).from(warehouseCityOrganizations)
+        .where(eq(warehouseCityOrganizations.userId, target))).map((row) => row.id).sort((a, b) => a - b),
+      cityKeys: (await db.select({ key: warehouseCityAssignments.cityKey }).from(warehouseCityAssignments)
+        .where(eq(warehouseCityAssignments.userId, target))).map((row) => row.key).sort((a, b) => a.localeCompare(b)),
+    })
+    const auditsOf = async (action: string) => db
+      .select({ metadata: auditLogs.metadata, organizationId: auditLogs.organizationId, userId: auditLogs.userId })
+      .from(auditLogs)
+      .where(and(eq(auditLogs.action, action), eq(auditLogs.entityId, target)))
+      .orderBy(auditLogs.id)
+
+    beforeAll(async () => {
+      const [role] = await db.select({ id: roles.id }).from(roles).where(eq(roles.name, "WAREHOUSE")).limit(1)
+      const email = `it-wh-bulk-${suffix}@example.test`
+      const [row] = await db.insert(users).values({
+        email, username: `it-wh-bulk-${suffix}`, passwordHash: "x", roleId: role.id, fullName: `bulk ${suffix}`, isActive: true,
+      }).returning({ id: users.id })
+      target = row.id
+      actors.whBulk = { id: row.id, email, role: "WAREHOUSE", organizationId: null, branchId: null }
+    })
+
+    it("is Super Admin's alone", async () => {
+      const organizationBody = { organizationIds: [orgA, orgB], assigned: true }
+      const cityBody = { cities: ["Lahore"], assigned: true }
+      for (const actor of [actors.headOffice, actors.wh, actors.orderDesk]) {
+        expect((await chooseOrganization(actor, target, organizationBody)).status).toBe(403)
+        expect((await assignCity(actor, target, cityBody)).status).toBe(403)
+      }
+      expect((await chooseOrganization(null, target, organizationBody)).status).toBe(401)
+      expect((await assignCity(null, target, cityBody)).status).toBe(401)
+      expect(await rowsOf()).toEqual({ organizationIds: [], cityKeys: [] })
+    })
+
+    it("refuses a malformed body, a non-warehouse target, and an unknown organization — writing nothing", async () => {
+      expect((await chooseOrganization(actors.superAdmin, target, { organizationIds: [], assigned: true })).status).toBe(400)
+      expect((await chooseOrganization(actors.superAdmin, target, { organizationIds: [orgA, orgA], assigned: true })).status).toBe(400)
+      expect((await chooseOrganization(actors.superAdmin, target, { organizationIds: [String(orgA)], assigned: true })).status).toBe(400)
+      expect((await chooseOrganization(actors.superAdmin, target, { organizationIds: [orgA], organizationId: orgA, assigned: true })).status).toBe(400)
+      expect((await assignCity(actors.superAdmin, target, { cities: [], assigned: true })).status).toBe(400)
+      expect((await assignCity(actors.superAdmin, target, { cities: ["Lahore"], city: "Lahore", assigned: true })).status).toBe(400)
+      expect((await chooseOrganization(actors.superAdmin, actors.headOffice.id, { organizationIds: [orgA], assigned: true })).status).toBe(404)
+      expect((await assignCity(actors.superAdmin, actors.headOffice.id, { cities: ["Lahore"], assigned: true })).status).toBe(404)
+
+      const unknown = await chooseOrganization(actors.superAdmin, target, { organizationIds: [orgA, 2_000_000_000], assigned: true })
+      expect(unknown.status).toBe(400)
+      expect(unknown.body.error).toBe("One or more organizations do not exist")
+      expect(await rowsOf()).toEqual({ organizationIds: [], cityKeys: [] })
+    })
+
+    it("chooses several organizations in one request, one audit row per organization, and repeats change nothing", async () => {
+      const chosen = await chooseOrganization(actors.superAdmin, target, { organizationIds: [orgB, orgA], assigned: true })
+      expect(chosen.status).toBe(200)
+      const both = [orgA, orgB].sort((a, b) => a - b)
+      expect(chosen.body.item).toEqual({ userId: target, assigned: true, changedIds: both, organizationIds: both })
+      expect((await rowsOf()).organizationIds).toEqual(both)
+
+      const again = await chooseOrganization(actors.superAdmin, target, { organizationIds: [orgA, orgB], assigned: true })
+      expect(again.status).toBe(200)
+      expect(again.body.item.changedIds).toEqual([])
+
+      const audits = await auditsOf("UPDATE_WAREHOUSE_CITY_ORGANIZATIONS")
+      // As if ticked one by one: each row on its own organization, before and after following on.
+      expect(audits.map((audit) => audit.organizationId)).toEqual(both)
+      expect(audits.every((audit) => audit.userId === actors.superAdmin.id)).toBe(true)
+      expect(audits.map((audit) => (audit.metadata as { after: { organizationIds: number[] } }).after.organizationIds))
+        .toEqual([[both[0]], both])
+    })
+
+    it("assigns several cities in one request, by any spelling, all or nothing", async () => {
+      const refused = await assignCity(actors.superAdmin, target, { cities: ["Lahore", `Nowhere ${suffix}`], assigned: true })
+      expect(refused.status).toBe(400)
+      expect(refused.body.error).toBe("No branch of the chosen organizations is in one or more of those cities")
+      expect((await rowsOf()).cityKeys).toEqual([])
+
+      const assigned = await assignCity(actors.superAdmin, target, { cities: ["  LAHORE ", "karachi", "Lahore"], assigned: true })
+      expect(assigned.status).toBe(200)
+      expect(assigned.body.item).toEqual({ userId: target, assigned: true, changedKeys: ["karachi", "lahore"], cityKeys: ["karachi", "lahore"] })
+      expect((await rowsOf()).cityKeys).toEqual(["karachi", "lahore"])
+
+      // The reach follows at once: orgA's Lahore branch is served through the city.
+      expect((await detail(actors.whBulk, orderX)).status).toBe(200)
+
+      const audits = await auditsOf("UPDATE_WAREHOUSE_CITY_ASSIGNMENTS")
+      expect(audits).toHaveLength(2)
+      expect(audits.every((audit) => audit.organizationId === null && audit.userId === actors.superAdmin.id)).toBe(true)
+      expect(audits.map((audit) => (audit.metadata as { after: { cityKeys: string[] } }).after.cityKeys))
+        .toEqual([["karachi"], ["karachi", "lahore"]])
+    })
+
+    it("unassigns several cities and withdraws several organizations at once, the reach following", async () => {
+      const unassigned = await assignCity(actors.superAdmin, target, { cities: ["Karachi", "Lahore", `Nowhere ${suffix}`], assigned: false })
+      expect(unassigned.status).toBe(200)
+      expect(unassigned.body.item.changedKeys).toEqual(["karachi", "lahore"])
+      expect((await detail(actors.whBulk, orderX)).status).toBe(404)
+
+      const withdrawn = await chooseOrganization(actors.superAdmin, target, { organizationIds: [orgA, orgB], assigned: false })
+      expect(withdrawn.status).toBe(200)
+      expect(withdrawn.body.item.organizationIds).toEqual([])
+      expect(await rowsOf()).toEqual({ organizationIds: [], cityKeys: [] })
+      expect(await auditsOf("UPDATE_WAREHOUSE_CITY_ORGANIZATIONS")).toHaveLength(4)
+      expect(await auditsOf("UPDATE_WAREHOUSE_CITY_ASSIGNMENTS")).toHaveLength(4)
+    })
+  })
 })

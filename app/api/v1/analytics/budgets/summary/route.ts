@@ -1,4 +1,5 @@
 import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { NextResponse,type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -51,7 +52,9 @@ async function resolveBudgetBranchIds(context: any) {
         const rows = await db.select({ id: branches.id }).from(branches).where(eq(branches.organizationId, context.allowedOrgId))
         branchIds = rows.map((branch) => branch.id)
     } else if (branchIds.length === 0 && context.userRole === "SUPER_ADMIN") {
+        // Finance reads as Super Admin, but only its assigned organizations.
         const rows = await db.select({ id: branches.id }).from(branches)
+            .where(context.financeOrganizationIds ? inArray(branches.organizationId, context.financeOrganizationIds) : undefined)
         branchIds = rows.map((branch) => branch.id)
     }
     if (context.groupIds.length === 0) return branchIds
@@ -59,6 +62,7 @@ async function resolveBudgetBranchIds(context: any) {
         inArray(branches.groupId, context.groupIds),
         branchIds.length > 0 ? inArray(branches.id, branchIds) : undefined,
         context.allowedOrgId ? eq(branches.organizationId, context.allowedOrgId) : undefined,
+        context.financeOrganizationIds ? inArray(branches.organizationId, context.financeOrganizationIds) : undefined,
     ].filter(Boolean) as any
     const scoped = await db.select({ id: branches.id }).from(branches).where(and(...conditions))
     return scoped.map((branch) => branch.id)
@@ -67,9 +71,12 @@ async function resolveBudgetBranchIds(context: any) {
 async function resolveBudgetStartDate(context: any) {
     if (context.startDateParam) return parseStartDateParam(context.startDateParam) || new Date(context.startDateParam)
     const query = db.select({ period: budgets.period }).from(budgets)
-    const organizationCondition = context.allowedOrgId
+    let organizationCondition = context.allowedOrgId
         ? eq(budgets.organizationId, context.allowedOrgId)
         : isNotNull(budgets.organizationId)
+    if (!context.allowedOrgId && context.financeOrganizationIds) {
+        organizationCondition = inArray(budgets.organizationId, context.financeOrganizationIds)
+    }
     const firstBudget = context.preset === "all"
         ? await query.where(inArray(budgets.branchId, context.branchIds)).orderBy(asc(budgets.period)).limit(1)
         : await query.where(organizationCondition).orderBy(asc(budgets.period)).limit(1)
@@ -189,7 +196,12 @@ function buildBranchBreakdown(branchList: any[], periods: string[], budgetLookup
  * them. `allowedOrgId` is null only for a Super Admin with no organization of
  * their own, which is the one genuinely global caller.
  */
-async function loadActiveBudgetBranches(branchIds: number[], allowedOrgId: number | null) {
+async function loadActiveBudgetBranches(
+    branchIds: number[],
+    allowedOrgId: number | null,
+    /** Finance's assigned organizations; null for every other caller. */
+    financeOrganizationIds: number[] | null = null,
+) {
     const selection = {
         id: branches.id,
         name: branches.name,
@@ -203,6 +215,7 @@ async function loadActiveBudgetBranches(branchIds: number[], allowedOrgId: numbe
         return db.select(selection).from(branches).where(and(
             inArray(branches.id, branchIds),
             allowedOrgId ? eq(branches.organizationId, allowedOrgId) : undefined,
+            financeOrganizationIds ? inArray(branches.organizationId, financeOrganizationIds) : undefined,
             budgetEnabledBranchSql(),
         ))
     }
@@ -286,8 +299,18 @@ export async function GET(req: NextRequest) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
         // An organization-wide Viewer reads as Head Office; a pinned one is refused.
-        const userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
+        let userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
         if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+        // Finance reads as Super Admin, inside the organizations assigned to it.
+        const requestedOrganizationId = new URL(req.url).searchParams.get("organizationId")
+        const financeScope = await resolveFinanceReadScope({
+            role: userRole,
+            userId: (session.user as any).id,
+            requestedOrganizationIds: requestedOrganizationId ? [requestedOrganizationId] : [],
+        })
+        if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+        if (financeScope) userRole = "SUPER_ADMIN"
+        const financeOrganizationIds = financeScope?.organizationIds ?? null
         const userOrgId = (session.user as any).organizationId
         const userBranchId = (session.user as any).branchId
         const userId = (session.user as any).id
@@ -321,7 +344,7 @@ export async function GET(req: NextRequest) {
         if (await isBudgetDisabledTenant(allowedOrgId)) return respond({ ...emptyBudgetSummary, budgetsEnabled: false })
 
         const { branchIds, isNarrowed } = await resolveReportBranchIds({
-            branchIdsParam, branchIdParam, userRole, userId, userBranchId, allowedOrgId, groupIds,
+            branchIdsParam, branchIdParam, userRole, userId, userBranchId, allowedOrgId, groupIds, financeOrganizationIds,
         })
 
         if (isNarrowed && branchIds.length === 0) return respond(emptyBudgetSummary)
@@ -331,7 +354,7 @@ export async function GET(req: NextRequest) {
         }
 
         // 2. Date/Period parsing
-        const { startDate, endDate } = await resolveBudgetDateRange({ startDateParam, endDateParam, preset, branchIds, allowedOrgId })
+        const { startDate, endDate } = await resolveBudgetDateRange({ startDateParam, endDateParam, preset, branchIds, allowedOrgId, financeOrganizationIds })
 
         // Get unique YYYY-MM periods from the date range to query budgets table
         let periodList = buildAppMonthPeriods(startDate, endDate, months, years)
@@ -345,7 +368,7 @@ export async function GET(req: NextRequest) {
         }
 
         // 3. Fetch All Relevant Branches with Baselines
-        const activeBranches = await loadActiveBudgetBranches(branchIds, allowedOrgId)
+        const activeBranches = await loadActiveBudgetBranches(branchIds, allowedOrgId, financeOrganizationIds)
 
         if (activeBranches.length === 0) {
             return respond(emptyBudgetSummary)

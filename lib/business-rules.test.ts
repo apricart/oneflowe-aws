@@ -41,11 +41,17 @@ describe("business rules", () => {
     expect(isOrderPortalRefundEligible("FULFILLED", "OUT_FOR_DELIVERY")).toBe(false)
   })
 
-  it("allows payment status updates only after an order is fulfilled and delivered", () => {
+  // Widened from "fulfilled and delivered" to any approved order, at any
+  // delivery stage (plans/OF-FINANCE-finance-role.md, decided 2026-10-26).
+  it("allows payment status updates on any approved order, and nothing pending, rejected or refunded", () => {
     expect(isPaymentStatusUpdateEligible("FULFILLED", "DELIVERED")).toBe(true)
     expect(isPaymentStatusUpdateEligible(" fulfilled ", " delivered ")).toBe(true)
-    expect(isPaymentStatusUpdateEligible("APPROVED", "DELIVERED")).toBe(false)
-    expect(isPaymentStatusUpdateEligible("FULFILLED", "OUT_FOR_DELIVERY")).toBe(false)
+    expect(isPaymentStatusUpdateEligible("APPROVED", "DELIVERED")).toBe(true)
+    expect(isPaymentStatusUpdateEligible("APPROVED", "NOT_STARTED")).toBe(true)
+    expect(isPaymentStatusUpdateEligible("FULFILLED", "OUT_FOR_DELIVERY")).toBe(true)
+    expect(isPaymentStatusUpdateEligible("PENDING", "NOT_STARTED")).toBe(false)
+    expect(isPaymentStatusUpdateEligible("REJECTED", "NOT_STARTED")).toBe(false)
+    expect(isPaymentStatusUpdateEligible("CANCELLED", "NOT_STARTED")).toBe(false)
     expect(isPaymentStatusUpdateEligible("REFUNDED", "DELIVERED")).toBe(false)
   })
 

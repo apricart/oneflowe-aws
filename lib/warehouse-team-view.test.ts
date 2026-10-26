@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest"
 
 import {
   branchesInOrganization,
+  bulkChange,
   citiesForOrganizations,
   cityCoveringBranch,
   describeWarehouseBranches,
   describeWarehouseReach,
   effectiveWarehouseBranchIds,
+  inBatches,
   toggleAllBranches,
   toggleBranch,
 } from "@/lib/warehouse-team-view"
@@ -49,6 +51,31 @@ describe("selecting branches", () => {
     expect(toggleAllBranches([11], [11, 12])).toEqual([11, 12])
     expect(toggleAllBranches([12, 11], [11, 12])).toEqual([])
     expect(toggleAllBranches([], [])).toEqual([])
+  })
+
+  it("keeps selections hidden by a branch filter", () => {
+    expect(toggleAllBranches([11, 21], [11, 12])).toEqual([11, 12, 21])
+    expect(toggleAllBranches([11, 12, 21], [11, 12])).toEqual([21])
+  })
+})
+
+describe("select all / unselect all", () => {
+  it("changes only the shown rows not yet in the wanted state, in the order shown", () => {
+    expect(bulkChange([3, 1, 2], [1], true)).toEqual([3, 2])
+    expect(bulkChange([3, 1, 2], [1, 2, 9], false)).toEqual([1, 2])
+    expect(bulkChange(["lahore", "karachi"], ["karachi"], true)).toEqual(["lahore"])
+  })
+
+  it("never touches a row the filter hides, and changes nothing when all are already in state", () => {
+    expect(bulkChange([1], [2], false)).toEqual([])
+    expect(bulkChange([1, 2], [1, 2], true)).toEqual([])
+    expect(bulkChange([], [1], false)).toEqual([])
+  })
+
+  it("splits a long list into bounded consecutive batches", () => {
+    expect(inBatches([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]])
+    expect(inBatches([1, 2], 2)).toEqual([[1, 2]])
+    expect(inBatches([], 50)).toEqual([])
   })
 })
 

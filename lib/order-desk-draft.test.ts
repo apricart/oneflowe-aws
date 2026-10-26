@@ -6,27 +6,52 @@ import {
   buildDeskEditRequest,
   buildDeskOrderRequest,
   buildDeskRefundRequest,
+  chosenLines,
   deskDraftChecklist,
+  deskLinesFromOrder,
+  deskLineUnitPriceCents,
   estimateDraftTotalCents,
+  isDeskPriceChanged,
+  lineProductOf,
+  parseDeskPriceInput,
   SCREENSHOT_MAX_BYTES,
   screenshotFileError,
-  unavailableDraftLines,
+  withLinePrice,
+  withLineQuantity,
+  withoutLine,
   type DeskCatalogueItem,
   type DeskDraft,
+  type DeskLineProduct,
+  type DeskLines,
 } from "./order-desk-draft"
 
 const SCREENSHOT_KEY = "order-intake/0b9b1c2e-3f4a-4b5c-8d6e-7f8091a2b3c4.png"
 
-const catalogue: DeskCatalogueItem[] = [
-  { organizationInventoryId: 1, name: "Rice", allowDecimalQuantity: true, quantityStep: 0.5, priceCents: 25_000 },
-  { organizationInventoryId: 2, name: "Boxes", allowDecimalQuantity: false, quantityStep: 1, priceCents: 1_000 },
-  { organizationInventoryId: 3, name: "Unpriced", allowDecimalQuantity: false, quantityStep: 1, priceCents: null },
-]
+const catalogueItem = (overrides: Partial<DeskCatalogueItem> & Pick<DeskCatalogueItem, "globalProductId" | "name">): DeskCatalogueItem => ({
+  organizationInventoryId: null,
+  productCode: `P-${overrides.globalProductId}`,
+  unit: "piece",
+  allowDecimalQuantity: false,
+  quantityStep: 1,
+  stockQuantity: 100,
+  assignedToBranch: false,
+  cataloguePriceCents: null,
+  ...overrides,
+})
+
+// Rice: carried by the branch at Rs 250, sold in halves. Boxes: carried at Rs 10.
+// Tape: an Apricart product the branch does not carry.
+const rice = lineProductOf(catalogueItem({ globalProductId: 1, name: "Rice", organizationInventoryId: 11, assignedToBranch: true, cataloguePriceCents: 25_000, allowDecimalQuantity: true, quantityStep: 0.5, unit: "kg" }))
+const boxes = lineProductOf(catalogueItem({ globalProductId: 2, name: "Boxes", organizationInventoryId: 12, assignedToBranch: true, cataloguePriceCents: 1_000 }))
+const tape = lineProductOf(catalogueItem({ globalProductId: 3, name: "Tape" }))
+
+const linesOf = (...entries: [DeskLineProduct, string, string][]): DeskLines =>
+  Object.fromEntries(entries.map(([product, quantity, price]) => [product.globalProductId, { product, quantity, price }]))
 
 const draft = (overrides: Partial<DeskDraft> = {}): DeskDraft => ({
   organizationId: 7,
   branchId: 70,
-  quantities: { 1: "1.5", 2: "4", 3: "" },
+  lines: linesOf([rice, "1.5", "240"], [boxes, "4", "10.50"]),
   intakeChannel: "WHATSAPP",
   intakeReference: "  Sana, 09:40  ",
   poNumber: "",
@@ -35,16 +60,82 @@ const draft = (overrides: Partial<DeskDraft> = {}): DeskDraft => ({
   ...overrides,
 })
 
+describe("the price box", () => {
+  it("is required: blank is missing, never the catalogue price", () => {
+    expect(parseDeskPriceInput("", "Rice")).toEqual({ kind: "missing", error: "Enter the price for Rice, including tax" })
+    expect(parseDeskPriceInput("   ", "Rice").kind).toBe("missing")
+    expect(parseDeskPriceInput(undefined, "Rice").kind).toBe("missing")
+  })
+
+  it("reads rupees with up to two decimals as cents", () => {
+    expect(parseDeskPriceInput("250", "Rice")).toEqual({ kind: "entered", cents: 25_000 })
+    expect(parseDeskPriceInput("250.5", "Rice")).toEqual({ kind: "entered", cents: 25_050 })
+    expect(parseDeskPriceInput("0.01", "Rice")).toEqual({ kind: "entered", cents: 1 })
+  })
+
+  it.each([
+    ["zero", "0", /must be more than zero/],
+    ["zero with decimals", "0.00", /must be more than zero/],
+    ["a negative price", "-5", /in rupees/],
+    ["three decimals", "1.005", /in rupees/],
+    ["words", "fifty", /in rupees/],
+    ["a price over the ceiling", "20000001", /too large/],
+  ])("refuses %s", (_label, raw, message) => {
+    const result = parseDeskPriceInput(raw, "Rice")
+    expect(result.kind).toBe("invalid")
+    expect(result.kind === "invalid" && result.error).toMatch(message)
+  })
+})
+
+describe("the lines a draft holds", () => {
+  it("keeps a line's quantity and price apart, and its product snapshot from the first touch", () => {
+    let lines: DeskLines = {}
+    lines = withLinePrice(lines, tape, "75")
+    // A price alone does not order the product.
+    expect(chosenLines(lines)).toEqual([])
+    lines = withLineQuantity(lines, { ...tape, name: "Renamed on a later page" }, "2")
+    expect(lines[3]).toEqual({ product: tape, quantity: "2", price: "75" })
+    expect(chosenLines(lines).map((line) => line.product.name)).toEqual(["Tape"])
+    expect(withoutLine(lines, 3)).toEqual({})
+  })
+
+  it("orders by product name and leaves out blank and zero quantities, but not a malformed one", () => {
+    const lines = linesOf([tape, "1", "1"], [boxes, "0", "1"], [rice, " ", "1"], [{ ...rice, globalProductId: 9, name: "Apples" }, "lots", "1"])
+    expect(chosenLines(lines).map((line) => line.product.name)).toEqual(["Apples", "Tape"])
+  })
+
+  it("estimates the total at the typed prices, which already include tax", () => {
+    // 1.5 kg × 240 + 4 × 10.50 — nothing added for tax.
+    expect(estimateDraftTotalCents(draft().lines)).toBe(36_000 + 4_200)
+  })
+
+  it("leaves a line out of the estimate until both its price and quantity are valid", () => {
+    expect(estimateDraftTotalCents(linesOf([rice, "2", ""], [boxes, "1", "10"]))).toBe(1_000)
+    expect(estimateDraftTotalCents(linesOf([rice, "2", "0"], [boxes, "abc", "10"]))).toBe(0)
+  })
+
+  it("marks a typed price that differs from the branch's catalogue price, and only that", () => {
+    expect(isDeskPriceChanged({ product: boxes, price: "12" })).toBe(true)
+    expect(isDeskPriceChanged({ product: boxes, price: "10.00" })).toBe(false)
+    expect(isDeskPriceChanged({ product: boxes, price: "" })).toBe(false)
+    // A product the branch does not carry has nothing to differ from.
+    expect(isDeskPriceChanged({ product: tape, price: "75" })).toBe(false)
+    expect(deskLineUnitPriceCents({ product: tape, price: "75" })).toBe(7_500)
+    expect(deskLineUnitPriceCents({ product: tape, price: "" })).toBeNull()
+  })
+})
+
 describe("turning the desk's draft into an order", () => {
-  it("builds the request from the filled-in lines only", () => {
-    expect(buildDeskOrderRequest(draft(), catalogue)).toEqual({
+  it("sends every ordered line by global product, with its price in cents", () => {
+    expect(buildDeskOrderRequest(draft({ lines: { ...draft().lines, ...linesOf([tape, "3", "75"]) } }))).toEqual({
       ok: true,
       body: {
         organizationId: 7,
         branchId: 70,
         items: [
-          { organizationInventoryId: 1, quantity: 1.5 },
-          { organizationInventoryId: 2, quantity: 4 },
+          { globalProductId: 2, quantity: 4, unitPriceCents: 1_050 },
+          { globalProductId: 1, quantity: 1.5, unitPriceCents: 24_000 },
+          { globalProductId: 3, quantity: 3, unitPriceCents: 7_500 },
         ],
         intakeChannel: "WHATSAPP",
         intakeReference: "Sana, 09:40",
@@ -53,55 +144,100 @@ describe("turning the desk's draft into an order", () => {
     })
   })
 
-  it("requires the customer's screenshot", () => {
-    const without = buildDeskOrderRequest(draft({ intakeAttachmentKey: null }), catalogue)
-    expect(without).toEqual({ ok: false, error: "Attach a screenshot of the customer's message" })
+  it("refuses an ordered line without a price, even one the branch has a catalogue price for", () => {
+    expect(buildDeskOrderRequest(draft({ lines: linesOf([boxes, "4", ""]) })))
+      .toEqual({ ok: false, error: "Enter the price for Boxes, including tax" })
   })
 
-  it("lists the screenshot among what the order still needs", () => {
-    const pending = deskDraftChecklist(draft({ intakeAttachmentKey: null })).find((check) => check.key === "screenshot")
-    expect(pending).toEqual({ key: "screenshot", label: "Screenshot of the message", done: false })
-    expect(deskDraftChecklist(draft()).every((check) => check.done)).toBe(true)
+  it("refuses a zero price", () => {
+    expect(buildDeskOrderRequest(draft({ lines: linesOf([tape, "1", "0"]) })))
+      .toEqual({ ok: false, error: "The price for Tape must be more than zero" })
+  })
+
+  it("does not send a product that was priced but not ordered", () => {
+    const result = buildDeskOrderRequest(draft({ lines: { ...draft().lines, ...linesOf([tape, "", "75"]) } }))
+    expect(result.ok && result.body.items.map((item) => item.globalProductId)).toEqual([2, 1])
+  })
+
+  it("requires the customer's screenshot", () => {
+    expect(buildDeskOrderRequest(draft({ intakeAttachmentKey: null })))
+      .toEqual({ ok: false, error: "Attach a screenshot of the customer's message" })
   })
 
   it("carries the optional PO number and notes when given", () => {
-    const result = buildDeskOrderRequest(draft({ poNumber: " PO-11 ", notes: " deliver by noon " }), catalogue)
+    const result = buildDeskOrderRequest(draft({ poNumber: " PO-11 ", notes: " deliver by noon " }))
     expect(result.ok && result.body).toMatchObject({ poNumber: "PO-11", notes: "deliver by noon" })
   })
 
   it.each([
     ["no organization", { organizationId: null }, /organization/],
     ["no branch", { branchId: null }, /branch/],
-    ["no products", { quantities: { 1: " " } }, /at least one product/],
-    ["a fractional box", { quantities: { 2: "1.5" } }, /whole number/],
-    ["a zero quantity", { quantities: { 2: "0" } }, /greater than zero/],
-    ["a product no longer listed", { quantities: { 99: "1" } }, /no longer available/],
+    ["no products", { lines: {} }, /at least one product/],
+    ["a fractional box", { lines: linesOf([boxes, "1.5", "10"]) }, /whole number/],
+    ["a malformed quantity", { lines: linesOf([boxes, "lots", "10"]) }, /Quantity for Boxes/],
     ["no channel", { intakeChannel: "" as const }, /came from/],
     ["no reference", { intakeReference: "   " }, /reference/],
     ["an overlong reference", { intakeReference: "x".repeat(256) }, /at most 255/],
   ])("refuses %s", (_label, overrides, message) => {
-    const result = buildDeskOrderRequest(draft(overrides as Partial<DeskDraft>), catalogue)
+    const result = buildDeskOrderRequest(draft(overrides as Partial<DeskDraft>))
     expect(result.ok).toBe(false)
     expect(!result.ok && result.error).toMatch(message)
   })
 
-  it("estimates the total from the catalogue prices, skipping what cannot be priced", () => {
-    expect(estimateDraftTotalCents(draft({ quantities: { 1: "1.5", 2: "4", 3: "2" } }), catalogue)).toBe(37_500 + 4_000)
-    expect(estimateDraftTotalCents(draft({ quantities: { 1: "abc" } }), catalogue)).toBe(0)
+  it("lists what the order still needs, a price for every product among it", () => {
+    const pending = (lines: DeskLines) => deskDraftChecklist(draft({ lines })).find((check) => check.key === "prices")?.done
+    expect(pending({})).toBe(false)
+    expect(pending(linesOf([boxes, "4", ""]))).toBe(false)
+    expect(pending(linesOf([boxes, "4", "0"]))).toBe(false)
+    expect(pending(linesOf([boxes, "4", "10"], [tape, "", ""]))).toBe(true)
+    expect(deskDraftChecklist(draft()).every((check) => check.done)).toBe(true)
+    expect(deskDraftChecklist(draft({ intakeAttachmentKey: null })).find((check) => check.key === "screenshot"))
+      .toEqual({ key: "screenshot", label: "Screenshot of the message", done: false })
   })
 })
 
 describe("editing a desk order", () => {
-  it("sends the full set of lines, notes, and a PO number that an empty field clears", () => {
-    expect(buildDeskEditRequest({ quantities: { 2: "3", 1: "" }, notes: " later ", poNumber: "  " }, catalogue)).toEqual({
+  const orderItems = [
+    // Charged the branch's catalogue price.
+    { organizationInventoryId: 12, globalProductId: 2, productName: "Boxes", productCode: "P-2", unit: "piece", allowDecimalQuantity: false, quantityStep: 1, quantity: 3, priceCents: 1_000, priceEnteredManually: false, cataloguePriceCents: null },
+    // Priced below the branch's catalogue price.
+    { organizationInventoryId: 11, globalProductId: 1, productName: "Rice", productCode: "P-1", unit: "kg", allowDecimalQuantity: true, quantityStep: 0.5, quantity: 1.5, priceCents: 24_000, priceEnteredManually: true, cataloguePriceCents: 25_000 },
+    // A product the branch did not carry.
+    { organizationInventoryId: null, globalProductId: 3, productName: "Tape", productCode: "P-3", unit: null, allowDecimalQuantity: false, quantityStep: 1, quantity: 2, priceCents: 7_500, priceEnteredManually: true, cataloguePriceCents: null },
+  ]
+
+  it("opens on the order's lines, each keeping the price it is charged now", () => {
+    const lines = deskLinesFromOrder(orderItems)
+    expect(chosenLines(lines).map((line) => [line.product.name, line.quantity, line.price])).toEqual([
+      ["Boxes", "3", "10.00"],
+      ["Rice", "1.5", "240.00"],
+      ["Tape", "2", "75.00"],
+    ])
+    expect(lines[2].product).toMatchObject({ assignedToBranch: true, cataloguePriceCents: 1_000 })
+    expect(lines[1].product).toMatchObject({ assignedToBranch: true, cataloguePriceCents: 25_000 })
+    expect(lines[3].product).toMatchObject({ assignedToBranch: false, cataloguePriceCents: null, unit: "unit" })
+  })
+
+  it("saves unchanged lines exactly as they are charged", () => {
+    expect(buildDeskEditRequest({ lines: deskLinesFromOrder(orderItems), notes: " later ", poNumber: "  " })).toEqual({
       ok: true,
-      body: { items: [{ organizationInventoryId: 2, quantity: 3 }], notes: "later", poNumber: null },
+      body: {
+        items: [
+          { globalProductId: 2, quantity: 3, unitPriceCents: 1_000 },
+          { globalProductId: 1, quantity: 1.5, unitPriceCents: 24_000 },
+          { globalProductId: 3, quantity: 2, unitPriceCents: 7_500 },
+        ],
+        notes: "later",
+        poNumber: null,
+      },
     })
   })
 
-  it("refuses an edit that leaves no lines, or an invalid quantity", () => {
-    expect(buildDeskEditRequest({ quantities: {}, notes: "", poNumber: "" }, catalogue).ok).toBe(false)
-    expect(buildDeskEditRequest({ quantities: { 2: "2.5" }, notes: "", poNumber: "" }, catalogue).ok).toBe(false)
+  it("refuses an edit that leaves no lines, an invalid quantity, or a cleared price", () => {
+    expect(buildDeskEditRequest({ lines: {}, notes: "", poNumber: "" }).ok).toBe(false)
+    expect(buildDeskEditRequest({ lines: linesOf([boxes, "2.5", "10"]), notes: "", poNumber: "" }).ok).toBe(false)
+    expect(buildDeskEditRequest({ lines: withLinePrice(deskLinesFromOrder(orderItems), tape, ""), notes: "", poNumber: "" }))
+      .toEqual({ ok: false, error: "Enter the price for Tape, including tax" })
   })
 })
 
@@ -137,29 +273,5 @@ describe("the screenshot file", () => {
     expect(screenshotFileError({ type: "image/png", size: SCREENSHOT_MAX_BYTES + 1 })).toMatch(/4 MB/)
     expect(screenshotFileError({ type: "image/svg+xml", size: 10 })).toMatch(/PNG/)
     expect(screenshotFileError({ type: "application/pdf", size: 10 })).toMatch(/PNG/)
-  })
-})
-
-describe("lines the branch no longer offers", () => {
-  it("names filled-in lines missing from the catalogue, and nothing else", () => {
-    expect(unavailableDraftLines({ 1: "2", 2: "", 9: "3", 8: " " }, catalogue)).toEqual([9])
-  })
-
-  it("is empty when every chosen product is still offered, or nothing is chosen", () => {
-    expect(unavailableDraftLines({ 1: "2", 2: "4" }, catalogue)).toEqual([])
-    expect(unavailableDraftLines({}, catalogue)).toEqual([])
-  })
-
-  it("names every chosen line when the catalogue is empty", () => {
-    expect(unavailableDraftLines({ 1: "2", 2: "4" }, [])).toEqual([1, 2])
-  })
-
-  it("is exactly the lines that would stop the request being built", () => {
-    const quantities = { 1: "1", 9: "1" }
-    expect(buildDeskEditRequest({ quantities, notes: "", poNumber: "" }, catalogue))
-      .toEqual({ ok: false, error: "A product in this order is no longer available for this branch" })
-    const kept = Object.fromEntries(Object.entries(quantities)
-      .filter(([id]) => !unavailableDraftLines(quantities, catalogue).includes(Number(id))))
-    expect(buildDeskEditRequest({ quantities: kept, notes: "", poNumber: "" }, catalogue).ok).toBe(true)
   })
 })

@@ -155,6 +155,8 @@ type ChartProps = {
    * shapes the reader put it in, and that is the larger half of the answer.
    */
   fullWidth?: boolean
+  /** Draw a time series as clustered columns instead of lines. */
+  seriesVariant?: "line" | "grouped-columns"
 }
 
 /** The figure as a share of the budget beside it, or the reason there is none. */
@@ -256,7 +258,9 @@ export function ComparisonChart(props: Readonly<ChartProps>) {
     case "column": return <ColumnChart {...props} />
     case "grouped": return <GroupedChart {...props} />
     case "donut": return <DonutChart {...props} />
-    case "line": return <TrendChart {...props} />
+    case "line": return props.seriesVariant === "grouped-columns"
+      ? <GroupedSeriesColumns {...props} />
+      : <TrendChart {...props} />
     case "scatter": return <ScatterCompare {...props} />
     case "table": return <ComparisonTable {...props} />
     default: return <RankedBars {...props} />
@@ -1043,6 +1047,115 @@ function TrendTooltip({ series, format, ...injected }: InjectedTooltipProps<unkn
   )
 }
 
+/** The drill-down represented by one entity's mark in one time bucket. */
+export function seriesDrillTarget(
+  dimension: ExecutiveDimensionId,
+  entity: Pick<EntitySeries, "key" | "label">,
+  period: string,
+): DrillTarget | null {
+  if (!period) return null
+  if (dimension === "month" || dimension === "day") {
+    return { dimension, key: period, label: period }
+  }
+  return { dimension, key: entity.key, label: `${entity.label} · ${period}`, period }
+}
+
+/** One chart row per period, with one value field per entity. */
+function seriesChartData(series: EntitySeries[], periods: string[]) {
+  return periods.map((period, index) => {
+    const point: Record<string, string | number> = { period }
+    series.forEach((entity) => { point[entity.key] = entity.points[index]?.value ?? 0 })
+    return point
+  })
+}
+
+/** Quantity and amount rows aligned to the periods drawn by a series chart. */
+export function seriesLabelRows(entity: EntitySeries, periods: string[]) {
+  const byPeriod = new Map(entity.points.map((point) => [point.period, point]))
+  return periods.map((period) => {
+    const point = byPeriod.get(period)
+    return {
+      quantity: Number(point?.quantity) || 0,
+      spendCents: Number(point?.spendCents) || 0,
+    }
+  })
+}
+
+/**
+ * One cluster per month, one column per selected requester.
+ *
+ * The scrollable minimum width keeps every selected requester distinct even
+ * when several people are compared across a long period. The same series is
+ * also available as the panel's table, so colour is never the only way to
+ * identify a requester.
+ */
+function GroupedSeriesColumns({
+  series, periods, format, metricLabel, dimension, onDrillDown, dimensionLabel,
+}: Readonly<ChartProps>) {
+  const data = seriesChartData(series, periods)
+  const minimumWidth = Math.max(620, periods.length * Math.max(96, series.length * 34))
+  const topMargin = ROTATED_COMBINED_LABEL_TOP_MARGIN
+  const drill = dimension && onDrillDown
+    ? (entity: EntitySeries, period: string) => {
+      const target = seriesDrillTarget(dimension, entity, period)
+      if (target) onDrillDown(target)
+    }
+    : undefined
+
+  return (
+    <>
+      <div className="overflow-x-auto">
+        <div style={{ minWidth: minimumWidth }}>
+          <ResponsiveContainer width="100%" height={340 + topMargin - 20}>
+            <BarChart data={data} margin={{ top: topMargin, right: 16, bottom: 4, left: 4 }} barCategoryGap="20%" barGap={2}>
+              <CartesianGrid {...GRID_STYLE} vertical={false} />
+              <XAxis dataKey="period" tick={AXIS_STYLE} axisLine={false} tickLine={false} />
+              <YAxis
+                tickFormatter={(value) => formatShortByKind(value, format)}
+                tick={AXIS_STYLE}
+                axisLine={false}
+                tickLine={false}
+                width={72}
+              />
+              <Tooltip
+                cursor={{ fill: "var(--viz-track)", fillOpacity: 0.35 }}
+                content={<TrendTooltip series={series} format={format} />}
+              />
+              {series.map((entity, index) => (
+                <Bar
+                  key={entity.key}
+                  dataKey={entity.key}
+                  name={entity.label}
+                  fill={SERIES[index % SERIES.length]}
+                  radius={[4, 4, 0, 0]}
+                  maxBarSize={42}
+                  isAnimationActive={false}
+                  onClick={drill
+                    ? (entry) => drill(entity, String(entry?.payload?.period ?? entry?.period ?? ""))
+                    : undefined}
+                  className={drill ? "cursor-pointer" : undefined}
+                >
+                  <LabelList
+                    dataKey={entity.key}
+                    position="top"
+                    content={dualColumnLabel(seriesLabelRows(entity, periods), format, true, { combined: true })}
+                  />
+                </Bar>
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <Legend items={series.map((entity, index) => ({ key: entity.key, label: entity.label, color: SERIES[index % SERIES.length] }))} />
+      <DualLabelNote metricLabel={metricLabel} rotated budgetBeside={false} />
+      <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+        {metricLabel} per month. Each selected requester has a separate bar; a month with no purchase reads as zero.
+      </p>
+      <DrillHint enabled={Boolean(drill)} noun={`bar — one ${dimensionLabel.toLowerCase()} in one month`} />
+    </>
+  )
+}
+
 function TrendChart({
   series, periods, format, metricLabel, dimension, onDrillDown, dimensionLabel,
 }: Readonly<ChartProps>) {
@@ -1057,18 +1170,13 @@ function TrendChart({
   const isTimeAxis = dimension === "month" || dimension === "day"
   const drillPoint = dimension && onDrillDown
     ? (entity: EntitySeries, period: string) => {
-      if (!period) return
-      if (isTimeAxis) onDrillDown({ dimension, key: period, label: period })
-      else onDrillDown({ dimension, key: entity.key, label: `${entity.label} · ${period}`, period })
+      const target = seriesDrillTarget(dimension, entity, period)
+      if (target) onDrillDown(target)
     }
     : undefined
 
   // One row per period, one column per entity: the shape Recharts draws lines from.
-  const data = periods.map((period, index) => {
-    const point: Record<string, string | number> = { period }
-    series.forEach((entity) => { point[entity.key] = entity.points[index]?.value ?? 0 })
-    return point
-  })
+  const data = seriesChartData(series, periods)
 
   return (
     <>

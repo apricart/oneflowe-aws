@@ -5,6 +5,7 @@ import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { branches as branchesTable } from "@/db/schema"
 import { and, desc, eq, sql, inArray } from "drizzle-orm"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { getRequestScope } from "@/lib/auth"
 import { handleError } from "@/lib/error-handler"
 import { logError } from "@/lib/global-logger"
@@ -21,6 +22,16 @@ import {
   resolveScopedBranchIds,
   usesMultiBranchScope,
 } from "@/lib/server/multi-branch-scope"
+
+/**
+ * The most branches one list response carries. Super Admin's unfiltered list
+ * spans every tenant, and several screens (Organizations, Users, the context
+ * switcher) count and render it whole, so the bound sits well above the total
+ * rather than at a page size: at 500 the 2026-10-22 import (755 branches) made
+ * them silently drop the oldest tenants' branches. A response that hits the
+ * bound says so (`truncated`) instead of pretending to be complete.
+ */
+const BRANCH_LIST_LIMIT = 5_000
 
 type BranchCreateInput = ReturnType<typeof branchCreateSchema.parse>
 type RequestScope = NonNullable<Awaited<ReturnType<typeof getRequestScope>>>
@@ -131,7 +142,7 @@ export async function GET(req: Request) {
     // VIEWER is on the GET alone, for the branch filter on its dashboard. Branch
     // creation and every other method below keep their own narrower allowlists,
     // so a read-only account cannot reach them.
-    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL", "VIEWER"])
+    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL", "VIEWER", "FINANCE"])
     if (err) return err
 
     const { searchParams } = new URL(req.url)
@@ -156,7 +167,11 @@ export async function GET(req: Request) {
     }
 
     // Determine which organizations to query based on role
-    const scopedOrgIds = getScopedOrganizationIds(scope, orgIds)
+    // Finance lists the branches of its assigned organizations, narrowed by the
+    // request and never widened past them.
+    const financeScope = await resolveFinanceReadScope({ role: scope.role, userId: scope.userId, requestedOrganizationIds: orgIds })
+    if (financeScope && !financeScope.ok) return error(financeScope.error, financeScope.status)
+    const scopedOrgIds = financeScope ? financeScope.organizationIds : getScopedOrganizationIds(scope, orgIds)
 
     // A Viewer pinned to a branch lists that branch alone, so its dashboard
     // filter cannot even name a sibling. An unpinned one lists its tenant.
@@ -218,6 +233,7 @@ export async function GET(req: Request) {
           groupId: branchesTable.groupId,
           adminUserId: branchesTable.adminUserId,
           headCount: branchesTable.headCount,
+          contactPhone: branchesTable.contactPhone,
           hierarchyRole: branchesTable.hierarchyRole,
           parentBranchId: branchesTable.parentBranchId,
           parentBranchName: parentBranchNameSql,
@@ -230,9 +246,13 @@ export async function GET(req: Request) {
         .from(branchesTable)
         .where(getBranchQueryCondition(scopedOrgIds, groupIds, scopedBranchId, assignedBranchIds))
         .orderBy(desc(branchesTable.createdAt))
-        .limit(500)
+        // One past the bound, so a cut-off list is detected rather than assumed complete.
+        .limit(BRANCH_LIST_LIMIT + 1)
 
-      return { items, count: items.length }
+      const truncated = items.length > BRANCH_LIST_LIMIT
+      if (truncated) logError(new Error(`Branch list truncated at ${BRANCH_LIST_LIMIT}`), 'BRANCHES_GET')
+      const page = truncated ? items.slice(0, BRANCH_LIST_LIMIT) : items
+      return { items: page, count: page.length, truncated }
     }
 
     const result = shouldRefresh
@@ -300,6 +320,7 @@ export async function POST(req: Request) {
         status,
         region: body.region ?? null,
         headCount: body.headCount ?? null,
+        contactPhone: body.contactPhone ?? null,
         hierarchy: hierarchyForNewBranch(body),
       },
       { userId: scope.userId, role: scope.role },

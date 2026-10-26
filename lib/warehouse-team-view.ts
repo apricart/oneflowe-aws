@@ -42,10 +42,34 @@ export function toggleBranch(selected: readonly number[], branchId: number): num
     : [...selected, branchId].sort((a, b) => a - b)
 }
 
-/** Every branch of the organization when not all are selected; none when all are. */
-export function toggleAllBranches(selected: readonly number[], organizationBranchIds: readonly number[]): number[] {
-  const allSelected = organizationBranchIds.length > 0 && organizationBranchIds.every((id) => selected.includes(id))
-  return allSelected ? [] : [...organizationBranchIds].sort((a, b) => a - b)
+/**
+ * What "Select all" (`assign`) or "Unselect all" changes among the rows shown:
+ * the shown ones not yet in the wanted state, in the order shown. Rows the
+ * filter hides are never touched. See plans/OF-WAREHOUSE-city-bulk-select.md.
+ */
+export function bulkChange<T>(shown: readonly T[], current: readonly T[], assign: boolean): T[] {
+  return shown.filter((item) => current.includes(item) !== assign)
+}
+
+/** Consecutive slices of at most `size`, so each bulk request stays under its bound. */
+export function inBatches<T>(items: readonly T[], size: number): T[][] {
+  const batches: T[][] = []
+  for (let start = 0; start < items.length; start += size) batches.push(items.slice(start, start + size))
+  return batches
+}
+
+/**
+ * Select or unselect every target branch while preserving selections that a
+ * filter hides. Passing the whole organization retains the original all/none
+ * behaviour; passing only shown ids makes the action filter-aware.
+ */
+export function toggleAllBranches(selected: readonly number[], targetBranchIds: readonly number[]): number[] {
+  const targets = new Set(targetBranchIds)
+  const allSelected = targetBranchIds.length > 0 && targetBranchIds.every((id) => selected.includes(id))
+  return (allSelected
+    ? selected.filter((id) => !targets.has(id))
+    : [...new Set([...selected, ...targetBranchIds])]
+  ).sort((a, b) => a - b)
 }
 
 // ---------------------------------------------------------------------------

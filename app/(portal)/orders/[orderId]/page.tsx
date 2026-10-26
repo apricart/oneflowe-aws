@@ -7,6 +7,9 @@ import useSWR from "swr"
 import { useSession } from "next-auth/react"
 import { useState } from "react"
 import { DeliveryChallanPanel } from "@/components/orders/delivery-challan"
+import { OrderIntakeScreenshot } from "@/components/orders/order-intake-screenshot"
+import { OrderWarehousePanel } from "@/components/orders/order-warehouse-panel"
+import { canTransferOrderWarehouse } from "@/lib/order-warehouse-transfer"
 import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -24,7 +27,7 @@ import { calculateLineCents,formatQuantity } from "@/lib/quantity"
 import { buildStatusTimeline } from "@/lib/order-utils"
 import { getOrderDerivedStatus,hasPartialRefund } from "@/lib/order-status"
 import { PAYMENT_STATUS_LABELS,normalizePaymentStatus } from "@/lib/payment-status"
-import { ArrowLeft,Clock,CheckCircle,CornerUpLeft,RefreshCw,Package,Ban,Copy,User,XCircle } from "lucide-react"
+import { ArrowLeft,Clock,CheckCircle,CornerUpLeft,RefreshCw,Package,Ban,Copy,User,XCircle,ImageIcon } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { RefundManagement } from "@/components/refund-management"
 import {
@@ -36,6 +39,8 @@ import {
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { renamedRoleName, ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 import { isApricartSupportRole } from "@/lib/apricart-support-access"
+import { canUpdatePaymentStatus, isFinanceRole } from "@/lib/finance-access"
+import { PaymentStatusToggle } from "@/components/finance/payment-status-toggle"
 
 // ... (existing imports)
 
@@ -89,6 +94,8 @@ type OrderDetail = {
   pricesHidden?: boolean
   /** Entered by Apricart's Order Desk: an Apricart Executive decides it. */
   decidedByApricart?: boolean
+  /** The Order Desk attached the customer's screenshot to this order. */
+  hasIntakeScreenshot?: boolean
   /** plans/OF-APPROVAL-LEVELS-route-orders-by-level.md */
   approvalLevel?: number | null
   levelDecisionLocked?: boolean
@@ -274,6 +281,9 @@ export default function SuperAdminOrderDetailsPage() {
     if (isHeadOffice) {
       return "HEAD OFFICE"
     }
+    if (isFinanceRole(userRole)) {
+      return "FINANCE"
+    }
     if (isReadOnlyRole(userRole) || isApricartSupportRole(userRole)) {
       return "VIEW ONLY"
     }
@@ -347,6 +357,21 @@ export default function SuperAdminOrderDetailsPage() {
       {order && normalizeFulfillmentStatus(order.fulfillmentStatus) === "DELIVERED" && (
         <DeliveryChallanPanel orderId={order.id} orderTid={order.tid} canReplace={isSuperAdmin} />
       )}
+      {order && canTransferOrderWarehouse(userRole) && <OrderWarehousePanel orderId={order.id} />}
+      {order?.hasIntakeScreenshot === true && (
+        <Card className="space-y-3 rounded-2xl border-0 bg-white p-4 shadow-md dark:border-slate-800 dark:bg-slate-900">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-white">
+              <ImageIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              Customer&apos;s order screenshot
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Attached by Apricart&apos;s Order Desk when it entered this order from the customer&apos;s message.
+            </p>
+          </div>
+          <OrderIntakeScreenshot src={`/api/v1/orders/${order.id}/intake-screenshot`} orderTid={order.tid} className="max-w-xl" />
+        </Card>
+      )}
 
       {order && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -374,6 +399,16 @@ export default function SuperAdminOrderDetailsPage() {
             )}>
               {PAYMENT_STATUS_LABELS[normalizePaymentStatus(order.paymentStatus)]}
             </span>
+            {canUpdatePaymentStatus(userRole) && (
+              <PaymentStatusToggle
+                orderId={order.id}
+                orderStatus={order.status}
+                fulfillmentStatus={order.fulfillmentStatus}
+                paymentStatus={order.paymentStatus}
+                onUpdated={() => mutate()}
+                className="mt-3 h-9 w-full"
+              />
+            )}
             {order.status.toLowerCase() === 'rejected' && order.rejectionReason && (
               <div className="mt-3 rounded-md bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300 border border-red-100 dark:border-red-900">
                 <span className="font-semibold block mb-0.5">Reason:</span>

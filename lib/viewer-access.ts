@@ -25,6 +25,8 @@
  * `plans/OF-VIEWER-head-office-read-only-menu.md`.
  */
 
+import { isFinanceRole } from "@/lib/finance-access"
+
 export const VIEWER_ROLE = "VIEWER" as const
 
 /** Where a Viewer lands. */
@@ -133,9 +135,16 @@ export function isViewerApiRequestAllowed(method: string, pathname: string): boo
 export function viewerAccessFor(user: unknown): { role: string | null; viewRole: string | null; readOnly: boolean } {
   const claims = (user ?? {}) as { role?: unknown; organizationId?: unknown; branchId?: unknown }
   const role = typeof claims.role === "string" ? claims.role : null
+  let viewRole = role
+  if (isOrganizationViewer(claims)) viewRole = "HEAD_OFFICE"
+  // Finance reads the orders and reports pages as Super Admin does — every
+  // endpoint behind them fences it to its assigned organizations
+  // (`lib/finance-access.ts`) — with every write control hidden. Its one
+  // change, Paid / Unpaid, is offered by `canUpdatePaymentStatus`.
+  else if (isFinanceRole(role)) viewRole = "SUPER_ADMIN"
   return {
     role,
-    viewRole: isOrganizationViewer(claims) ? "HEAD_OFFICE" : role,
+    viewRole,
     readOnly: isReadOnlyRole(role),
   }
 }
@@ -146,7 +155,7 @@ export function viewerAccessFor(user: unknown): { role: string | null; viewRole:
  * the role on its own.
  */
 export function isReadOnlyRole(role: unknown): boolean {
-  return isViewerRole(role)
+  return isViewerRole(role) || isFinanceRole(role)
 }
 
 /**
@@ -229,6 +238,7 @@ export const VIEWER_ORGANIZATION_READ_ROUTES: readonly string[] = [
   "app/api/v1/orders/[id]/refunds/route.ts",
   "app/api/v1/orders/[id]/delivery-challan/route.ts",
   "app/api/v1/orders/[id]/delivery-challan/[challanId]/file/route.ts",
+  "app/api/v1/orders/[id]/intake-screenshot/route.ts",
   "app/api/v1/receipts/[orderId]/route.ts",
   "app/api/v1/receipts/[orderId]/download/route.ts",
   "app/api/v1/receipts/[orderId]/credit-notes/[creditNoteId]/download/route.ts",
