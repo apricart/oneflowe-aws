@@ -42,7 +42,7 @@ import {
   queueRiderOverdueDeliveryNotifications,
   queueRiderPodSubmittedNotifications,
 } from "@/lib/server/rider-notifications"
-import { isOrderBranchInWarehouseReach } from "@/lib/server/warehouse-scope"
+import { isOrderInWarehouseReach } from "@/lib/server/warehouse-scope"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
@@ -388,7 +388,7 @@ export async function createAssignments(input: {
       }
 
       if (input.actorRole === "WAREHOUSE") {
-        const inReach = await isOrderBranchInWarehouseReach(input.actorUserId, order, {
+        const inReach = await isOrderInWarehouseReach(input.actorUserId, order.id, {
           client: tx,
           lock: true,
         })
@@ -471,11 +471,10 @@ export async function updateAssignmentPin(input: {
     }
 
     if (input.actorRole === "WAREHOUSE") {
-      const inReach = await isOrderBranchInWarehouseReach(
-        input.actorUserId,
-        { organizationId: row.organizationId, branchId: row.branchId },
-        { client: tx, lock: true },
-      )
+      const inReach = await isOrderInWarehouseReach(input.actorUserId, row.orderId, {
+        client: tx,
+        lock: true,
+      })
       if (!inReach) return { kind: "not_found" as const }
 
       const [owned] = await tx
@@ -730,10 +729,7 @@ export async function approvePod(input: {
   }
 
   if (input.actorRole === "WAREHOUSE") {
-    const inReach = await isOrderBranchInWarehouseReach(input.actorUserId, {
-      organizationId: row.organizationId,
-      branchId: row.branchId,
-    })
+    const inReach = await isOrderInWarehouseReach(input.actorUserId, row.orderId)
     if (!inReach) return { kind: "not_found" as const }
   }
 
@@ -749,13 +745,13 @@ export async function approvePod(input: {
       deliveryChallanId: null,
       challanRequired: false,
       actor: { id: input.actorUserId, role: input.actorRole },
-      authorize: async (order) =>
+      authorize: async () =>
         input.actorRole === "SUPER_ADMIN" ||
-        (await isOrderBranchInWarehouseReach(input.actorUserId, order)),
+        (await isOrderInWarehouseReach(input.actorUserId, row.orderId)),
       guardInTransaction:
         input.actorRole === "WAREHOUSE"
-          ? (tx, order) =>
-              isOrderBranchInWarehouseReach(input.actorUserId, order, { client: tx, lock: true })
+          ? (tx) =>
+              isOrderInWarehouseReach(input.actorUserId, row.orderId, { client: tx, lock: true })
           : undefined,
     })
     if (outcome.kind !== "updated") {
@@ -811,10 +807,7 @@ export async function rejectPod(input: {
     return { kind: "conflict" as const, status: row.assignment.status }
   }
   if (input.actorRole === "WAREHOUSE") {
-    const inReach = await isOrderBranchInWarehouseReach(input.actorUserId, {
-      organizationId: row.organizationId,
-      branchId: row.branchId,
-    })
+    const inReach = await isOrderInWarehouseReach(input.actorUserId, row.assignment.orderId)
     if (!inReach) return { kind: "not_found" as const }
   }
 
