@@ -28,8 +28,8 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { OrganizationCombobox } from "@/components/warehouse/organization-combobox"
 import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import { WAREHOUSE_CITY_BULK_MAX, WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER } from "@/lib/warehouse-access"
@@ -472,26 +472,26 @@ function BranchesDialog({
   const coveredIds = new Set(
     organizationBranches.filter((branch) => cityCoveringBranch(branch, cityReach)).map((branch) => branch.id),
   )
-  const uncoveredIds = organizationBranches.map((branch) => branch.id).filter((id) => !coveredIds.has(id))
   const served = organizationBranches.filter((branch) => coveredIds.has(branch.id) || selected.includes(branch.id)).length
-  const shown = organizationBranches.filter((branch) => branch.name.toLowerCase().includes(filter.trim().toLowerCase()))
+  const branchNeedle = filter.trim().toLowerCase()
+  const shown = organizationBranches.filter((branch) => (
+    `${branch.name} ${branch.city ?? ""}`.toLowerCase().includes(branchNeedle)
+  ))
+  const shownUncoveredIds = shown.filter((branch) => !coveredIds.has(branch.id)).map((branch) => branch.id)
+  const allShownSelected = shownUncoveredIds.length > 0 && shownUncoveredIds.every((id) => selected.includes(id))
   const saved = organizationId === null ? [] : branchesInOrganization(assigned, team.branches, organizationId)
   const dirty = saved.join(",") !== [...selected].sort((a, b) => a - b).join(",")
 
-  const switchOrganization = (value: string) => {
-    const next = Number(value)
+  const switchOrganization = (next: number) => {
     setOrganizationId(next)
     setSelected(branchesInOrganization(assigned, team.branches, next))
     setFilter("")
     setFormError(null)
   }
 
-  // All / none acts on the branches no city covers; a single assignment that
-  // overlaps a city is kept, so withdrawing the city later does not drop it.
-  const toggleAll = () => setSelected((current) => [
-    ...current.filter((id) => coveredIds.has(id)),
-    ...toggleAllBranches(current.filter((id) => !coveredIds.has(id)), uncoveredIds),
-  ].sort((a, b) => a - b))
+  // The bulk action changes only visible branches no city covers. Hidden and
+  // city-covered single assignments stay intact.
+  const toggleAll = () => setSelected((current) => toggleAllBranches(current, shownUncoveredIds))
 
   const changeCities = (next: CityReach) => {
     setCityReach(next)
@@ -550,22 +550,24 @@ function BranchesDialog({
           <TabsContent value="branches" className="space-y-3">
             <div className="space-y-1">
               <Label htmlFor="warehouse-team-org">Organization</Label>
-              <Select value={organizationId === null ? undefined : String(organizationId)} onValueChange={switchOrganization} disabled={saving || dirty}>
-                <SelectTrigger id="warehouse-team-org"><SelectValue placeholder="Choose an organization" /></SelectTrigger>
-                <SelectContent>
-                  {team.organizations.map((organization) => (
-                    <SelectItem key={organization.id} value={String(organization.id)}>
-                      {organization.name} ({branchesInOrganization(assigned, team.branches, organization.id).length})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <OrganizationCombobox
+                id="warehouse-team-org"
+                value={organizationId}
+                options={team.organizations.map((organization) => ({
+                  id: organization.id,
+                  label: organization.name,
+                  keywords: organization.code ?? undefined,
+                  hint: `(${branchesInOrganization(assigned, team.branches, organization.id).length})`,
+                }))}
+                disabled={saving || dirty}
+                onValueChange={switchOrganization}
+              />
               {dirty && <p className="text-xs text-amber-600">Save or reset this organization first.</p>}
             </div>
             <div className="flex items-center gap-2">
-              <Input placeholder="Filter branches" value={filter} onChange={(event) => setFilter(event.target.value)} maxLength={100} />
-              <Button type="button" variant="outline" size="sm" onClick={toggleAll} disabled={saving || uncoveredIds.length === 0}>
-                All / none
+              <Input aria-label="Filter branches" placeholder="Filter branches" value={filter} onChange={(event) => setFilter(event.target.value)} maxLength={100} />
+              <Button type="button" variant="outline" size="sm" onClick={toggleAll} disabled={saving || shownUncoveredIds.length === 0}>
+                {allShownSelected ? "Unselect" : "Select"} all{branchNeedle ? " shown" : ""}
               </Button>
             </div>
             <fieldset className="max-h-72 space-y-1 overflow-y-auto rounded-md border p-2" disabled={saving}>

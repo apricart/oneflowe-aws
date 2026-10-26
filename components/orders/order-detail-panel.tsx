@@ -101,6 +101,8 @@ type OrderDetailPanelProps = Readonly<{
   statusContext?: OrderStatusContext
   /** Adds the organization row, which only a platform-level actor may see. */
   isSuperAdmin?: boolean
+  /** Whether the delivery challan may be replaced here; Super Admin's alone. Defaults to `isSuperAdmin`. */
+  canReplaceChallan?: boolean
   /** Whether this viewer may see the fulfilment token on an approved order. */
   showFulfillmentToken?: boolean
   details: OrderDetails | null
@@ -130,6 +132,7 @@ export function OrderDetailPanel({
   order,
   statusContext = "default",
   isSuperAdmin = false,
+  canReplaceChallan,
   showFulfillmentToken = false,
   details,
   detailsExpanded,
@@ -394,7 +397,7 @@ export function OrderDetailPanel({
                 {/* Proof of delivery, for whoever can read this order; the
                     endpoints behind it apply the order detail's own rule. */}
                 {isDeliveredOrder && typeof order.id === "number" && (
-                  <DeliveryChallanPanel orderId={order.id} orderTid={String(order.tid ?? order.id)} canReplace={isSuperAdmin} />
+                  <DeliveryChallanPanel orderId={order.id} orderTid={String(order.tid ?? order.id)} canReplace={canReplaceChallan ?? isSuperAdmin} />
                 )}
 
               </div>

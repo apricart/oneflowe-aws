@@ -18,6 +18,7 @@ import { isOrderDeskRole, ORDER_DESK_HOME } from "@/lib/order-desk-access"
 import { APRICART_EXECUTIVE_HOME, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
 import { WAREHOUSE_HOME, isWarehouseRole } from "@/lib/warehouse-access"
 import { APRICART_SUPPORT_HOME, isApricartSupportRole } from "@/lib/apricart-support-access"
+import { FINANCE_HOME, isFinanceRole } from "@/lib/finance-access"
 import { markRoleRenameNoticeDue } from "@/lib/role-rename-notice"
 
 /**
@@ -135,6 +136,8 @@ function roleLandingPath(role: unknown): string | null {
   if (isWarehouseRole(role)) return WAREHOUSE_HOME
   // Apricart's support agents have one workspace: the support queue.
   if (isApricartSupportRole(role)) return APRICART_SUPPORT_HOME
+  // Apricart finance lands on its payment KPIs.
+  if (isFinanceRole(role)) return FINANCE_HOME
   return null
 }
 

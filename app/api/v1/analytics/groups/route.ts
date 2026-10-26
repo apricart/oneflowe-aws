@@ -1,4 +1,5 @@
 import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -75,9 +76,15 @@ function buildGroupComparisonDateCondition(context: any) {
     return and(...conditions)
 }
 
+/** Finance's fenced organizations as a condition on a column, or nothing for every other caller. */
+function financeOrganizationCondition(column: any, organizationIds: number[] | null | undefined) {
+    return organizationIds ? inArray(column, organizationIds) : undefined
+}
+
 function buildGroupScopeConditions(context: any) {
     return [
         context.organizationId ? eq(groups.organizationId, context.organizationId) : undefined,
+        financeOrganizationCondition(groups.organizationId, context.organizationIds),
         nonDeletedGroupCondition,
         context.groupIds.length > 0 ? inArray(groups.id, context.groupIds) : undefined,
         context.branchIds.length > 0 ? inArray(branches.id, context.branchIds) : undefined,
@@ -110,6 +117,7 @@ function buildRefundConditions(context: any) {
         inArray(groups.id, context.groupIds),
     ]
     if (context.organizationId) conditions.push(eq(groups.organizationId, context.organizationId))
+    if (context.organizationIds) conditions.push(inArray(groups.organizationId, context.organizationIds))
     if (context.branchIds.length > 0) conditions.push(inArray(branches.id, context.branchIds))
     const dateConditions = buildGroupOrderConditions(context).slice(1)
     conditions.push(...dateConditions)
@@ -241,17 +249,23 @@ function resolveGroupOrganizationId(role: string, organizationId: number | null,
     return Number.isFinite(parsed) ? parsed : organizationId
 }
 
-async function loadGroupYears(organizationId: number | null) {
+async function loadGroupYears(organizationId: number | null, organizationIds: number[] | null) {
     const years = await db.select({ year: sql<number>`EXTRACT(YEAR FROM ${orders.createdAt})::int` })
         .from(orders).innerJoin(branches, eq(orders.branchId, branches.id)).innerJoin(groups, eq(branches.groupId, groups.id))
-        .where(and(REVENUE_ELIGIBLE_FILTER, organizationId ? eq(groups.organizationId, organizationId) : undefined, nonDeletedGroupCondition))
+        .where(and(
+            REVENUE_ELIGIBLE_FILTER,
+            organizationId ? eq(groups.organizationId, organizationId) : undefined,
+            financeOrganizationCondition(groups.organizationId, organizationIds),
+            nonDeletedGroupCondition,
+        ))
         .groupBy(sql`EXTRACT(YEAR FROM ${orders.createdAt})`).orderBy(desc(sql`EXTRACT(YEAR FROM ${orders.createdAt})`))
     return years.map((row) => row.year)
 }
 
-function buildGroupConditions(organizationId: number | null, groupIds: number[]) {
+function buildGroupConditions(organizationId: number | null, groupIds: number[], organizationIds: number[] | null) {
     return [
         organizationId ? eq(groups.organizationId, organizationId) : undefined,
+        financeOrganizationCondition(groups.organizationId, organizationIds),
         nonDeletedGroupCondition,
         groupIds.length > 0 ? inArray(groups.id, groupIds) : undefined,
     ].filter(Boolean) as any
@@ -263,8 +277,18 @@ export async function GET(req: NextRequest) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
         // An organization-wide Viewer reads as Head Office; a pinned one is refused.
-        const role = viewerReadRole(session.user as any)
+        let role = viewerReadRole(session.user as any)
         if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+        // Finance reads as Super Admin, inside the organizations assigned to it.
+        const requestedOrganizationId = new URL(req.url).searchParams.get("organizationId")
+        const financeScope = await resolveFinanceReadScope({
+            role,
+            userId: (session.user as any).id,
+            requestedOrganizationIds: requestedOrganizationId ? [requestedOrganizationId] : [],
+        })
+        if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+        if (financeScope) role = "SUPER_ADMIN"
+        const financeOrganizationIds = financeScope?.organizationIds ?? null
         const normalizedRole = typeof role === "string" ? role.toUpperCase().replace(/\s+/g, "_") : role
         const userOrganizationId = role === "SUPER_ADMIN" ? null : (session.user as any).organizationId
         const { searchParams } = new URL(req.url)
@@ -305,7 +329,7 @@ export async function GET(req: NextRequest) {
         const parsedBranchIds = parseNumberList(branchIdsParam)
 
         // ━━━ Mode: All Time (Year Selection) ━━━
-        if (allTime) return NextResponse.json({ years: await loadGroupYears(orgId) })
+        if (allTime) return NextResponse.json({ years: await loadGroupYears(orgId, financeOrganizationIds) })
 
         // Build order conditions for date filtering
         const orderWhere = and(...buildGroupOrderConditions({ months: parsedMonths, years: parsedYears, startDate, endDate }))
@@ -314,7 +338,7 @@ export async function GET(req: NextRequest) {
         const periodList = buildGroupBudgetPeriods({ months: parsedMonths, years: parsedYears, startDate, endDate })
 
         // Build group conditions
-        const groupConditions = buildGroupConditions(orgId, parsedGroupIds)
+        const groupConditions = buildGroupConditions(orgId, parsedGroupIds, financeOrganizationIds)
 
         // ━━━ Mode: Trend Only (Bar Chart) ━━━
         const comparisonRange = getComparisonRange({
@@ -323,6 +347,7 @@ export async function GET(req: NextRequest) {
         if (trendOnly) return respond(await loadGroupTrend({
             orderWhere,
             organizationId: orgId,
+            organizationIds: financeOrganizationIds,
             groupIds: parsedGroupIds,
             branchIds: parsedBranchIds,
             compare,
@@ -375,6 +400,7 @@ export async function GET(req: NextRequest) {
         const supportingData = await loadGroupSupportingData({
             groupIds: groupIdsList,
             organizationId: orgId,
+            organizationIds: financeOrganizationIds,
             branchIds: parsedBranchIds,
             months: parsedMonths,
             years: parsedYears,
@@ -403,6 +429,7 @@ export async function GET(req: NextRequest) {
         // 4. Ungrouped Branches (For summary too)
         const ungroupedConditions = []
         if (orgId) ungroupedConditions.push(eq(branches.organizationId, orgId))
+        if (financeOrganizationIds) ungroupedConditions.push(inArray(branches.organizationId, financeOrganizationIds))
         ungroupedConditions.push(isNull(branches.groupId), eq(branches.status, 'active'))
 
         const ungroupedStats = await db
@@ -427,6 +454,7 @@ export async function GET(req: NextRequest) {
         const comparisonSummary = await loadGroupComparison({
             enabled: compare && Boolean(startDate || parsedCompMonths.length > 0),
             organizationId: orgId,
+            organizationIds: financeOrganizationIds,
             groupIds: parsedGroupIds,
             branchIds: parsedBranchIds,
             months: parsedCompMonths,

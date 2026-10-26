@@ -128,6 +128,8 @@ describe("the challan routes", () => {
   "GROUP_ORDER_PORTAL",
   "ORDER_PORTAL",
   APRICART_SUPPORT_ROLE,
+  // Every order of the organizations assigned to it (lib/finance-access.ts).
+  FINANCE_ROLE,
 ] as const`)
   })
 

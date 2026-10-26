@@ -126,6 +126,7 @@ describe("a caller with no tenant", () => {
       "app/api/v1/analytics/branches/performance/route.ts",
       "app/api/v1/analytics/budgets/summary/route.ts",
       "app/api/v1/analytics/organization-stats/route.ts",
+      "app/api/v1/analytics/products/catalog-performance/route.ts",
     ]) {
       expect(readFileSync(route, "utf8"), route).toMatch(/if \(lacksAnalyticsTenant\([\s\S]*?\)\) \{\s*return NextResponse\.json\(\{ error: "Forbidden" \}, \{ status: 403 \}\)/)
     }

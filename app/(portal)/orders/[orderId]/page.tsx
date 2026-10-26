@@ -39,6 +39,8 @@ import {
 import { isAwaitingCorrection } from "@/lib/order-correction"
 import { renamedRoleName, ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 import { isApricartSupportRole } from "@/lib/apricart-support-access"
+import { canUpdatePaymentStatus, isFinanceRole } from "@/lib/finance-access"
+import { PaymentStatusToggle } from "@/components/finance/payment-status-toggle"
 
 // ... (existing imports)
 
@@ -279,6 +281,9 @@ export default function SuperAdminOrderDetailsPage() {
     if (isHeadOffice) {
       return "HEAD OFFICE"
     }
+    if (isFinanceRole(userRole)) {
+      return "FINANCE"
+    }
     if (isReadOnlyRole(userRole) || isApricartSupportRole(userRole)) {
       return "VIEW ONLY"
     }
@@ -394,6 +399,16 @@ export default function SuperAdminOrderDetailsPage() {
             )}>
               {PAYMENT_STATUS_LABELS[normalizePaymentStatus(order.paymentStatus)]}
             </span>
+            {canUpdatePaymentStatus(userRole) && (
+              <PaymentStatusToggle
+                orderId={order.id}
+                orderStatus={order.status}
+                fulfillmentStatus={order.fulfillmentStatus}
+                paymentStatus={order.paymentStatus}
+                onUpdated={() => mutate()}
+                className="mt-3 h-9 w-full"
+              />
+            )}
             {order.status.toLowerCase() === 'rejected' && order.rejectionReason && (
               <div className="mt-3 rounded-md bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300 border border-red-100 dark:border-red-900">
                 <span className="font-semibold block mb-0.5">Reason:</span>

@@ -222,6 +222,8 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/executive/approvals/[id]/reject/route.ts", module: "lib/server/order-decision-service.ts" },
   { file: "app/api/v1/executive/approvals/[id]/return/route.ts", module: "lib/server/order-correction.ts" },
   { file: "app/api/v1/apricart-executives/[userId]/organizations/route.ts", module: "lib/server/apricart-executive-team.ts" },
+  // A Finance account's organizations (plans/OF-FINANCE-finance-role.md).
+  { file: "app/api/v1/users/[id]/finance-organizations/route.ts", module: "lib/server/finance-scope.ts" },
 
   // Moving a delivery forward — Super Admin's route and the warehouse's — is
   // one shared module that writes ORDER_FULFILLMENT_STATUS_UPDATE inside the

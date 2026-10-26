@@ -1,4 +1,5 @@
 import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -15,11 +16,20 @@ export async function GET(req: NextRequest) {
         if (!session?.user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
         // An organization-wide Viewer reads as Head Office; a pinned one is refused.
-        const role = viewerReadRole(session.user as any)
+        let role = viewerReadRole(session.user as any)
         if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
-        let orgId = role === "SUPER_ADMIN" ? null : (session.user as any).organizationId
         const { searchParams } = new URL(req.url)
         const orgIdParam = searchParams.get("organizationId")
+        // Finance reads as Super Admin, inside the organizations assigned to it.
+        const financeScope = await resolveFinanceReadScope({
+            role,
+            userId: (session.user as any).id,
+            requestedOrganizationIds: orgIdParam ? [orgIdParam] : [],
+        })
+        if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+        if (financeScope) role = "SUPER_ADMIN"
+        const financeOrganizationIds = financeScope?.organizationIds ?? null
+        let orgId = role === "SUPER_ADMIN" ? null : (session.user as any).organizationId
 
         // For admin users using context selector, accept organizationId from query param
         if (orgIdParam && role === "SUPER_ADMIN") {
@@ -44,7 +54,7 @@ export async function GET(req: NextRequest) {
         const cacheKey = scopedCacheKey(
             'groups',
             { orgId: orgId },
-            { assignedGroupIds: assignedGroupIds?.join(',') },
+            { assignedGroupIds: assignedGroupIds?.join(','), financeOrganizationIds: financeOrganizationIds?.join(',') },
         )
 
         const allGroups = await getCached(cacheKey, async () => {
@@ -70,6 +80,7 @@ export async function GET(req: NextRequest) {
                 .where(
                     and(
                         orgId ? eq(groups.organizationId, orgId) : undefined,
+                        financeOrganizationIds ? inArray(groups.organizationId, financeOrganizationIds) : undefined,
                         assignedGroupIds
                             ? inArray(groups.id, assignedGroupIds.length > 0 ? assignedGroupIds : [-1])
                             : undefined,

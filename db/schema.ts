@@ -967,7 +967,7 @@ export const orders = pgTable(
       .notNull(),
     status: varchar("status", { length: 32 }).notNull().default("PENDING"), // PENDING/APPROVED/REJECTED/FULFILLED/REFUNDED
     fulfillmentStatus: varchar("fulfillment_status", { length: 32 }).notNull().default("NOT_STARTED"), // NOT_STARTED/IN_PROCESS/OUT_FOR_DELIVERY/DELIVERED
-    paymentStatus: varchar("payment_status", { length: 16 }).notNull().default("UNPAID"), // UNPAID/PAID — toggled by SUPER_ADMIN only
+    paymentStatus: varchar("payment_status", { length: 16 }).notNull().default("UNPAID"), // UNPAID/PAID — toggled by SUPER_ADMIN and FINANCE (plans/OF-FINANCE-finance-role.md)
     paidAt: timestamp("paid_at", { withTimezone: true }),
     paidByUserId: uuid("paid_by_user_id").references(() => users.id),
     subtotalCents: bigint("subtotal_cents", { mode: "number" }).notNull().default(0),
@@ -2706,6 +2706,31 @@ export const apricartExecutiveAssignments = pgTable(
   (t) => [
     uniqueIndex("apricart_executive_assignments_user_org_uq").on(t.userId, t.organizationId),
     index("apricart_executive_assignments_org_idx").on(t.organizationId),
+  ],
+)
+
+/**
+ * Which organizations a Finance user reads orders and reports for, and marks
+ * orders Paid or Unpaid in. Super Admin writes these rows
+ * (`lib/server/finance-scope.ts`); the reach is re-read on every request, and
+ * an account with none reads nothing. See plans/OF-FINANCE-finance-role.md.
+ */
+export const financeOrganizationAssignments = pgTable(
+  "finance_organization_assignments",
+  {
+    id: serial("id").primaryKey(),
+    userId: uuid("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id, { onDelete: "cascade" })
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("finance_organization_assignments_user_org_uq").on(t.userId, t.organizationId),
+    index("finance_organization_assignments_org_idx").on(t.organizationId),
   ],
 )
 

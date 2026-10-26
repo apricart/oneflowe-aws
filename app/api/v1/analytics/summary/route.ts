@@ -1,3 +1,4 @@
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
 import { stringifyPrimitive } from "@/lib/stringify-primitive"
 import { NextResponse, type NextRequest } from "next/server"
@@ -340,12 +341,18 @@ export async function GET(req: NextRequest) {
     addSummaryPaymentStatusCondition(conditions, paymentStatusParam.status)
 
     // Security: RBAC
-    const normalizedRole = (roleName || "").toUpperCase().replace(/\s+/g, '_')
-    const scopedOrganizationIds = resolveAnalyticsOrganizationIds({
-        role: normalizedRole,
-        userOrganizationId: currentUserOrgId,
-        requestedOrganizationIds,
-    })
+    let normalizedRole = (roleName || "").toUpperCase().replace(/\s+/g, '_')
+    // Finance reads as Super Admin, inside the organizations assigned to it.
+    const financeScope = await resolveFinanceReadScope({ role: normalizedRole, userId, requestedOrganizationIds })
+    if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+    if (financeScope) normalizedRole = "SUPER_ADMIN"
+    const scopedOrganizationIds = financeScope
+        ? financeScope.organizationIds
+        : resolveAnalyticsOrganizationIds({
+            role: normalizedRole,
+            userOrganizationId: currentUserOrgId,
+            requestedOrganizationIds,
+        })
     const pricesHidden = await shouldHidePricesForRole(normalizedRole, currentUserOrgId)
     const respond = (payload: any) => buildSummaryResponse(pricesHidden, payload)
     const requestedSort = parseSortParams(

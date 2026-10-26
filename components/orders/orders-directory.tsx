@@ -44,6 +44,7 @@ import {
   getStatusColor,
   type OrderDetails,
 } from "@/components/orders/order-detail-panel"
+import { isPaymentStatusUpdateEligible } from "@/lib/business-rules"
 import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
 import { ColumnSelector,type ColumnDef,useColumnSelector } from "@/components/reports/column-selector"
 import { SortableHeader,ariaSortFor } from "@/components/reports/sortable-header"
@@ -131,6 +132,12 @@ type OrdersDirectoryProps = {
   isHeadOffice?: boolean
   /** Presentation guard for roles that may inspect orders but never act on them. */
   readOnly?: boolean
+  /**
+   * Offers Mark as Paid / Unpaid on an approved order. Defaults to a Super
+   * Admin who is not read-only; Finance passes it although it reads read-only.
+   * The payment-status route enforces it regardless.
+   */
+  canUpdatePaymentStatus?: boolean
   /** Platform-wide readers need the tenant named on every row. */
   showOrganization?: boolean
   /** False when the caller's confined page area does not include invoices. */
@@ -238,6 +245,7 @@ export function OrdersDirectory({
   isBranchAdmin,
   isHeadOffice,
   readOnly = false,
+  canUpdatePaymentStatus,
   showOrganization,
   showInvoiceLink = true,
   canDecideOrders = false,
@@ -253,6 +261,7 @@ export function OrdersDirectory({
   // An Order Desk entry is an Apricart Executive's to decide, never the tenant's;
   // an order waiting at an approval level this reader does not hold is that
   // level's holders' (plans/OF-APPROVAL-LEVELS-route-orders-by-level.md).
+  const paymentControlAllowed = canUpdatePaymentStatus ?? (isSuperAdmin && !readOnly)
   const canDecideViewingOrder = !readOnly
     && canDecideOrders
     && !viewingOrder?.decidedByApricart
@@ -1064,6 +1073,7 @@ export function OrdersDirectory({
               order={viewingOrder}
               statusContext={statusContext}
               isSuperAdmin={isSuperAdmin}
+              canReplaceChallan={isSuperAdmin && !readOnly}
               showFulfillmentToken={viewingOrderCanHandoffToken}
               details={orderDetails?.id === viewingOrder.id ? orderDetails : null}
               detailsExpanded={isOrderDetailsExpanded}
@@ -1094,9 +1104,8 @@ export function OrdersDirectory({
                   </Button>
                 )}
 
-                {isSuperAdmin &&
-                  viewingOrder.status?.toLowerCase() === "fulfilled" &&
-                  normalizeFulfillmentStatus(viewingOrder.fulfillmentStatus) === "DELIVERED" &&
+                {paymentControlAllowed &&
+                  isPaymentStatusUpdateEligible(viewingOrder.status, viewingOrder.fulfillmentStatus) &&
                   shouldShowOrderPaymentStatus(viewingOrder) && (
                   (() => {
                     const isPaid = normalizePaymentStatus(viewingOrder.paymentStatus) === "PAID"
@@ -1173,7 +1182,7 @@ export function OrdersDirectory({
                     </>
                   )}
 
-                  {viewingOrder.status.toLowerCase() === "approved" && isSuperAdmin && (
+                  {viewingOrder.status.toLowerCase() === "approved" && isSuperAdmin && !readOnly && (
                     <div className="w-full space-y-3">
                       {(() => {
                         const nextStatus = getNextFulfillmentStatus(viewingOrder.fulfillmentStatus)

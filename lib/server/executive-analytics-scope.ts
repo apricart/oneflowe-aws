@@ -17,6 +17,8 @@ import {
 } from "@/lib/server/analytics-scope"
 import { resolveScopedBranchIds } from "@/lib/server/multi-branch-scope"
 import { scopedCacheKey } from "@/lib/cache-utils"
+import { fenceFinanceOrganizationIds, isFinanceRole } from "@/lib/finance-access"
+import { loadFinanceOrganizationIds } from "@/lib/server/finance-scope"
 
 /**
  * The authorization boundary for the Executive Analytics Center.
@@ -158,18 +160,30 @@ export async function resolveExecutiveScope(
   // reports as Head Office does; a pinned one maps to no role and is refused.
   const loaded = await loadCallerContext(userId, sessionUser?.role)
   const caller = { ...loaded, role: viewerReadRole(loaded) ?? "" }
-  if (!isExecutiveAnalyticsRole(caller.role)) {
-    return { ok: false, error: "Forbidden: Insufficient permissions", status: 403 }
-  }
 
   const requestedOrganizationIds = parseRequestedOrganizationIds({
     organizationIds: searchParams.get("organizationIds"),
     organizationId: searchParams.get("organizationId"),
   })
 
+  // FINANCE reads as SUPER_ADMIN with the tenant set forced to the
+  // organizations assigned to it (never empty), so every path below fences
+  // it exactly as a Super Admin who selected those tenants.
+  let financeOrganizationIds: number[] | null = null
+  if (isFinanceRole(caller.role)) {
+    const fence = fenceFinanceOrganizationIds(await loadFinanceOrganizationIds(db, userId), requestedOrganizationIds)
+    if (!fence.ok) return { ok: false, error: fence.error, status: fence.status }
+    caller.role = "SUPER_ADMIN"
+    financeOrganizationIds = fence.organizationIds
+  }
+
+  if (!isExecutiveAnalyticsRole(caller.role)) {
+    return { ok: false, error: "Forbidden: Insufficient permissions", status: 403 }
+  }
+
   // For HEAD_OFFICE this discards whatever was requested and returns the
   // session tenant; for SUPER_ADMIN it validates the requested ids.
-  const organizationIds = resolveAnalyticsOrganizationIds({
+  const organizationIds = financeOrganizationIds ?? resolveAnalyticsOrganizationIds({
     role: caller.role,
     userOrganizationId: caller.organizationId,
     requestedOrganizationIds,

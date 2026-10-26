@@ -757,6 +757,13 @@
       "when": 1791118800000,
       "tag": "20261101120000_order_warehouse_transfers",
       "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1791122400000,
+      "tag": "20261102120000_finance_role",
+      "breakpoints": true
     }
   ]
 }

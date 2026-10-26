@@ -54,6 +54,7 @@ import {
   HEAD_COUNT_REQUEST_READ_ROLES,
 } from "@/lib/branch-head-count-access"
 import { ORDERING_BLOCKS_AREA, ORDERING_BLOCKS_PAGE_ROLES } from "@/lib/ordering-blocks-access"
+import { FINANCE_HOME, FINANCE_KPI_ROLES, isFinanceApiRequestAllowed, isFinanceAreaAllowed, isFinanceRole } from "@/lib/finance-access"
 
 const protectedPrefixes = [
   // The activity log was gated in ROLE_GATED_AREAS but missing here, so the
@@ -74,6 +75,8 @@ const protectedPrefixes = [
   "/desk-team",
   "/employee-management",
   "/executive",
+  // Finance's payment KPIs; the page admits Finance and Super Admin only.
+  FINANCE_HOME,
   "/group-portal",
   "/groups",
   // Branch head count requests: raised by Branch Admin / Group User, decided by
@@ -288,6 +291,16 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
       pathname,
     )
   }
+  // And for Apricart finance, which also has no organization of its own: the
+  // reads its orders and reports pages make, the Paid/Unpaid change, and its
+  // own password. Each admitted handler fences the role itself.
+  if (isFinanceRole((token as any)?.role) && !isFinanceApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "finance_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
   return withSecurityHeaders(response, pathname)
 }
 
@@ -404,6 +417,8 @@ function adminPortalRedirect(pathname: string): string | null {
  *   * WAREHOUSE — Apricart's warehouse: its delivery queue, for the same reason.
  *   * APRICART_SUPPORT — Apricart's support agents: the shared support pages
  *     and read-only order directory. Each handler re-checks the read scope.
+ *   * FINANCE — Apricart finance: its payment KPIs, orders, invoices and
+ *     reports, for its assigned organizations (`lib/finance-access.ts`).
  */
 type TenantClaims = { organizationId: unknown; branchId: unknown }
 
@@ -421,6 +436,7 @@ const SINGLE_AREA_ROLES: ReadonlyArray<{
   { matches: isApricartExecutiveRole, allows: withinAreas(APRICART_EXECUTIVE_AREAS), home: APRICART_EXECUTIVE_HOME },
   { matches: isWarehouseRole, allows: withinAreas(WAREHOUSE_AREAS), home: WAREHOUSE_HOME },
   { matches: isApricartSupportRole, allows: withinAreas(APRICART_SUPPORT_AREAS), home: APRICART_SUPPORT_HOME },
+  { matches: isFinanceRole, allows: isFinanceAreaAllowed, home: FINANCE_HOME },
 ]
 
 /**
@@ -527,6 +543,9 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   // Inside /reports, which Branch Admin and Group User also reach; the report
   // is Super Admin's and Head Office's, and both its endpoints re-check.
   { prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: [...CONSOLIDATED_INVOICE_REPORT_ROLES, "VIEWER"], home: "/reports" },
+  // The payment KPIs: Finance's landing page, and Super Admin's too. The
+  // endpoint behind it re-checks the role and fences Finance.
+  { prefix: FINANCE_HOME, roles: FINANCE_KPI_ROLES, home: "/dashboard" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */

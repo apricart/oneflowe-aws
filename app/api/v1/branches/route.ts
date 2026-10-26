@@ -5,6 +5,7 @@ import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { branches as branchesTable } from "@/db/schema"
 import { and, desc, eq, sql, inArray } from "drizzle-orm"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { getRequestScope } from "@/lib/auth"
 import { handleError } from "@/lib/error-handler"
 import { logError } from "@/lib/global-logger"
@@ -141,7 +142,7 @@ export async function GET(req: Request) {
     // VIEWER is on the GET alone, for the branch filter on its dashboard. Branch
     // creation and every other method below keep their own narrower allowlists,
     // so a read-only account cannot reach them.
-    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL", "VIEWER"])
+    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL", "VIEWER", "FINANCE"])
     if (err) return err
 
     const { searchParams } = new URL(req.url)
@@ -166,7 +167,11 @@ export async function GET(req: Request) {
     }
 
     // Determine which organizations to query based on role
-    const scopedOrgIds = getScopedOrganizationIds(scope, orgIds)
+    // Finance lists the branches of its assigned organizations, narrowed by the
+    // request and never widened past them.
+    const financeScope = await resolveFinanceReadScope({ role: scope.role, userId: scope.userId, requestedOrganizationIds: orgIds })
+    if (financeScope && !financeScope.ok) return error(financeScope.error, financeScope.status)
+    const scopedOrgIds = financeScope ? financeScope.organizationIds : getScopedOrganizationIds(scope, orgIds)
 
     // A Viewer pinned to a branch lists that branch alone, so its dashboard
     // filter cannot even name a sibling. An unpinned one lists its tenant.

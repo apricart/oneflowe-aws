@@ -22,6 +22,8 @@ const ROLE_LEVEL: Record<SystemRole, number> = {
   WAREHOUSE: 7,
   // And Apricart's support agents (`lib/apricart-support-access.ts`).
   APRICART_SUPPORT: 7,
+  // And Apricart finance staff (`lib/finance-access.ts`).
+  FINANCE: 7,
   SUPER_ADMIN: 8,
 }
 
