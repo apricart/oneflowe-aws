@@ -727,28 +727,28 @@
       "idx": 103,
       "version": "7",
       "when": 1791104400000,
-      "tag": "20261028120000_join_request_branch_hierarchy",
+      "tag": "20261028120000_add_rider_delivery",
       "breakpoints": true
     },
     {
       "idx": 104,
       "version": "7",
-      "when": 1791104400001,
-      "tag": "20261028120000_add_rider_delivery",
+      "when": 1791108000000,
+      "tag": "20261029120000_rider_city_warehouse",
       "breakpoints": true
     },
     {
       "idx": 105,
       "version": "7",
-      "when": 1791108000000,
-      "tag": "20261029120000_apricart_warehouses",
+      "when": 1791108000001,
+      "tag": "20261028120000_join_request_branch_hierarchy",
       "breakpoints": true
     },
     {
       "idx": 106,
       "version": "7",
-      "when": 1791108000001,
-      "tag": "20261029120000_rider_city_warehouse",
+      "when": 1791108000002,
+      "tag": "20261029120000_apricart_warehouses",
       "breakpoints": true
     },
     {

@@ -1,5 +1,6 @@
 import { error, ok, requireApiRole } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
+import { INVOICE_CODE_MISSING_MESSAGE } from "@/lib/invoice-number"
 import { withRateLimit } from "@/lib/rate-limiter"
 import { canManageRiders } from "@/lib/rider-access"
 import { approvePod } from "@/lib/server/rider-assignments"
@@ -31,6 +32,9 @@ export async function POST(
       return error(`Cannot approve POD from status ${result.status}`, 409)
     }
     if (result.kind === "progress_failed") {
+      if (result.outcome === "invoice-code-missing") {
+        return error(INVOICE_CODE_MISSING_MESSAGE, 409)
+      }
       return error(`Could not mark order delivered (${result.outcome})`, 409)
     }
 

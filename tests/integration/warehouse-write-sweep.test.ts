@@ -22,6 +22,7 @@ import {
   warehouseCityOrganizations,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
+import { RIDER_OPS_API_RULES } from "@/lib/rider-access"
 import { WAREHOUSE_API_RULES } from "@/lib/warehouse-access"
 
 import { hasTestDatabase } from "./helpers/pricing-fixtures"
@@ -367,7 +368,10 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every write handler
 
   it("is refused by every write handler outside its own, and changes nothing it must not", async () => {
     const before = await protectedState()
-    const ownRoutes = new Set(WAREHOUSE_API_RULES.map((rule) => rule.route))
+    const ownRoutes = new Set([
+      ...WAREHOUSE_API_RULES.map((rule) => rule.route),
+      ...RIDER_OPS_API_RULES.map((rule) => rule.route),
+    ])
     const admitted: string[] = []
     let calls = 0
 
