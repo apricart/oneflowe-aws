@@ -164,6 +164,9 @@ describe.skipIf(!hasTestDatabase)("organization price contract validity", () => 
       actors[label] = { id: row.id, email, role, organizationId, branchId: null }
     }
     await person("sa", "SUPER_ADMIN", roleIds.superAdmin, null)
+    // Left pending by the delivery tests, so the re-arm test owns a stale reminder
+    // whatever other Super Admins the database happens to hold.
+    await person("sa2", "SUPER_ADMIN", roleIds.superAdmin, null)
     await person("ho", "HEAD_OFFICE", roleIds.headOffice, org.expiring)
     await person("execA", "APRICART_EXECUTIVE", roleIds.executive, null)
     await person("execB", "APRICART_EXECUTIVE", roleIds.executive, null)
@@ -378,7 +381,8 @@ describe.skipIf(!hasTestDatabase)("organization price contract validity", () => 
       const before = await outboxFor(org.expiring)
       await db.update(organizations).set({ priceContractValidUntil: dayFromToday(5) }).where(eq(organizations.id, org.expiring))
 
-      const stale = before.find((entry) => entry.status === "PENDING")!
+      const stale = before.find((entry) => entry.recipientUserId === actors.sa2.id)!
+      expect(stale.status).toBe("PENDING")
       expect(await deliverClaimedPriceContractEmail(await claimed(stale.id))).toBe("skipped")
       expect(await statusOf(stale.id)).toBe("SKIPPED")
       expect(sendPriceContractReminderEmail).not.toHaveBeenCalled()
