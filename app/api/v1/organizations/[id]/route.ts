@@ -42,12 +42,15 @@ import {
 } from "@/lib/ordering-block-threshold"
 import { ORGANIZATION_BUDGETS_AUDIT_ACTION } from "@/lib/organization-budget-policy"
 import { ORGANIZATION_MANAGED_ORDERING_AUDIT_ACTION } from "@/lib/order-desk-access"
+import { PRICE_CONTRACT_VALIDITY_AUDIT_ACTION } from "@/lib/price-contract-validity"
+import { withoutPriceContractValidity } from "@/lib/server/price-contract-reminders"
 
 type OrganizationUpdateInput = ReturnType<typeof organizationUpdateSchema.parse>
 
 // An explicit allowlist, never a spread of the body.
 const VERBATIM_ORGANIZATION_FIELDS = [
   "emailDomain",
+  "priceContractValidUntil",
   "orderApproverRole",
   "orderApprovalRequired",
   "blockOrderingOnUnpaidInvoices",
@@ -159,7 +162,9 @@ export async function GET(
 
   const [item] = await db.select().from(organizations).where(eq(organizations.id, orgId))
   if (!item) return error("Not found", 404)
-  return ok({ item })
+  // The contract date is Apricart's commercial reminder, read by Super Admin only.
+  const scope = await getRequestScope()
+  return ok({ item: scope?.role === "SUPER_ADMIN" ? item : withoutPriceContractValidity(item) })
 }
 
 export async function PATCH(
@@ -193,6 +198,7 @@ export async function PATCH(
           strnNumber: organizations.strnNumber,
           orderApproverRole: organizations.orderApproverRole,
           emailDomain: organizations.emailDomain,
+          priceContractValidUntil: organizations.priceContractValidUntil,
           orderApprovalRequired: organizations.orderApprovalRequired,
           blockOrderingOnUnpaidInvoices: organizations.blockOrderingOnUnpaidInvoices,
           blockOrderingOnUnacknowledgedDeliveries: organizations.blockOrderingOnUnacknowledgedDeliveries,
@@ -320,6 +326,7 @@ export async function PATCH(
 
       await auditManagedOrderingToggle(tx, { userId: scope.userId, orgId, body, existingOrganization })
       await auditTaxIdentifiers(tx, { userId: scope.userId, orgId, patch, existingOrganization })
+      await auditPriceContractValidity(tx, { userId: scope.userId, orgId, body, existingOrganization })
 
       return { kind: "updated", item: updatedOrganization } as const
     })
@@ -506,6 +513,37 @@ async function auditTaxIdentifiers(
     entity: "organization",
     entityId: String(orgId),
     metadata: changes,
+  })
+}
+
+/**
+ * The contract date decides when Super Admin and the organization's executives
+ * are reminded to review its prices, so a change is on the trail with what it
+ * replaced (plans/OF-PRICE-CONTRACT-organization-price-contract-validity.md).
+ */
+async function auditPriceContractValidity(
+  tx: OrganizationTx,
+  { userId, orgId, body, existingOrganization }: {
+    userId: string
+    orgId: number
+    body: OrganizationUpdateInput
+    existingOrganization: { priceContractValidUntil: string | null }
+  },
+): Promise<void> {
+  if (
+    body.priceContractValidUntil === undefined
+    || body.priceContractValidUntil === existingOrganization.priceContractValidUntil
+  ) return
+  await tx.insert(auditLogs).values({
+    userId,
+    organizationId: orgId,
+    action: PRICE_CONTRACT_VALIDITY_AUDIT_ACTION,
+    entity: "organization",
+    entityId: String(orgId),
+    metadata: {
+      previousPriceContractValidUntil: existingOrganization.priceContractValidUntil,
+      priceContractValidUntil: body.priceContractValidUntil,
+    },
   })
 }
 

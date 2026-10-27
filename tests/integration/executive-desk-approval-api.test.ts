@@ -29,6 +29,7 @@ import {
   orderCorrectionRequests,
   orders,
   organizations,
+  users,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 import { getImage } from "@/lib/server/image-storage"
@@ -53,7 +54,9 @@ import {
  *   * every desk order starts PENDING;
  *   * an executive decides only desk orders, only in organizations assigned to them;
  *   * nobody in the tenant decides a desk order, and its requesters cannot rewrite it;
- *   * only Super Admin assigns, and every assignment is audited.
+ *   * only Super Admin assigns, and every assignment is audited;
+ *   * Super Admin decides every desk order from Order Desk Team, and still no
+ *     tenant order (plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md).
  */
 vi.mock("next-auth", () => ({ getServerSession: vi.fn() }))
 vi.mock("@/lib/auth-options", () => ({ authOptions: {} }))
@@ -261,9 +264,9 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
       expect((await putOrganizations(f.executiveId, { organizationIds: [] })).status).toBe(401)
     })
 
-    it("refuses the executive endpoints to every other role", async () => {
+    it("refuses the executive endpoints to every other role but Super Admin", async () => {
       const orderId = await deskOrder()
-      for (const kind of ["super", "head", "desk", "portal"] as const) {
+      for (const kind of ["head", "desk", "portal"] as const) {
         signIn(kind)
         expect((await list()).status, kind).toBe(403)
         expect((await approve(orderId, { expectedUpdatedAt: null })).status, kind).toBe(403)
@@ -723,11 +726,131 @@ describe.skipIf(!hasTestDatabase)("Apricart Executives approving Order Desk orde
       signIn("executiveC")
       expect((await attachment(orderId)).status).toBe(404)
 
+      // Super Admin reads every desk order's screenshot, with no assignment.
+      const fromPortal = await portalOrder()
+      signIn("super")
+      expect((await attachment(orderId)).status).toBe(200)
+      expect((await attachment(fromPortal)).status).toBe(404)
+
       // A desk order with no screenshot (entered before one was required) is the same 404.
       const withoutScreenshot = await deskOrder()
       await db.update(orders).set({ intakeAttachmentKey: null }).where(eq(orders.id, withoutScreenshot))
       signIn("executive")
       expect((await attachment(withoutScreenshot)).status).toBe(404)
+    })
+  })
+
+  describe("Super Admin, from Order Desk Team", () => {
+    const auditOf = async (action: string, orderId: number) => {
+      const [row] = await db.select().from(auditLogs).where(and(eq(auditLogs.action, action), eq(auditLogs.entityId, String(orderId))))
+      return row
+    }
+
+    it("lists every desk order in every organization, with no assignment of its own, and no tenant order", async () => {
+      expect(await db.select().from(apricartExecutiveAssignments).where(eq(apricartExecutiveAssignments.userId, f.superAdminId)))
+        .toEqual([])
+      const atA = await deskOrder()
+      const atB = await deskOrder({ atB: true, quantity: 1 })
+      const fromPortal = await portalOrder()
+
+      signIn("super")
+      const atAList = await list(`status=all&limit=50&organizationId=${f.organizationA}`)
+      expect(atAList.status).toBe(200)
+      expect(atAList.headers.get("cache-control")).toContain("no-store")
+      const idsAtA = atAList.body.items.map((item: any) => item.id)
+      expect(idsAtA).toContain(atA)
+      // The customer's own staff's order is never on the desk's list.
+      expect(idsAtA).not.toContain(fromPortal)
+      for (const item of atAList.body.items) expect(item.organizationId).toBe(f.organizationA)
+
+      const atBList = await list(`status=awaiting_approval&limit=50&organizationId=${f.organizationB}`)
+      expect(atBList.body.items.map((item: any) => item.id)).toContain(atB)
+      expect(atBList.body.items.find((item: any) => item.id === atB)).toMatchObject({ canApprove: true, canReject: true, canReturn: true })
+
+      const offered = atAList.body.organizations.map((organization: any) => organization.id)
+      expect(offered).toEqual(expect.arrayContaining([f.organizationA, f.organizationB]))
+    })
+
+    it("approves a desk order as Super Admin, telling no one", async () => {
+      const orderId = await deskOrder()
+      signIn("super")
+      const approved = await approve(orderId)
+      expect(approved.status).toBe(200)
+      expect(JSON.stringify(approved.body)).not.toMatch(/approvalToken|token/i)
+
+      const row = await storedOrder(orderId)
+      expect(row.status).toBe("APPROVED")
+      expect(row.approvedByUserId).toBe(f.superAdminId)
+      const audit = await auditOf("ORDER_APPROVED", orderId)
+      expect(audit.userId).toBe(f.superAdminId)
+      expect(audit.metadata).toMatchObject({ actorRole: "SUPER_ADMIN", decisionRole: "SUPER_ADMIN" })
+      expect(await db.select().from(notifications).where(eq(notifications.orderId, orderId))).toEqual([])
+      expect(await db.select().from(emailOutbox).where(eq(emailOutbox.orderId, orderId))).toEqual([])
+
+      // Decided once.
+      expect((await approve(orderId)).status).toBe(400)
+    })
+
+    it("refuses to approve a version it did not see", async () => {
+      const orderId = await deskOrder()
+      const seen = await versionOf(orderId)
+      signIn("desk")
+      expect((await deskEdit(orderId, 3)).status).toBe(200)
+      signIn("super")
+      expect((await approve(orderId, { expectedUpdatedAt: seen })).status).toBe(409)
+      expect((await storedOrder(orderId)).status).toBe("PENDING")
+    })
+
+    it("rejects a desk order, releasing its stock, and sends another back to the desk", async () => {
+      const rejected = await deskOrder({ quantity: 2 })
+      const stockBefore = await stock()
+      signIn("super")
+      expect((await reject(rejected)).status).toBe(200)
+      expect((await storedOrder(rejected)).status).toBe("REJECTED")
+      expect(await stock()).toBe(stockBefore + 2)
+      expect((await auditOf("ORDER_REJECTED", rejected)).metadata).toMatchObject({ actorRole: "SUPER_ADMIN", decisionRole: "SUPER_ADMIN" })
+
+      const returned = await deskOrder()
+      signIn("super")
+      expect((await giveBack(returned)).status).toBe(200)
+      const row = await storedOrder(returned)
+      expect(row.status).toBe("PENDING")
+      expect(row.returnedForCorrectionAt).toBeInstanceOf(Date)
+      const [round] = await db.select().from(orderCorrectionRequests).where(eq(orderCorrectionRequests.orderId, returned))
+      expect(round).toMatchObject({ requestedByUserId: f.superAdminId, requestedByRole: "SUPER_ADMIN" })
+      expect(await db.select().from(notifications).where(eq(notifications.orderId, returned))).toEqual([])
+      // With the desk now: approving it waits for the resubmission.
+      expect((await approve(returned)).status).toBe(409)
+    })
+
+    it("cannot decide an order the customer's own staff raised, through these routes or the tenant's", async () => {
+      const orderId = await portalOrder()
+      signIn("super")
+      expect((await approve(orderId, { expectedUpdatedAt: await versionOf(orderId) })).status).toBe(404)
+      expect((await reject(orderId)).status).toBe(404)
+      expect((await giveBack(orderId)).status).toBe(404)
+      expect((await tenantDecision(tenantApproveRoute, orderId, {})).status).toBe(403)
+      expect((await tenantDecision(tenantRejectRoute, orderId, { reason: "No" })).status).toBe(403)
+      expect((await tenantDecision(tenantReturnRoute, orderId, { comment: "Fix it" })).status).toBe(403)
+      const row = await storedOrder(orderId)
+      expect(row.status).toBe("PENDING")
+      expect(row.returnedForCorrectionAt).toBeNull()
+    })
+
+    it("reaches nothing once its account is deactivated, whatever the session says", async () => {
+      const orderId = await deskOrder()
+      await db.update(users).set({ isActive: false }).where(eq(users.id, f.superAdminId))
+      try {
+        signIn("super")
+        const { body } = await list("status=all")
+        expect(body.items).toEqual([])
+        expect(body.organizations).toEqual([])
+        expect((await approve(orderId)).status).toBe(403)
+        expect((await attachment(orderId)).status).toBe(404)
+      } finally {
+        await db.update(users).set({ isActive: true }).where(eq(users.id, f.superAdminId))
+      }
+      expect((await storedOrder(orderId)).status).toBe("PENDING")
     })
   })
 

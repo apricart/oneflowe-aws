@@ -785,6 +785,20 @@
       "when": 1791122400000,
       "tag": "20261102120000_finance_role",
       "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1791126000000,
+      "tag": "20261103120000_organization_price_contract_validity",
+      "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1791129600000,
+      "tag": "20261104120000_warehouse_route_rules",
+      "breakpoints": true
     }
   ]
 }

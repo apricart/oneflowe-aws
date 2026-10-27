@@ -248,6 +248,9 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/apricart-warehouses/[id]/route.ts", module: "lib/server/apricart-warehouses.ts" },
   { file: "app/api/v1/apricart-warehouses/[id]/members/route.ts", module: "lib/server/apricart-warehouses.ts" },
   { file: "app/api/v1/apricart-warehouses/[id]/branches/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  // So do its organization/city rules and an operator's branch scope (phase 2).
+  { file: "app/api/v1/apricart-warehouses/[id]/rules/route.ts", module: "lib/server/apricart-warehouses.ts" },
+  { file: "app/api/v1/apricart-warehouses/[id]/member-scope/route.ts", module: "lib/server/apricart-warehouses.ts" },
   // Moving one order to another warehouse records inside the move.
   { file: "app/api/v1/orders/[id]/fulfillment-warehouse/route.ts", module: "lib/server/order-warehouse-transfer.ts" },
 ]
@@ -328,6 +331,15 @@ const NOT_AUDITED: readonly { file: string; reason: string }[] = [
       "`email_outbox` already carries status, attempts, recipient, template and "
       + "payload for every message, which *is* the delivery record. A row per "
       + "cron sweep would add nothing a reviewer cannot read there.",
+  },
+  {
+    file: "app/api/v1/organizations/cron/price-contract-reminders/route.ts",
+    reason:
+      "The sweep only queues reminders. Each one is a `notifications` and an "
+      + "`email_outbox` row under a unique event key naming the organization, "
+      + "the contract date and the recipient, which is the record of who was "
+      + "reminded and when. The contract date itself is audited where Super "
+      + "Admin changes it (UPDATE_ORGANIZATION_PRICE_CONTRACT_VALIDITY).",
   },
   {
     file: "app/api/v1/group-portal/draft/route.ts",

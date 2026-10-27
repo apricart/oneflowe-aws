@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest"
 import {
   DESK_ORDER_APPROVAL_BASIS,
   canExecutiveDecideOrder,
+  canSuperAdminDecideDeskOrder,
   decisionCapabilitiesForOrder,
   decisionQueuesNotifications,
+  deskApprovalReachIsEmpty,
   isDeskEnteredOrder,
   orderDecisionAuthority,
 } from "@/lib/order-desk-approval"
@@ -67,12 +69,43 @@ describe("an executive deciding an order", () => {
   })
 })
 
+describe("Super Admin deciding an order", () => {
+  const deskOrder = { createdByRole: "ORDER_DESK", organizationId: 11, branchOrganizationId: 11 }
+
+  it("may decide any desk order, with no assignment", () => {
+    expect(canSuperAdminDecideDeskOrder(deskOrder)).toBe(true)
+    expect(canSuperAdminDecideDeskOrder({ ...deskOrder, organizationId: 4, branchOrganizationId: 4 })).toBe(true)
+  })
+
+  it.each(["ORDER_PORTAL", "GROUP_ORDER_PORTAL", "HEAD_OFFICE", "SUPER_ADMIN", null, undefined])(
+    "may not decide an order created by %s — the tenant's approvers keep those",
+    (createdByRole) => {
+      expect(canSuperAdminDecideDeskOrder({ ...deskOrder, createdByRole })).toBe(false)
+    },
+  )
+
+  it("refuses an order whose branch belongs to another organization, or with no organization", () => {
+    expect(canSuperAdminDecideDeskOrder({ ...deskOrder, branchOrganizationId: 4 })).toBe(false)
+    expect(canSuperAdminDecideDeskOrder({ ...deskOrder, branchOrganizationId: null })).toBe(false)
+    expect(canSuperAdminDecideDeskOrder({ ...deskOrder, organizationId: null, branchOrganizationId: null })).toBe(false)
+  })
+})
+
+describe("a desk approval reach", () => {
+  it("is empty only as an organization list with nothing in it", () => {
+    expect(deskApprovalReachIsEmpty({ kind: "organizations", organizationIds: [] })).toBe(true)
+    expect(deskApprovalReachIsEmpty({ kind: "organizations", organizationIds: [3] })).toBe(false)
+    expect(deskApprovalReachIsEmpty({ kind: "all" })).toBe(false)
+  })
+})
+
 describe("decision notices", () => {
-  it("are queued for every tenant decision, and not for an executive's", () => {
+  it("are queued for every tenant decision, and not for a desk order's decider", () => {
     for (const role of ["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"]) {
       expect(decisionQueuesNotifications(role)).toBe(true)
     }
     expect(decisionQueuesNotifications("APRICART_EXECUTIVE")).toBe(false)
+    expect(decisionQueuesNotifications("SUPER_ADMIN")).toBe(false)
   })
 })
 

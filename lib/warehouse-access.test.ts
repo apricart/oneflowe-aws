@@ -310,7 +310,9 @@ describe("whole-city assignments", () => {
     expect(scope).toContain("innerJoin(branches, warehouseCityBranchOn())")
     expect(scope).toContain("innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())")
     expect(scope).toContain('cityQuery.for("share", { of: [warehouseCityAssignments, warehouseCityOrganizations] })')
-    expect(scope).toContain("assignedBranchIds: [...assignments, ...cityBranches].map((row) => row.branchId)")
+    // Phase 2 moved the two assignment reads into loadAssignedBranchIds, which
+    // the loader still runs in the "branch" mode (plans/OF-WAREHOUSE-order-ownership-and-transfer.md).
+    expect(scope).toContain("return [...assignments, ...cityBranches].map((row) => row.branchId)")
   })
 
   // A city rule reaches only the branches of the organizations chosen for the
@@ -342,6 +344,11 @@ describe("whole-city assignments", () => {
       "lib/server/warehouse-order-notifications.ts",
       "lib/server/warehouse-scope.ts",
       "lib/server/warehouse-team.ts",
+      // Reads each account's cities and organizations and turns exactly their
+      // product into warehouse rules — the same intersection — then proves with
+      // the reach loader that nobody's branches change before it commits
+      // (plans/OF-WAREHOUSE-order-ownership-and-transfer.md, phase 2).
+      "scripts/migrate-warehouse-city-rules.ts",
     ])
 
     // The reach and both recipient lists match a branch through the shared rule.

@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Runs the OneFlowe price contract reminder sweep once a day at 09:00 PKT
+  (04:00 UTC) via EventBridge Rule + API Destination. It reminds Super Admins
+  and assigned Apricart Executives when an organization's price contract enters
+  its last 7 days. The sweep is idempotent; it also runs whenever a Super Admin
+  or executive opens their dashboard, so this schedule is the backstop.
+  See plans/OF-PRICE-CONTRACT-organization-price-contract-validity.md.
+
+  NOTE: EventBridge Rule schedules are always UTC. 04:00 UTC = 09:00 PKT (UTC+5).
+
+Parameters:
+  AppUrl:
+    Type: String
+    Description: "Full base URL of the app, no trailing slash."
+
+  CronSecret:
+    Type: String
+    NoEcho: true
+    Description: "The CRON_SECRET env var value set in the app."
+
+  ScheduleExpression:
+    Type: String
+    Default: "cron(0 4 * * ? *)"
+    Description: "EventBridge cron in UTC. Default: 04:00 UTC = 09:00 PKT."
+
+Resources:
+
+  # Stores the Authorization header (Bearer <secret>) used on every call.
+  CronApiConnection:
+    Type: AWS::Events::Connection
+    Properties:
+      Name: !Sub "${AWS::StackName}-connection"
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: Authorization
+          ApiKeyValue: !Sub "Bearer ${CronSecret}"
+
+  CronApiDestination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: !Sub "${AWS::StackName}-destination"
+      ConnectionArn: !GetAtt CronApiConnection.Arn
+      HttpMethod: POST
+      InvocationEndpoint: !Sub "${AppUrl}/api/v1/organizations/cron/price-contract-reminders"
+      InvocationRateLimitPerSecond: 1
+
+  # Principal must be events.amazonaws.com (not scheduler.amazonaws.com).
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeApiDestination
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:InvokeApiDestination
+                Resource: !GetAtt CronApiDestination.Arn
+
+  PriceContractReminderRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-price-contract-reminders"
+      Description: "Reminds Super Admins and assigned executives of price contracts expiring within 7 days"
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt CronApiDestination.Arn
+          Id: PriceContractReminderTarget
+          RoleArn: !GetAtt SchedulerRole.Arn
+          Input: "{}"
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 600
+
+Outputs:
+  RuleName:
+    Value: !Ref PriceContractReminderRule
+    Description: EventBridge Rule name
+
+  ApiDestinationArn:
+    Value: !GetAtt CronApiDestination.Arn
+    Description: ARN of the EventBridge API destination

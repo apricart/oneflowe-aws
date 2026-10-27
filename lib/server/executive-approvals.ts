@@ -14,14 +14,17 @@ import {
   type ExecutiveApprovalTab,
 } from "@/lib/executive-approval-query"
 import { normalizeFulfillmentStatus, type FulfillmentStatus } from "@/lib/fulfillment-status"
-import type { IntakeChannel } from "@/lib/order-desk-access"
+import { ORDER_DESK_ROLE, type IntakeChannel } from "@/lib/order-desk-access"
+import { deskApprovalReachIsEmpty, type DeskApprovalReach } from "@/lib/order-desk-approval"
 import { escapeLikePattern } from "@/lib/utils"
-import { executiveApprovalOrderCondition, loadExecutiveApprovalReach } from "@/lib/server/apricart-executive-scope"
+import { deskApprovalOrderCondition, loadDeskApprovalReach } from "@/lib/server/apricart-executive-scope"
 
 /**
  * An Apricart Executive's approval list: the Order Desk orders in the
  * organizations assigned to them, read **through** that reach
- * (`executiveApprovalOrderCondition`) so a filter can only narrow it.
+ * (`deskApprovalOrderCondition`) so a filter can only narrow it. Super Admin
+ * reads the same list for every desk order, from Order Desk Team
+ * (plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md).
  *
  * Amounts and lines are included — the executive approves money, and no
  * price-visibility setting restricts the role (`lib/price-visibility.ts`).
@@ -75,7 +78,10 @@ export type ExecutiveApprovalItem = ExecutiveApprovalActions & {
 export type ExecutiveApprovalPage = {
   items: ExecutiveApprovalItem[]
   counts: ExecutiveApprovalCounts
-  /** The organizations this executive approves for — the filter's choices. */
+  /**
+   * The filter's choices: the organizations this executive approves for, or,
+   * for Super Admin, every organization the desk has entered an order for.
+   */
   organizations: { id: number; name: string }[]
   pagination: { page: number; limit: number; total: number; totalPages: number }
 }
@@ -106,17 +112,29 @@ function tabCount(tab: ExecutiveApprovalTab) {
     : sql<number>`COUNT(*)`.mapWith(Number)
 }
 
+/** The organizations the filter offers: the executive's assigned ones, or every one the desk has ordered for. */
+function reachOrganizationsCondition(reach: DeskApprovalReach): SQL {
+  if (reach.kind === "organizations") return inArray(organizations.id, [...reach.organizationIds])
+  return inArray(
+    organizations.id,
+    db
+      .selectDistinct({ organizationId: orders.organizationId })
+      .from(orders)
+      .where(and(eq(orders.createdByRole, ORDER_DESK_ROLE), isNotNull(orders.organizationId))),
+  )
+}
+
 const NO_COUNTS: ExecutiveApprovalCounts = { awaiting_approval: 0, returned: 0, approved: 0, rejected: 0, all: 0 }
 
 export async function listExecutiveApprovals(
   userId: string,
   query: ExecutiveApprovalListQuery,
 ): Promise<ExecutiveApprovalPage> {
-  const reach = await loadExecutiveApprovalReach(db, userId)
+  const reach = await loadDeskApprovalReach(db, userId)
   const empty = { items: [], counts: NO_COUNTS, organizations: [], pagination: { page: query.page, limit: query.limit, total: 0, totalPages: 0 } }
-  if (reach.length === 0) return empty
+  if (deskApprovalReachIsEmpty(reach)) return empty
 
-  const conditions: SQL[] = [executiveApprovalOrderCondition(reach)]
+  const conditions: SQL[] = [deskApprovalOrderCondition(reach)]
   // Filters only narrow what the reach above already allows.
   if (query.organizationId !== null) conditions.push(eq(orders.organizationId, query.organizationId))
   if (query.search) {
@@ -143,7 +161,7 @@ export async function listExecutiveApprovals(
     db
       .select({ id: organizations.id, name: organizations.name })
       .from(organizations)
-      .where(inArray(organizations.id, reach))
+      .where(reachOrganizationsCondition(reach))
       .orderBy(asc(organizations.name)),
   ])
 
@@ -244,13 +262,13 @@ export async function listExecutiveApprovals(
   }
 }
 
-/** One desk order the executive reaches, or null. Read through the reach, never around it. */
+/** One desk order the executive (or Super Admin) reaches, or null. Read through the reach, never around it. */
 export async function loadExecutiveApprovalOrder(userId: string, orderId: number) {
-  const reach = await loadExecutiveApprovalReach(db, userId)
+  const reach = await loadDeskApprovalReach(db, userId)
   const [order] = await db
     .select({ id: orders.id, intakeAttachmentKey: orders.intakeAttachmentKey })
     .from(orders)
-    .where(and(eq(orders.id, orderId), executiveApprovalOrderCondition(reach)))
+    .where(and(eq(orders.id, orderId), deskApprovalOrderCondition(reach)))
     .limit(1)
   return order ?? null
 }

@@ -45,6 +45,10 @@ import {
   isWarehouseEmailTemplate,
 } from "@/lib/server/warehouse-order-notifications"
 import { loadApprovalLevelSettings, loadLevelHolders } from "@/lib/server/order-approval-routing"
+import {
+  deliverClaimedPriceContractEmail,
+  isPriceContractEmailTemplate,
+} from "@/lib/server/price-contract-reminders"
 
 type OrderEventInput = {
   id: number
@@ -1009,11 +1013,13 @@ async function deliverClaimedOrderEmail(claimed: ClaimedOutboxRow): Promise<Deli
  *
  * The outbox carries more than one kind of mail. An order lifecycle row takes
  * exactly the path it always has; a support row takes the support path, and a
- * warehouse order-stage row the warehouse path.
+ * warehouse order-stage row the warehouse path, and a price contract reminder
+ * its own path.
  */
 function deliverClaimedEmail(row: ClaimedOutboxRow): Promise<DeliveryOutcome> {
   if (isSupportEmailTemplate(row.template)) return deliverClaimedSupportEmail(row)
   if (isWarehouseEmailTemplate(row.template)) return deliverClaimedWarehouseEmail(row)
+  if (isPriceContractEmailTemplate(row.template)) return deliverClaimedPriceContractEmail(row)
   return deliverClaimedOrderEmail(row)
 }
 

@@ -6,14 +6,19 @@ import { branches, orders, organizations, roles, users } from "@/db/schema"
 import { db } from "@/lib/db"
 import type { RequestScope } from "@/lib/auth"
 import { APRICART_EXECUTIVE_ROLE, isApricartExecutiveRole } from "@/lib/apricart-executive-access"
-import { canExecutiveDecideOrder, isDeskEnteredOrder } from "@/lib/order-desk-approval"
+import {
+  canExecutiveDecideOrder,
+  canSuperAdminDecideDeskOrder,
+  isDeskEnteredOrder,
+  SUPER_ADMIN_DESK_APPROVER_ROLE,
+} from "@/lib/order-desk-approval"
 import {
   canMakeOrderDecision,
   isOrderApproverRole,
   type OrderApproverRole,
   type OrderDecisionRole,
 } from "@/lib/order-approver-role"
-import { loadExecutiveApprovalReach } from "@/lib/server/apricart-executive-scope"
+import { loadDeskApprovalReach, loadExecutiveApprovalReach } from "@/lib/server/apricart-executive-scope"
 import { levelledDecisionFor } from "@/lib/server/order-approval-routing"
 import {
   GROUP_USER_ROLE,
@@ -63,8 +68,9 @@ export type OrderDecisionAuthorization =
  *
  * Who decides is fixed by where the order came from
  * (`lib/order-desk-approval.ts`): an order the Order Desk entered is decided
- * by an Apricart Executive assigned to its organization, and by no one in the
- * tenant; every other order by the tenant's approvers, exactly as before.
+ * by an Apricart Executive assigned to its organization, or by Super Admin
+ * from Order Desk Team, and by no one in the tenant; every other order by the
+ * tenant's approvers, exactly as before.
  */
 export async function authorizeOrderDecision(
   tx: any,
@@ -72,6 +78,9 @@ export async function authorizeOrderDecision(
 ): Promise<OrderDecisionAuthorization> {
   if (isApricartExecutiveRole(input.scope.role)) {
     return authorizeExecutiveOrderDecision(tx, input)
+  }
+  if (input.scope.role === SUPER_ADMIN_DESK_APPROVER_ROLE) {
+    return authorizeSuperAdminDeskOrderDecision(tx, input)
   }
   if (!canAttemptOrderDecision(input.scope.role)) {
     return { ok: false, reason: "forbidden" }
@@ -234,6 +243,65 @@ async function authorizeExecutiveOrderDecision(
     // Recorded for the trail only; it does not decide anything here.
     configuredApproverRole: organization.orderApproverRole,
     decisionRole: APRICART_EXECUTIVE_ROLE,
+    // Order Desk orders are never levelled.
+    approvalLevel: null,
+  }
+}
+
+/**
+ * Super Admin deciding an Order Desk order, from Order Desk Team. It reaches
+ * every desk order and nothing else: any other order is "not found" here, so
+ * Super Admin gains no authority over the tenant's own orders (whose routes
+ * refuse the role before they get this far anyway). The account is re-read on
+ * this transaction, so a deactivated Super Admin decides nothing while an old
+ * token is still in flight; the organization takes the same share lock as
+ * every other decision path.
+ * See plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md.
+ */
+async function authorizeSuperAdminDeskOrderDecision(
+  tx: any,
+  input: { orderId: number; scope: RequestScope },
+): Promise<OrderDecisionAuthorization> {
+  const reach = await loadDeskApprovalReach(tx, input.scope.userId)
+  if (reach.kind !== "all") return { ok: false, reason: "forbidden" }
+
+  const [order] = await tx
+    .select()
+    .from(orders)
+    .where(eq(orders.id, input.orderId))
+    .limit(1)
+  if (!order?.organizationId || !isDeskEnteredOrder(order)) return { ok: false, reason: "not-found" }
+
+  const [organization] = await tx
+    .select({ orderApproverRole: organizations.orderApproverRole })
+    .from(organizations)
+    .where(eq(organizations.id, order.organizationId))
+    .for("share")
+    .limit(1)
+  const [branch] = await tx
+    .select({ organizationId: branches.organizationId })
+    .from(branches)
+    .where(eq(branches.id, order.branchId))
+    .limit(1)
+
+  if (
+    !organization
+    || !isOrderApproverRole(organization.orderApproverRole)
+    || !canSuperAdminDecideDeskOrder({
+      createdByRole: order.createdByRole,
+      organizationId: order.organizationId,
+      branchOrganizationId: branch?.organizationId,
+    })
+  ) {
+    return { ok: false, reason: "not-found" }
+  }
+
+  return {
+    ok: true,
+    order,
+    // Recorded for the trail only; it does not decide anything here.
+    configuredApproverRole: organization.orderApproverRole,
+    decisionRole: SUPER_ADMIN_DESK_APPROVER_ROLE,
     // Order Desk orders are never levelled.
     approvalLevel: null,
   }

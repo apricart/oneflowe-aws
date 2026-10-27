@@ -91,6 +91,9 @@ export const APRICART_EXECUTIVE_API_RULES: readonly ApricartExecutiveApiRule[] =
     methods: ["GET"],
     pattern: /^\/api\/v1\/executive\/approvals\/\d+\/attachment$/,
   },
+  // The price contract alert on the workspace, for its assigned organizations
+  // (plans/OF-PRICE-CONTRACT-organization-price-contract-validity.md).
+  { route: "app/api/v1/price-contracts/alerts/route.ts", methods: ["GET"], pattern: /^\/api\/v1\/price-contracts\/alerts$/ },
   { route: "app/api/v1/users/me/change-password/route.ts", methods: ["POST"], pattern: /^\/api\/v1\/users\/me\/change-password$/ },
   {
     route: "app/api/v1/users/me/email-verification/send/route.ts",

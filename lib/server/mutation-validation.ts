@@ -100,6 +100,7 @@ import {
   requestedNewBranches,
 } from "@/lib/join-department-signup"
 import { findPakistanCity } from "@/lib/pakistan-cities"
+import { priceContractDateRefusal } from "@/lib/price-contract-validity"
 import {
   JOIN_EDIT_EMAIL_MAX_LENGTH,
   JOIN_EDIT_NAME_MAX_LENGTH,
@@ -465,6 +466,19 @@ const organizationEmailDomain = z
   })
   .transform((domain) => domain || null)
 
+// The last day the organization's agreed prices are valid for (YYYY-MM-DD,
+// Asia/Karachi). A blank string is null: no contract date recorded. A past day
+// is allowed (lib/price-contract-validity.ts).
+const organizationPriceContractValidUntil = z
+  .string()
+  .trim()
+  .max(10)
+  .superRefine((day, context) => {
+    const problem = day === "" ? null : priceContractDateRefusal(day)
+    if (problem) context.addIssue({ code: "custom", message: problem })
+  })
+  .transform((day) => day || null)
+
 // How many unpaid invoices / unacknowledged deliveries stop a branch ordering.
 // A JSON number only: "3" is refused, not coerced (lib/ordering-block-threshold.ts).
 const organizationOrderingBlockThreshold = z
@@ -479,6 +493,7 @@ export const organizationCreateSchema = z.object({
   ntnNumber: organizationNtnNumber.optional(),
   strnNumber: organizationStrnNumber.optional(),
   emailDomain: organizationEmailDomain.optional(),
+  priceContractValidUntil: organizationPriceContractValidUntil.nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional().default("active"),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional().default("BRANCH_ADMIN"),
   orderApprovalRequired: z.boolean().optional().default(true),
@@ -510,6 +525,8 @@ export const organizationUpdateSchema = z.object({
   // `null` or a blank string clears the domain, which closes self-service
   // joining for the organization.
   emailDomain: organizationEmailDomain.nullable().optional(),
+  // `null` or a blank string clears the contract date.
+  priceContractValidUntil: organizationPriceContractValidUntil.nullable().optional(),
   status: z.enum(["active", "inactive", "suspended"]).optional(),
   orderApproverRole: z.enum(ORDER_APPROVER_ROLES).optional(),
   orderApprovalRequired: z.boolean().optional(),
@@ -833,6 +850,36 @@ export const branchFulfillmentRoutesUpdateSchema = z.object({
     .max(BRANCH_ROUTE_MAX_PER_ORGANIZATION)
     .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
 }).strict()
+
+/**
+ * Puts every branch of one organization — or of one organization in one city
+ * (any spelling; the key is computed in SQL) — in this warehouse, or takes that
+ * rule away. One rule per request. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md (phase 2).
+ */
+export const warehouseRouteRuleUpdateSchema = z.object({
+  organizationId: z.number().int().positive().max(2_147_483_647),
+  city: z.string().trim().min(1).max(WAREHOUSE_CITY_MAX_LENGTH).nullable(),
+  assigned: z.boolean(),
+}).strict()
+
+/**
+ * Which of the warehouse's branches one operator works: all, or — one
+ * organization at a time, under the WAF's 8 KB — a selection.
+ */
+export const apricartWarehouseMemberScopeSchema = z.discriminatedUnion("scope", [
+  z.object({
+    userId: z.uuid(),
+    scope: z.literal("ALL"),
+  }).strict(),
+  z.object({
+    userId: z.uuid(),
+    scope: z.literal("SELECTED"),
+    organizationId: z.number().int().positive().max(2_147_483_647),
+    branchIds: z.array(z.number().int().positive().max(2_147_483_647))
+      .max(BRANCH_ROUTE_MAX_PER_ORGANIZATION)
+      .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
+  }).strict(),
+])
 
 const warehouseIdOrNull = z.number().int().positive().max(2_147_483_647).nullable()
 

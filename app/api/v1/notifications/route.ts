@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { notifications } from "@/db/schema"
 import { getOrderDecisionCapabilities } from "@/lib/server/order-decision-policy"
+import { PRICE_CONTRACT_EXPIRING_TEMPLATE } from "@/lib/price-contract-validity"
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -70,6 +71,8 @@ function notificationTitle(type: string) {
       return "Support request resolved"
     case "SUPPORT_THREAD_CLOSED":
       return "Support request closed"
+    case PRICE_CONTRACT_EXPIRING_TEMPLATE:
+      return "Price contract expiring"
     default:
       return "Notification"
   }
@@ -86,6 +89,7 @@ function notificationSeverity(type: string): "info" | "warning" | "critical" {
     case "REFUND_REQUESTED":
     case "SUPPORT_THREAD_OPENED":
     case "SUPPORT_MESSAGE_RECEIVED":
+    case PRICE_CONTRACT_EXPIRING_TEMPLATE:
       return "warning"
     default:
       return "info"
@@ -139,6 +143,8 @@ function notificationCta(
         ?? (orderId ? { label: "Acknowledge delivery", href: `/orders/${orderId}` } : undefined)
     case "REFUND_REQUESTED":
       return { label: "Review refund", href: "/refunds" }
+    case PRICE_CONTRACT_EXPIRING_TEMPLATE:
+      return role === "SUPER_ADMIN" ? { label: "Review organizations", href: "/organizations" } : undefined
     default:
       return undefined
   }
