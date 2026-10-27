@@ -29,6 +29,8 @@ import {
   APRICART_WAREHOUSE_PHONE_MAX_LENGTH,
   BRANCH_COVERAGE_KINDS,
   BRANCH_COVERAGE_LABELS,
+  UNROUTED_ORDER_LIST_LIMIT,
+  WAREHOUSE_MEMBER_SCOPE_LABELS,
   WAREHOUSE_RESPONSIBILITIES,
   WAREHOUSE_RESPONSIBILITY_LABELS,
   inactiveAccountsHoldingReach,
@@ -36,12 +38,20 @@ import {
   suggestedBranchIdsFor,
   type ApricartWarehouseStatus,
   type BranchCoverageKind,
+  type WarehouseMemberScope,
   type WarehouseResponsibility,
 } from "@/lib/apricart-warehouses"
+import { readsWarehouseMembership, type WarehouseOrderOwnershipMode } from "@/lib/warehouse-ownership-policy"
 import { toggleAllBranches, toggleBranch } from "@/lib/warehouse-team-view"
 import { WAREHOUSE_TEAM_KEY } from "@/components/warehouse/warehouse-team-card"
 import { OrganizationCombobox } from "@/components/warehouse/organization-combobox"
 
+type Member = {
+  userId: string
+  responsibility: WarehouseResponsibility
+  branchScope: WarehouseMemberScope
+  selectedBranchIds: number[]
+}
 type Warehouse = {
   id: number
   code: string
@@ -50,9 +60,27 @@ type Warehouse = {
   address: string | null
   contactPhone: string | null
   status: ApricartWarehouseStatus
-  members: Array<{ userId: string; responsibility: WarehouseResponsibility }>
+  members: Member[]
   routedBranchCount: number
+  ruleCount: number
+  branchCount: number
   executiveGapOrganizationIds: number[]
+}
+type Rule = {
+  id: number
+  warehouseId: number
+  organizationId: number
+  cityKey: string | null
+  cityLabel: string | null
+  branchCount: number
+}
+type UnroutedOrder = {
+  id: number
+  tid: string
+  organizationId: number
+  branchId: number
+  status: string
+  fulfillmentStatus: string | null
 }
 type Account = {
   id: string
@@ -73,10 +101,24 @@ type CoverageEntry = {
   servingAccountIds: string[]
 }
 type Configuration = {
+  ownershipMode: WarehouseOrderOwnershipMode
   warehouses: Warehouse[]
   accounts: Account[]
   routes: Array<{ branchId: number; warehouseId: number }>
+  rules: Rule[]
+  cityOptions: Array<{ organizationId: number; cityKey: string; label: string; branchCount: number }>
+  branchWarehouses: Array<{ branchId: number; warehouseId: number }>
+  unrouted: { count: number; orders: UnroutedOrder[] }
   coverage: { summary: Record<BranchCoverageKind, number>; branches: CoverageEntry[] }
+}
+type ReachDifference = { accountId: string; lost: number[]; gained: number[] }
+type OwnershipCheck = {
+  checkedAt: string
+  accounts: Array<{ id: string; username: string | null; branchCount: number }>
+  differences: Record<"membership-fallback" | "membership", ReachDifference[]>
+  unroutedOpenOrders: number
+  strandedBranches: Array<{ warehouseId: number; code: string; branches: number }>
+  ready: Record<"membership-fallback" | "membership", boolean>
 }
 /** The parts of the Warehouse Team read this section uses; the same SWR key, so one request serves both. */
 type Team = {
@@ -214,9 +256,19 @@ function WarehouseFormDialog({
 function MembersDialog({
   warehouse,
   accounts,
+  ownershipMode,
+  onScope,
   onClose,
   onSaved,
-}: Readonly<{ warehouse: Warehouse; accounts: Account[]; onClose: () => void; onSaved: () => void }>) {
+}: Readonly<{
+  warehouse: Warehouse
+  accounts: Account[]
+  ownershipMode: WarehouseOrderOwnershipMode
+  onScope: (userId: string) => void
+  onClose: () => void
+  onSaved: () => void
+}>) {
+  const scopeOf = new Map(warehouse.members.map((member) => [member.userId, member]))
   const [memberIds, setMemberIds] = useState<string[]>(warehouse.members.map((member) => member.userId))
   const [pending, setPending] = useState<string | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -250,8 +302,10 @@ function MembersDialog({
         <DialogHeader>
           <DialogTitle>Members of {warehouse.code}</DialogTitle>
           <DialogDescription>
-            Membership does not change what anyone sees yet: each account keeps the branches assigned to it below, and
-            each executive its organizations on Order Desk Team.
+            {readsWarehouseMembership(ownershipMode)
+              ? "An operator works this warehouse's branches — all of them, or the ones chosen under its scope — and the orders transferred here."
+              : "An operator works the orders transferred here. For every other order, each account still keeps the branches assigned to it on Warehouse Team until warehouses take over; the scope below applies from then."}{" "}
+            Each executive keeps its organizations on Order Desk Team.
           </DialogDescription>
         </DialogHeader>
         {WAREHOUSE_RESPONSIBILITIES.map((responsibility) => {
@@ -282,6 +336,17 @@ function MembersDialog({
                         {!account.isActive && <Badge variant="outline">Inactive</Badge>}
                         {pending === account.id && <Loader2 className="h-3 w-3 animate-spin" aria-label="Saving" />}
                       </label>
+                      {isMember && responsibility === "WAREHOUSE_OPERATOR" && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => onScope(account.id)}
+                          disabled={pending !== null || !scopeOf.has(account.id)}
+                        >
+                          {WAREHOUSE_MEMBER_SCOPE_LABELS[scopeOf.get(account.id)?.branchScope ?? "ALL"]}
+                        </Button>
+                      )}
                     </div>
                   )
                 })}
@@ -382,10 +447,10 @@ function RoutesDialog({
     <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose() }}>
       <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Branches routed to {warehouse.code}</DialogTitle>
+          <DialogTitle>Branches put in {warehouse.code} by hand</DialogTitle>
           <DialogDescription>
-            The default warehouse for each branch&apos;s future orders. Routes are recorded only — no order and no
-            account&apos;s access follows them yet.
+            A branch ticked here is in this warehouse whatever its organization&apos;s rules say. Use rules for whole
+            organizations or cities, and this list for the exceptions.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
@@ -476,6 +541,386 @@ function RoutesDialog({
   )
 }
 
+/** The Select value that stands for "every city of the organization" (an organization rule). */
+const ALL_CITIES = "__all__"
+
+/**
+ * Whole organizations, or an organization in one city, in this warehouse. A
+ * rule is read whenever a branch's warehouse is, so branches opened or
+ * re-citied later follow it. Each change saves at once.
+ */
+function RulesDialog({
+  warehouse,
+  configuration,
+  team,
+  onClose,
+  onSaved,
+}: Readonly<{ warehouse: Warehouse; configuration: Configuration; team: Team; onClose: () => void; onSaved: () => void }>) {
+  const organizationName = new Map(team.organizations.map((organization) => [organization.id, organization.name]))
+  const warehouseCode = new Map(configuration.warehouses.map((entry) => [entry.id, entry.code]))
+  const [organizationId, setOrganizationId] = useState<number | null>(team.organizations[0]?.id ?? null)
+  const [city, setCity] = useState<string>(ALL_CITIES)
+  const [pending, setPending] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  const rulesHere = configuration.rules.filter((rule) => rule.warehouseId === warehouse.id)
+  const cities = configuration.cityOptions.filter((option) => option.organizationId === organizationId)
+  const cityKey = city === ALL_CITIES ? null : city
+  const holder = organizationId === null
+    ? undefined
+    : configuration.rules.find((rule) => rule.organizationId === organizationId && rule.cityKey === cityKey)
+  const canAdd = organizationId !== null && warehouse.status === "ACTIVE" && holder?.warehouseId !== warehouse.id
+
+  const change = async (body: { organizationId: number; city: string | null; assigned: boolean }) => {
+    if (pending) return
+    setPending(true)
+    setFormError(null)
+    try {
+      const failure = await send(`${APRICART_WAREHOUSES_KEY}/${warehouse.id}/rules`, "PUT", body, "The rule could not be saved")
+      if (failure) {
+        setFormError(failure)
+        return
+      }
+      toast({ title: body.assigned ? "Rule added" : "Rule removed", description: warehouse.name })
+      onSaved()
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const describeRule = (rule: Rule) => `${organizationName.get(rule.organizationId) ?? `Organization ${rule.organizationId}`} · ${
+    rule.cityKey === null ? "all cities" : rule.cityLabel ?? rule.cityKey}`
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !pending) onClose() }}>
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Rules of {warehouse.code}</DialogTitle>
+          <DialogDescription>
+            Every branch of an organization, or of an organization in one city, belongs to this warehouse — including
+            branches opened there later. A branch put in a warehouse by hand ignores the rules.
+          </DialogDescription>
+        </DialogHeader>
+        <section aria-labelledby={`apricart-rules-${warehouse.id}`} className="space-y-2">
+          <h3 id={`apricart-rules-${warehouse.id}`} className="text-sm font-medium">Rules ({rulesHere.length})</h3>
+          {rulesHere.length === 0 && <p className="text-sm text-muted-foreground">No rules yet.</p>}
+          <ul className="max-h-56 space-y-1 overflow-y-auto">
+            {rulesHere.map((rule) => (
+              <li key={rule.id} className="flex items-center justify-between gap-2 rounded px-2 py-1 text-sm hover:bg-muted/50">
+                <span>
+                  {describeRule(rule)}
+                  <span className="text-xs text-muted-foreground"> · {rule.branchCount} active branch{rule.branchCount === 1 ? "" : "es"}</span>
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={pending}
+                  onClick={() => { void change({ organizationId: rule.organizationId, city: rule.cityKey, assigned: false }) }}
+                >
+                  Remove
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+        <section aria-labelledby={`apricart-rule-add-${warehouse.id}`} className="space-y-3 rounded-md border p-3">
+          <h3 id={`apricart-rule-add-${warehouse.id}`} className="text-sm font-medium">Add a rule</h3>
+          <div className="space-y-1">
+            <Label htmlFor={`apricart-rule-org-${warehouse.id}`}>Organization</Label>
+            <OrganizationCombobox
+              id={`apricart-rule-org-${warehouse.id}`}
+              value={organizationId}
+              options={team.organizations.map((organization) => ({ id: organization.id, label: organization.name }))}
+              disabled={pending}
+              onValueChange={(next) => { setOrganizationId(next); setCity(ALL_CITIES); setFormError(null) }}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={`apricart-rule-city-${warehouse.id}`}>City</Label>
+            <Select value={city} onValueChange={setCity} disabled={pending || organizationId === null}>
+              <SelectTrigger id={`apricart-rule-city-${warehouse.id}`}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_CITIES}>All cities of this organization</SelectItem>
+                {cities.map((option) => (
+                  <SelectItem key={option.cityKey} value={option.cityKey}>
+                    {option.label} ({option.branchCount})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {holder && holder.warehouseId !== warehouse.id && (
+            <p className="text-xs text-amber-600">
+              Now in {warehouseCode.get(holder.warehouseId) ?? "another warehouse"} — adding it moves its branches here.
+            </p>
+          )}
+          {holder?.warehouseId === warehouse.id && <p className="text-xs text-muted-foreground">Already a rule of this warehouse.</p>}
+          {warehouse.status !== "ACTIVE" && <p className="text-xs text-muted-foreground">An inactive warehouse takes no new rules.</p>}
+          <div className="flex justify-end">
+            <Button
+              onClick={() => { if (organizationId !== null) void change({ organizationId, city: cityKey, assigned: true }) }}
+              disabled={pending || !canAdd}
+            >
+              {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Add rule
+            </Button>
+          </div>
+        </section>
+        {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={pending}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * Which of this warehouse's branches one operator works: all of them, or a
+ * selection made one organization at a time from the branches in the warehouse now.
+ */
+function MemberScopeDialog({
+  warehouse,
+  member,
+  account,
+  configuration,
+  team,
+  onClose,
+  onSaved,
+}: Readonly<{
+  warehouse: Warehouse
+  member: Member
+  account: Account | undefined
+  configuration: Configuration
+  team: Team
+  onClose: () => void
+  onSaved: () => void
+}>) {
+  const inWarehouse = new Set(configuration.branchWarehouses
+    .filter((entry) => entry.warehouseId === warehouse.id)
+    .map((entry) => entry.branchId))
+  const warehouseBranches = team.branches.filter((branch) => inWarehouse.has(branch.id))
+  const organizations = team.organizations.filter((organization) => warehouseBranches.some((branch) => branch.organizationId === organization.id))
+  const [organizationId, setOrganizationId] = useState<number | null>(organizations[0]?.id ?? null)
+  const organizationBranches = warehouseBranches.filter((branch) => branch.organizationId === organizationId)
+  const savedHere = member.selectedBranchIds.filter((id) => organizationBranches.some((branch) => branch.id === id))
+  const [selected, setSelected] = useState<number[]>(savedHere)
+  const [pending, setPending] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+  const shownIds = organizationBranches.map((branch) => branch.id)
+  const sortedSelected = [...selected].sort((a, b) => a - b)
+  const dirty = member.branchScope !== "SELECTED" || savedHere.join(",") !== sortedSelected.join(",")
+
+  const save = async (body: { scope: "ALL" } | { scope: "SELECTED"; organizationId: number; branchIds: number[] }) => {
+    if (pending) return
+    setPending(true)
+    setFormError(null)
+    try {
+      const failure = await send(
+        `${APRICART_WAREHOUSES_KEY}/${warehouse.id}/member-scope`,
+        "PUT",
+        { userId: member.userId, ...body },
+        "The scope could not be saved",
+      )
+      if (failure) {
+        setFormError(failure)
+        return
+      }
+      toast({ title: "Scope saved", description: account ? accountName(account) : undefined })
+      onSaved()
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !pending) onClose() }}>
+      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{account ? accountName(account) : "Operator"} at {warehouse.code}</DialogTitle>
+          <DialogDescription>
+            Now: {WAREHOUSE_MEMBER_SCOPE_LABELS[member.branchScope]}
+            {member.branchScope === "SELECTED" ? ` (${member.selectedBranchIds.length})` : ""}. With selected branches,
+            the operator works only the branches ticked, across every organization; orders transferred to the warehouse
+            are always theirs.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            onClick={() => { void save({ scope: "ALL" }) }}
+            disabled={pending || (member.branchScope === "ALL" && member.selectedBranchIds.length === 0)}
+          >
+            Work all branches
+          </Button>
+        </div>
+        <div className="space-y-3">
+          <div className="space-y-1">
+            <Label htmlFor={`apricart-scope-org-${member.userId}`}>Organization</Label>
+            <OrganizationCombobox
+              id={`apricart-scope-org-${member.userId}`}
+              value={organizationId}
+              options={organizations.map((organization) => ({ id: organization.id, label: organization.name }))}
+              disabled={pending}
+              onValueChange={(next) => {
+                setOrganizationId(next)
+                setSelected(member.selectedBranchIds.filter((id) => warehouseBranches.some((branch) => branch.id === id && branch.organizationId === next)))
+                setFormError(null)
+              }}
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setSelected((current) => toggleAllBranches(current, shownIds))}
+              disabled={pending || shownIds.length === 0}
+            >
+              {shownIds.length > 0 && shownIds.every((id) => selected.includes(id)) ? "Unselect" : "Select"} all
+            </Button>
+          </div>
+          <fieldset className="max-h-72 space-y-1 overflow-y-auto rounded-md border p-2" disabled={pending}>
+            <legend className="sr-only">Branches</legend>
+            {organizationBranches.length === 0 && <p className="p-2 text-sm text-muted-foreground">No branches of this warehouse here.</p>}
+            {organizationBranches.map((branch) => {
+              const id = `apricart-scope-${member.userId}-${branch.id}`
+              return (
+                <div key={branch.id} className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-muted/50">
+                  <Checkbox id={id} checked={selected.includes(branch.id)} onCheckedChange={() => setSelected((current) => toggleBranch(current, branch.id))} />
+                  <label htmlFor={id} className="flex flex-1 flex-wrap items-center gap-2 text-sm">
+                    {branch.name}
+                    {branch.city && <span className="text-xs text-muted-foreground">{branch.city}</span>}
+                  </label>
+                </div>
+              )
+            })}
+          </fieldset>
+          {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
+          <div className="flex justify-end">
+            <Button
+              onClick={() => { if (organizationId !== null) void save({ scope: "SELECTED", organizationId, branchIds: sortedSelected }) }}
+              disabled={pending || organizationId === null || !dirty}
+            >
+              {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Work only the ticked branches
+            </Button>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={pending}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** Open orders whose branch is in no warehouse — nobody would work them once warehouses decide. */
+function UnroutedPanel({ configuration, team }: Readonly<{ configuration: Configuration; team: Team }>) {
+  const { unrouted } = configuration
+  const branchName = new Map(team.branches.map((branch) => [branch.id, branch.name]))
+  const organizationName = new Map(team.organizations.map((organization) => [organization.id, organization.name]))
+  return (
+    <section aria-labelledby="apricart-unrouted" className="space-y-2 rounded-md border p-3">
+      <h3 id="apricart-unrouted" className="text-sm font-medium">
+        Open orders whose branch is in no warehouse: {unrouted.count}
+      </h3>
+      <p className="text-xs text-muted-foreground">
+        {readsWarehouseMembership(configuration.ownershipMode)
+          ? "No warehouse operator sees these until their branch is put in a warehouse, or Super Admin transfers the order."
+          : "Still worked by the accounts assigned their branch. Once warehouses decide, nobody would see them — add a rule, put the branch in by hand, or transfer the order."}
+      </p>
+      {unrouted.orders.length > 0 && (
+        <ul className="space-y-1 text-sm">
+          {unrouted.orders.map((order) => (
+            <li key={order.id}>
+              <span className="font-medium">{order.tid}</span>
+              <span className="text-muted-foreground">
+                {" "}· {organizationName.get(order.organizationId) ?? ""} · {branchName.get(order.branchId) ?? `Branch ${order.branchId}`} · {order.status}
+                {order.fulfillmentStatus ? ` / ${order.fulfillmentStatus}` : ""}
+              </span>
+            </li>
+          ))}
+          {unrouted.count > UNROUTED_ORDER_LIST_LIMIT && (
+            <li className="text-muted-foreground">and {unrouted.count - UNROUTED_ORDER_LIST_LIMIT} more.</li>
+          )}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+const OWNERSHIP_MODE_LABELS: Record<"membership-fallback" | "membership", string> = {
+  "membership-fallback": "Warehouses decide, own assignments kept for branches in no warehouse",
+  membership: "Warehouses decide",
+}
+
+/**
+ * Would any warehouse account see a different set of branches if warehouses
+ * decided? Run on demand; the same report as `npm run check:warehouse-ownership`.
+ */
+function OwnershipCheckPanel({ configuration }: Readonly<{ configuration: Configuration }>) {
+  const [check, setCheck] = useState<OwnershipCheck | null>(null)
+  const [running, setRunning] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  const username = new Map(configuration.accounts.map((account) => [account.id, account.username ?? account.email]))
+
+  const run = async () => {
+    if (running) return
+    setRunning(true)
+    setFailure(null)
+    try {
+      const response = await fetch(`${APRICART_WAREHOUSES_KEY}/ownership-check`)
+      if (!response.ok) {
+        setFailure(await errorMessage(response, "The check could not be run"))
+        return
+      }
+      setCheck(await response.json() as OwnershipCheck)
+    } catch {
+      setFailure("The request could not be sent. Check the connection and try again.")
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <section aria-labelledby="apricart-ownership-check" className="space-y-2 rounded-md border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 id="apricart-ownership-check" className="text-sm font-medium">Would anyone&apos;s work change?</h3>
+        <Button size="sm" variant="outline" onClick={() => { void run() }} disabled={running}>
+          {running && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          Run check
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Compares the branches each warehouse account works today with the branches its warehouses would give it.
+      </p>
+      {failure && <p role="alert" className="text-sm text-destructive">{failure}</p>}
+      {check && (["membership-fallback", "membership"] as const).map((mode) => (
+        <div key={mode} className="space-y-1 text-sm">
+          <p>
+            <Badge variant={check.ready[mode] ? "secondary" : "destructive"}>{check.ready[mode] ? "No change" : "Changes"}</Badge>{" "}
+            {OWNERSHIP_MODE_LABELS[mode]}
+          </p>
+          {check.differences[mode].map((difference) => (
+            <p key={difference.accountId} className="pl-2 text-muted-foreground">
+              {username.get(difference.accountId) ?? difference.accountId}: loses {difference.lost.length}, gains {difference.gained.length} branch(es)
+            </p>
+          ))}
+        </div>
+      ))}
+      {check && (
+        <p className="text-xs text-muted-foreground">
+          Open orders in no warehouse: {check.unroutedOpenOrders}.
+          {check.strandedBranches.length > 0 && ` Branches no operator works: ${check.strandedBranches.map((entry) => `${entry.code} ${entry.branches}`).join(", ")}.`}
+          {" "}Checked {new Date(check.checkedAt).toLocaleString()}.
+        </p>
+      )}
+    </section>
+  )
+}
+
 /** What has to be settled before orders can belong to a warehouse. */
 function CoveragePanel({ configuration, team }: Readonly<{ configuration: Configuration; team: Team }>) {
   const branchById = new Map(team.branches.map((branch) => [branch.id, branch]))
@@ -547,20 +992,29 @@ function CoveragePanel({ configuration, team }: Readonly<{ configuration: Config
 }
 
 /**
- * Super Admin's Apricart warehouses: the places orders will be fulfilled from,
- * who works at each, and the default warehouse of each branch — with the
- * coverage report that maps today's account-based reach onto them.
- * Members who are operators fulfil the orders transferred to their warehouse;
- * routes are configuration only. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
+ * Super Admin's Apricart warehouses: the places orders are fulfilled from, who
+ * works at each (and which of its branches), and which branches each holds —
+ * by organization/city rule or by hand — with the coverage report, the open
+ * orders in no warehouse, and the check that no account's work would change
+ * when warehouses decide. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md.
  */
 export function ApricartWarehousesCard() {
   const { data, error, isLoading, mutate } = useSWR<Configuration>(APRICART_WAREHOUSES_KEY, fetcher)
   const { data: team } = useSWR<Team>(WAREHOUSE_TEAM_KEY, fetcher)
   const [editing, setEditing] = useState<Warehouse | "new" | null>(null)
-  const [membersOf, setMembersOf] = useState<Warehouse | null>(null)
+  const [membersOf, setMembersOf] = useState<number | null>(null)
   const [routesOf, setRoutesOf] = useState<Warehouse | null>(null)
+  const [rulesOf, setRulesOf] = useState<number | null>(null)
+  const [scopeOf, setScopeOf] = useState<{ warehouseId: number; userId: string } | null>(null)
 
   const refresh = () => { void mutate() }
+  // Dialogs read the warehouse from the latest load, so a save shows at once.
+  const warehouseById = (id: number | null) => (id === null ? undefined : data?.warehouses.find((warehouse) => warehouse.id === id))
+  const membersWarehouse = warehouseById(membersOf)
+  const rulesWarehouse = warehouseById(rulesOf)
+  const scopeWarehouse = warehouseById(scopeOf?.warehouseId ?? null)
+  const scopeMember = scopeWarehouse?.members.find((member) => member.userId === scopeOf?.userId)
+  const membershipDecides = data ? readsWarehouseMembership(data.ownershipMode) : false
 
   return (
     <Card>
@@ -568,9 +1022,9 @@ export function ApricartWarehousesCard() {
         <div className="space-y-1.5">
           <CardTitle className="text-base">Warehouses</CardTitle>
           <CardDescription>
-            Apricart&apos;s warehouses, who works at each, and the default warehouse of each branch. A warehouse&apos;s
-            operators fulfil the orders Super Admin transfers to it from the order page; every other order is still
-            worked by the accounts serving its branch, and default warehouses do not move any order.
+            {membershipDecides
+              ? "Apricart's warehouses decide who works each order: a branch's orders go to the operators of the warehouse it is in, by rule or by hand, and a transferred order to its new warehouse."
+              : "Apricart's warehouses, who works at each, and which branches each holds by rule or by hand. Today every order is still worked by the accounts assigned its branch on Warehouse Team (and a transferred order by its warehouse's operators); run the check below to see whether anyone's work would change when warehouses decide."}
           </CardDescription>
         </div>
         <Button size="sm" onClick={() => setEditing("new")}>New warehouse</Button>
@@ -610,7 +1064,12 @@ export function ApricartWarehousesCard() {
                         return <div key={responsibility}>{total} {WAREHOUSE_RESPONSIBILITY_LABELS[responsibility].toLowerCase()}{total === 1 ? "" : "s"}</div>
                       })}
                     </td>
-                    <td className="py-2 pr-3">{warehouse.routedBranchCount}</td>
+                    <td className="py-2 pr-3">
+                      <div>{warehouse.branchCount} active</div>
+                      <div className="text-xs text-muted-foreground">
+                        {warehouse.ruleCount} rule{warehouse.ruleCount === 1 ? "" : "s"} · {warehouse.routedBranchCount} by hand
+                      </div>
+                    </td>
                     <td className="py-2 pr-3">
                       <Badge variant={warehouse.status === "ACTIVE" ? "default" : "outline"}>
                         {warehouse.status === "ACTIVE" ? "Active" : "Inactive"}
@@ -618,8 +1077,9 @@ export function ApricartWarehousesCard() {
                     </td>
                     <td className="space-x-2 whitespace-nowrap py-2 text-right">
                       <Button size="sm" variant="outline" onClick={() => setEditing(warehouse)}>Edit</Button>
-                      <Button size="sm" variant="outline" onClick={() => setMembersOf(warehouse)}>Members</Button>
-                      <Button size="sm" variant="outline" onClick={() => setRoutesOf(warehouse)} disabled={!team}>Branches</Button>
+                      <Button size="sm" variant="outline" onClick={() => setMembersOf(warehouse.id)}>Members</Button>
+                      <Button size="sm" variant="outline" onClick={() => setRulesOf(warehouse.id)} disabled={!team}>Rules</Button>
+                      <Button size="sm" variant="outline" onClick={() => setRoutesOf(warehouse)} disabled={!team}>By hand</Button>
                     </td>
                   </tr>
                 ))}
@@ -627,6 +1087,8 @@ export function ApricartWarehousesCard() {
             </table>
           </div>
         )}
+        {data && <OwnershipCheckPanel configuration={data} />}
+        {data && team && <UnroutedPanel configuration={data} team={team} />}
         {data && team && <CoveragePanel configuration={data} team={team} />}
       </CardContent>
       {editing && (
@@ -637,12 +1099,36 @@ export function ApricartWarehousesCard() {
           onSaved={refresh}
         />
       )}
-      {membersOf && data && (
+      {membersWarehouse && data && (
         <MembersDialog
-          key={membersOf.id}
-          warehouse={membersOf}
+          key={membersWarehouse.id}
+          warehouse={membersWarehouse}
           accounts={data.accounts}
+          ownershipMode={data.ownershipMode}
+          onScope={(userId) => setScopeOf({ warehouseId: membersWarehouse.id, userId })}
           onClose={() => setMembersOf(null)}
+          onSaved={refresh}
+        />
+      )}
+      {scopeWarehouse && scopeMember && data && team && (
+        <MemberScopeDialog
+          key={`${scopeWarehouse.id}-${scopeMember.userId}`}
+          warehouse={scopeWarehouse}
+          member={scopeMember}
+          account={data.accounts.find((account) => account.id === scopeMember.userId)}
+          configuration={data}
+          team={team}
+          onClose={() => setScopeOf(null)}
+          onSaved={refresh}
+        />
+      )}
+      {rulesWarehouse && data && team && (
+        <RulesDialog
+          key={rulesWarehouse.id}
+          warehouse={rulesWarehouse}
+          configuration={data}
+          team={team}
+          onClose={() => setRulesOf(null)}
           onSaved={refresh}
         />
       )}

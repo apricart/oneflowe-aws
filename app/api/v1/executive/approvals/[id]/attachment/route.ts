@@ -12,11 +12,12 @@ import { intakeAttachmentResponse } from "@/lib/server/order-desk-attachments"
  * Apricart Executive deciding it. Only for a desk order in an organization
  * assigned to them; anything else — no such order, outside the reach, no
  * screenshot — is the same 404. Served exactly as the desk's own route serves
- * it (`intakeAttachmentResponse`).
+ * it (`intakeAttachmentResponse`). Super Admin reads any desk order's
+ * screenshot here, from Order Desk Team.
  */
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   try {
-    const roleError = await requireApiRole(["APRICART_EXECUTIVE"])
+    const roleError = await requireApiRole(["SUPER_ADMIN", "APRICART_EXECUTIVE"])
     if (roleError) return roleError
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })

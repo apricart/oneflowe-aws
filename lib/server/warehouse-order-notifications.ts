@@ -1,6 +1,6 @@
 import "server-only"
 
-import { and, eq, exists, isNull, or, sql } from "drizzle-orm"
+import { and, eq, exists, inArray, isNull, or, sql } from "drizzle-orm"
 
 import {
   apricartWarehouseMemberships,
@@ -39,6 +39,12 @@ import {
   type DeliveryOutcome,
 } from "@/lib/server/email-outbox-runtime"
 import { isOrderInWarehouseReach } from "@/lib/server/warehouse-scope"
+import { branchIdsWithoutWarehouse, loadMembershipAccountIdsServingBranches } from "@/lib/server/branch-warehouse"
+import {
+  WAREHOUSE_ORDER_OWNERSHIP,
+  readsWarehouseMembership,
+  type WarehouseOrderOwnershipMode,
+} from "@/lib/warehouse-ownership-policy"
 
 /**
  * Tell the warehouse users who serve an order's branch that the order reached
@@ -108,12 +114,21 @@ export async function loadWarehouseOrderRecipients(
 
 /**
  * Every active warehouse user whose branch reach covers the branch — who works
- * an order there that names no warehouse.
+ * an order there that names no warehouse. Asked the way `loadWarehouseReach`
+ * asks it for the mode in force: the account's own assignments in "branch",
+ * warehouse membership in the membership modes (plus, in
+ * "membership-fallback", the assignments when the branch is in no warehouse).
  */
 export async function loadBranchWarehouseRecipients(
   client: DbClient,
   branchId: number,
+  mode: WarehouseOrderOwnershipMode = WAREHOUSE_ORDER_OWNERSHIP,
 ): Promise<WarehouseRecipient[]> {
+  const viaWarehouses = readsWarehouseMembership(mode) ? await loadMembershipAccountIdsServingBranches(client, [branchId]) : []
+  const viaAssignments = mode === "branch"
+    || (mode === "membership-fallback" && (await branchIdsWithoutWarehouse(client, [branchId])).length > 0)
+  // Never an empty OR: that would drop the condition and match every warehouse user.
+  if (!viaAssignments && viaWarehouses.length === 0) return []
   return client
     .select({ id: users.id, email: users.email })
     .from(users)
@@ -123,18 +138,23 @@ export async function loadBranchWarehouseRecipients(
       eq(users.isActive, true),
       isNull(users.deletedAt),
       or(
-        exists(
-          client.select({ one: sql`1` })
-            .from(warehouseAssignments)
-            .where(and(eq(warehouseAssignments.userId, users.id), eq(warehouseAssignments.branchId, branchId))),
-        ),
-        exists(
-          client.select({ one: sql`1` })
-            .from(warehouseCityAssignments)
-            .innerJoin(branches, warehouseCityBranchOn())
-            .innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())
-            .where(and(eq(warehouseCityAssignments.userId, users.id), eq(branches.id, branchId))),
-        ),
+        viaAssignments
+          ? exists(
+            client.select({ one: sql`1` })
+              .from(warehouseAssignments)
+              .where(and(eq(warehouseAssignments.userId, users.id), eq(warehouseAssignments.branchId, branchId))),
+          )
+          : undefined,
+        viaAssignments
+          ? exists(
+            client.select({ one: sql`1` })
+              .from(warehouseCityAssignments)
+              .innerJoin(branches, warehouseCityBranchOn())
+              .innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())
+              .where(and(eq(warehouseCityAssignments.userId, users.id), eq(branches.id, branchId))),
+          )
+          : undefined,
+        viaWarehouses.length > 0 ? inArray(users.id, viaWarehouses) : undefined,
       ),
     ))
 }

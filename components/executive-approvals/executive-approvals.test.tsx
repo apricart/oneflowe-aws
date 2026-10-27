@@ -207,6 +207,32 @@ describe("an executive's approvals", () => {
     expect(screen.queryByRole("tablist")).toBeNull()
   })
 
+  it("offers the executive no link to the order page, which it cannot reach", () => {
+    swr.page = page([order(1)])
+    render(<ExecutiveApprovals />)
+    expect(screen.queryByRole("link", { name: /Open order/ })).toBeNull()
+  })
+
+  describe("for Super Admin on Order Desk Team", () => {
+    it("links each order to its order page, beside the screenshot", () => {
+      swr.page = page([order(7)])
+      render(<ExecutiveApprovals audience="super-admin" />)
+      const card = screen.getByRole("article")
+      expect(within(card).getByRole("link", { name: /Open order/ }).getAttribute("href")).toBe("/orders/7")
+      expect(within(card).getByRole("link", { name: /Customer's message/ }).getAttribute("href"))
+        .toBe("/api/v1/executive/approvals/7/attachment")
+      expect(within(card).getByRole("button", { name: /Approve/ })).toBeTruthy()
+    })
+
+    it("treats an empty list as empty, not as a missing assignment", () => {
+      swr.page = page([], [])
+      render(<ExecutiveApprovals audience="super-admin" />)
+      expect(screen.queryByText("No organizations are assigned to you for approvals.")).toBeNull()
+      expect(screen.getByRole("tablist")).toBeTruthy()
+      expect(screen.getByText("Nothing is waiting for your approval.")).toBeTruthy()
+    })
+  })
+
   it("reloads when an approval is refused because the order changed", async () => {
     swr.page = page([order(1)])
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "The order was changed or decided since you opened it; reload and review it again" }), { status: 409 }))

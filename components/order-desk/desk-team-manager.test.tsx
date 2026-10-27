@@ -1,15 +1,26 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-const swr = vi.hoisted(() => ({ team: undefined as unknown, executives: undefined as unknown, mutate: vi.fn() }))
+const swr = vi.hoisted(() => ({
+  team: undefined as unknown,
+  executives: undefined as unknown,
+  approvals: undefined as unknown,
+  mutate: vi.fn(),
+}))
 
 vi.mock("swr", () => ({
   default: (key: string) => {
     if (key === "/api/v1/apricart-executives") return { data: swr.executives, error: undefined, isLoading: false, mutate: swr.mutate }
+    if (key.startsWith("/api/v1/executive/approvals")) return { data: swr.approvals, error: undefined, isLoading: false, mutate: swr.mutate }
     return { data: swr.team, error: undefined, isLoading: false, mutate: swr.mutate }
   },
 }))
 vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }))
+// The approvals view has its own tests; here only which tab mounts it, and how.
+vi.mock("@/components/executive-approvals/executive-approvals", () => ({
+  EXECUTIVE_APPROVALS_KEY_PREFIX: "/api/v1/executive/approvals",
+  ExecutiveApprovals: ({ audience }: { audience?: string }) => <div data-testid="desk-orders" data-audience={audience} />,
+}))
 
 import { DeskTeamManager } from "./desk-team-manager"
 
@@ -43,6 +54,21 @@ afterEach(() => {
 })
 
 describe("Order Desk Team", () => {
+  it("opens on the team, and shows every desk order under its own tab with the waiting count", () => {
+    swr.team = { members: [member()], managedOrganizations }
+    swr.approvals = { counts: { awaiting_approval: 3, returned: 0, approved: 0, rejected: 0, all: 3 } }
+    render(<DeskTeamManager />)
+    expect(screen.getByRole("tab", { name: "Team" }).getAttribute("aria-selected")).toBe("true")
+    expect(screen.getByText("Sana Desk")).toBeTruthy()
+    expect(screen.queryByTestId("desk-orders")).toBeNull()
+
+    const ordersTab = screen.getByRole("tab", { name: /Desk orders/ })
+    expect(ordersTab.textContent).toContain("3")
+    fireEvent.mouseDown(ordersTab, { button: 0, ctrlKey: false })
+    expect(screen.getByTestId("desk-orders").getAttribute("data-audience")).toBe("super-admin")
+    expect(screen.queryByText("Sana Desk")).toBeNull()
+  })
+
   it("lists each desk user with what they may order for", () => {
     swr.team = { members: [member()], managedOrganizations }
     render(<DeskTeamManager />)
@@ -89,6 +115,38 @@ describe("Order Desk Team", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({ organizationIds: [], branchIds: [12] })
+  })
+
+  it("searches branches and selects only what the search shows", async () => {
+    swr.team = { members: [member({ organizationIds: [], branchIds: [] })], managedOrganizations }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ item: {} }), { status: 200 }))
+    render(<DeskTeamManager />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Access" }))
+    const dialog = screen.getByRole("dialog")
+    fireEvent.change(within(dialog).getByLabelText("Search organizations and branches"), { target: { value: "sou" } })
+    expect(within(dialog).queryByLabelText("North")).toBeNull()
+    expect(within(dialog).queryByLabelText("UBL — all branches")).toBeNull()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Select shown" }))
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save access" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({ organizationIds: [], branchIds: [12] })
+  })
+
+  it("selects every organization whole, and unselects them all", () => {
+    swr.team = { members: [member({ organizationIds: [], branchIds: [11] })], managedOrganizations }
+    render(<DeskTeamManager />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Access" }))
+    const dialog = screen.getByRole("dialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Select all" }))
+    for (const name of ["Meezan — all branches", "UBL — all branches"]) {
+      expect(within(dialog).getByLabelText(name).getAttribute("data-state")).toBe("checked")
+    }
+    expect(within(dialog).getByText(/2 organizations whole, 0 single branches selected/)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Unselect all" }))
+    expect(within(dialog).getByText(/0 organizations whole, 0 single branches selected/)).toBeTruthy()
   })
 
   it("keeps the dialog open with the server's reason when access is refused", async () => {

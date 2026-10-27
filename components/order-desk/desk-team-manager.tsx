@@ -2,7 +2,9 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { Headset, Loader2, Plus } from "lucide-react"
+import { Headset, Loader2, Plus, Search } from "lucide-react"
+
+import { EXECUTIVE_APPROVALS_KEY_PREFIX, ExecutiveApprovals } from "@/components/executive-approvals/executive-approvals"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,12 +20,16 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ExecutiveApproversCard } from "@/components/order-desk/executive-approvers-card"
 import { toast } from "@/hooks/use-toast"
+import type { ExecutiveApprovalCounts } from "@/lib/executive-approval-query"
 import { fetcher } from "@/lib/fetcher"
 import {
   describeDeskReach,
+  filterReachOrganizations,
   reachDraftFor,
+  setVisibleReach,
   toggleReachBranch,
   toggleReachOrganization,
   type DeskReachDraft,
@@ -78,6 +84,9 @@ function ReachEditor({
   onChange: (next: DeskReachDraft) => void
   disabled: boolean
 }>) {
+  const [query, setQuery] = useState("")
+  const visible = filterReachOrganizations(organizations, query)
+
   if (organizations.length === 0) {
     return (
       <p className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
@@ -87,45 +96,85 @@ function ReachEditor({
     )
   }
   return (
-    <div className="max-h-[360px] space-y-3 overflow-y-auto rounded-md border p-3">
-      {organizations.map((organization) => {
-        const whole = value.organizationIds.has(organization.id)
-        const checkboxId = `reach-org-${organization.id}`
-        return (
-          <div key={organization.id} className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id={checkboxId}
-                checked={whole}
-                disabled={disabled}
-                onCheckedChange={() => onChange(toggleReachOrganization(value, organization.id, organization.branches.map((branch) => branch.id)))}
-              />
-              <Label htmlFor={checkboxId} className="font-medium">
-                {organization.name} — all branches
-              </Label>
-              {organization.status?.toLowerCase() !== "active" && <Badge variant="outline">Inactive</Badge>}
-            </div>
-            {!whole && organization.branches.length > 0 && (
-              <div className="ml-6 grid gap-1 sm:grid-cols-2">
-                {organization.branches.map((branch) => {
-                  const branchCheckboxId = `reach-branch-${branch.id}`
-                  return (
-                    <div key={branch.id} className="flex items-center gap-2">
-                      <Checkbox
-                        id={branchCheckboxId}
-                        checked={value.branchIds.has(branch.id)}
-                        disabled={disabled}
-                        onCheckedChange={() => onChange(toggleReachBranch(value, branch.id))}
-                      />
-                      <Label htmlFor={branchCheckboxId} className="text-sm font-normal">{branch.name}</Label>
-                    </div>
-                  )
-                })}
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            type="search"
+            aria-label="Search organizations and branches"
+            placeholder="Search organizations or branches"
+            className="pl-8"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled || visible.length === 0}
+          onClick={() => onChange(setVisibleReach(value, visible, true))}
+        >
+          {query.trim() ? "Select shown" : "Select all"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled || visible.length === 0}
+          onClick={() => onChange(setVisibleReach(value, visible, false))}
+        >
+          {query.trim() ? "Unselect shown" : "Unselect all"}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {value.organizationIds.size} organization{value.organizationIds.size === 1 ? "" : "s"} whole,{" "}
+        {value.branchIds.size} single branch{value.branchIds.size === 1 ? "" : "es"} selected
+      </p>
+      <div className="max-h-[360px] space-y-3 overflow-y-auto rounded-md border p-3">
+        {visible.length === 0 && (
+          <p className="py-4 text-center text-sm text-muted-foreground">No organization or branch matches &ldquo;{query.trim()}&rdquo;.</p>
+        )}
+        {visible.map(({ organization, branches }) => {
+          const whole = value.organizationIds.has(organization.id)
+          const checkboxId = `reach-org-${organization.id}`
+          return (
+            <div key={organization.id} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={checkboxId}
+                  checked={whole}
+                  disabled={disabled}
+                  onCheckedChange={() => onChange(toggleReachOrganization(value, organization.id, organization.branches.map((branch) => branch.id)))}
+                />
+                <Label htmlFor={checkboxId} className="font-medium">
+                  {organization.name} — all branches
+                </Label>
+                {organization.status?.toLowerCase() !== "active" && <Badge variant="outline">Inactive</Badge>}
               </div>
-            )}
-          </div>
-        )
-      })}
+              {!whole && branches.length > 0 && (
+                <div className="ml-6 grid gap-1 sm:grid-cols-2">
+                  {branches.map((branch) => {
+                    const branchCheckboxId = `reach-branch-${branch.id}`
+                    return (
+                      <div key={branch.id} className="flex items-center gap-2">
+                        <Checkbox
+                          id={branchCheckboxId}
+                          checked={value.branchIds.has(branch.id)}
+                          disabled={disabled}
+                          onCheckedChange={() => onChange(toggleReachBranch(value, branch.id))}
+                        />
+                        <Label htmlFor={branchCheckboxId} className="text-sm font-normal">{branch.name}</Label>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -297,11 +346,21 @@ function AccessDialog({
 }
 
 /**
- * Super Admin's Order Desk Team: who is on the desk, which managed
- * organizations or branches each may order for, and whether they can sign in.
+ * Super Admin's Order Desk Team, in two tabs. **Team**: who is on the desk,
+ * which managed organizations or branches each may order for, whether they
+ * can sign in, and the executives who approve. **Desk orders**: every order
+ * the desk entered, in every organization, to approve, reject or send back —
+ * the executive's own approvals view, unfenced for Super Admin
+ * (plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md).
  */
 export function DeskTeamManager() {
   const { data, error, isLoading, mutate } = useSWR<DeskTeam>(TEAM_KEY, fetcher)
+  // One row is enough: only the waiting count on the tab is read.
+  const { data: approvals } = useSWR<{ counts?: ExecutiveApprovalCounts }>(
+    `${EXECUTIVE_APPROVALS_KEY_PREFIX}?status=awaiting_approval&limit=1`,
+    fetcher,
+  )
+  const waiting = approvals?.counts?.awaiting_approval ?? 0
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Member | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -337,75 +396,98 @@ export function DeskTeamManager() {
           <div>
             <h1 className="text-xl font-semibold">Order Desk Team</h1>
             <p className="text-sm text-muted-foreground">
-              Apricart staff who enter and fulfil orders for managed organizations, and the executives who approve them.
+              Apricart staff who enter and fulfil orders for managed organizations, the executives who approve them, and the orders they entered.
             </p>
           </div>
         </div>
-        <Button onClick={() => setAdding(true)} disabled={isLoading}>
-          <Plus className="mr-2 h-4 w-4" /> Add desk user
-        </Button>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Desk users</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {error && <p role="alert" className="text-sm text-destructive">Could not load the Order Desk team.</p>}
-          {isLoading && (
-            <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading…
-            </p>
-          )}
-          {data && data.members.length === 0 && (
-            <p className="py-6 text-center text-sm text-muted-foreground">No desk users yet.</p>
-          )}
-          {data && data.members.length > 0 && (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-sm">
-                <thead className="text-left text-xs uppercase text-muted-foreground">
-                  <tr>
-                    <th className="py-2 pr-3">Name</th>
-                    <th className="py-2 pr-3">May order for</th>
-                    <th className="py-2 pr-3">Status</th>
-                    <th className="py-2 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.members.map((member) => (
-                    <tr key={member.id} className="border-t align-top">
-                      <td className="py-2 pr-3">
-                        <div className="font-medium">{member.fullName ?? "—"}</div>
-                        <div className="text-xs text-muted-foreground">{member.username} · {member.email}</div>
-                      </td>
-                      <td className="py-2 pr-3 text-sm">{describeDeskReach(member, organizations)}</td>
-                      <td className="py-2 pr-3">
-                        <Badge variant={member.isActive ? "default" : "outline"}>{member.isActive ? "Active" : "Inactive"}</Badge>
-                      </td>
-                      <td className="py-2">
-                        <div className="flex justify-end gap-2">
-                          <Button size="sm" variant="outline" onClick={() => setEditing(member)}>Access</Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={togglingId !== null}
-                            onClick={() => { void toggleActive(member) }}
-                          >
-                            {togglingId === member.id && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
-                            {member.isActive ? "Deactivate" : "Activate"}
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="team" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="team">Team</TabsTrigger>
+          <TabsTrigger value="orders" className="gap-2">
+            Desk orders
+            {waiting > 0 && (
+              <span className="rounded-full bg-indigo-600 px-1.5 text-xs font-semibold tabular-nums text-white">
+                <span className="sr-only">, waiting: </span>{waiting}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
 
-      <ExecutiveApproversCard />
+        <TabsContent value="team" className="space-y-6">
+          <div className="flex justify-end">
+            <Button onClick={() => setAdding(true)} disabled={isLoading}>
+              <Plus className="mr-2 h-4 w-4" /> Add desk user
+            </Button>
+          </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Desk users</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {error && <p role="alert" className="text-sm text-destructive">Could not load the Order Desk team.</p>}
+              {isLoading && (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Loading…
+                </p>
+              )}
+              {data && data.members.length === 0 && (
+                <p className="py-6 text-center text-sm text-muted-foreground">No desk users yet.</p>
+              )}
+              {data && data.members.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[720px] text-sm">
+                    <thead className="text-left text-xs uppercase text-muted-foreground">
+                      <tr>
+                        <th className="py-2 pr-3">Name</th>
+                        <th className="py-2 pr-3">May order for</th>
+                        <th className="py-2 pr-3">Status</th>
+                        <th className="py-2 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.members.map((member) => (
+                        <tr key={member.id} className="border-t align-top">
+                          <td className="py-2 pr-3">
+                            <div className="font-medium">{member.fullName ?? "—"}</div>
+                            <div className="text-xs text-muted-foreground">{member.username} · {member.email}</div>
+                          </td>
+                          <td className="py-2 pr-3 text-sm">{describeDeskReach(member, organizations)}</td>
+                          <td className="py-2 pr-3">
+                            <Badge variant={member.isActive ? "default" : "outline"}>{member.isActive ? "Active" : "Inactive"}</Badge>
+                          </td>
+                          <td className="py-2">
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" variant="outline" onClick={() => setEditing(member)}>Access</Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={togglingId !== null}
+                                onClick={() => { void toggleActive(member) }}
+                              >
+                                {togglingId === member.id && <Loader2 className="mr-1 h-3 w-3 animate-spin" />}
+                                {member.isActive ? "Deactivate" : "Activate"}
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <ExecutiveApproversCard />
+        </TabsContent>
+
+        <TabsContent value="orders">
+          <ExecutiveApprovals audience="super-admin" />
+        </TabsContent>
+      </Tabs>
 
       <AddDeskUserDialog open={adding} onOpenChange={setAdding} organizations={organizations} onSaved={() => { void mutate() }} />
       {editing && (

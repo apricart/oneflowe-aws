@@ -27,6 +27,11 @@ emailDomainDraftError,
 toEmailDomainPayload,
 } from "@/components/organizations/email-domain-field"
 import { OrderApprovalLevelsFields } from "@/components/organizations/order-approval-levels-fields"
+import {
+PriceContractField,
+priceContractDraftError,
+toPriceContractPayload,
+} from "@/components/organizations/price-contract-field"
 import { OrganizationExcelExportButton } from "@/components/organizations/organization-excel-export-button"
 import { OrganizationListExcelExportButton } from "@/components/organizations/organization-list-excel-export-button"
 import {
@@ -77,6 +82,7 @@ ORDER_APPROVER_ROLE_LABELS,
 parseOrderApproverRole,
 type OrderApproverRole,
 } from "@/lib/order-approver-role"
+import { karachiCalendarDay, priceContractBadge } from "@/lib/price-contract-validity"
 import { cn } from "@/lib/utils"
 import { Building2,GitBranch,Loader,Pencil,Save,Search,Trash2 } from "lucide-react"
 import { useSession } from "next-auth/react"
@@ -88,6 +94,7 @@ type Organization = {
   ntnNumber?: string | null
   strnNumber?: string | null
   emailDomain?: string | null
+  priceContractValidUntil?: string | null
   status?: "active" | "inactive"
   budgetAllocationMode?: BudgetAllocationMode
   orderApproverRole?: OrderApproverRole
@@ -786,6 +793,7 @@ export default function OrganizationsPage() {
                         status={isActiveStatus(org.status)}
                         budgetAllocationMode={org.budgetAllocationMode}
                         budgetsEnabled={org.budgetsEnabled !== false}
+                        priceContractValidUntil={org.priceContractValidUntil}
                       >
                         <EditOrgDialog
                           org={org}
@@ -1121,6 +1129,7 @@ function OrganizationListItem({
   badgeLabel,
   budgetAllocationMode,
   budgetsEnabled = true,
+  priceContractValidUntil,
 }: Readonly<{
   title: string
   subtitle: string
@@ -1131,7 +1140,9 @@ function OrganizationListItem({
   badgeLabel?: string
   budgetAllocationMode?: BudgetAllocationMode
   budgetsEnabled?: boolean
+  priceContractValidUntil?: string | null
 }>) {
+  const contractBadge = priceContractBadge(priceContractValidUntil, karachiCalendarDay(new Date()))
   const initials = title
     .split(" ")
     .filter(Boolean)
@@ -1192,6 +1203,21 @@ function OrganizationListItem({
         </div>
         <div className="flex w-full shrink-0 flex-col items-end gap-2 pt-1 sm:w-auto sm:pt-0">
           <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
+            {contractBadge && (
+              <Badge
+                variant="outline"
+                data-testid="price-contract-badge"
+                data-status={contractBadge.status}
+                className={cn(
+                  "text-[9px] uppercase font-semibold tracking-widest px-2 py-0.5 rounded-md whitespace-nowrap",
+                  contractBadge.status === "expired" && "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300",
+                  contractBadge.status === "expiring" && "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
+                  contractBadge.status === "active" && "border-slate-200 bg-white text-slate-600 dark:border-slate-700 dark:bg-slate-800/50 dark:text-slate-300",
+                )}
+              >
+                {contractBadge.label}
+              </Badge>
+            )}
             {normalizedBudgetAllocationMode && (
               <Badge
                 variant="outline"
@@ -1339,6 +1365,7 @@ function CreateOrgDialog({
   const [ntnNumber, setNtnNumber] = useState("")
   const [strnNumber, setStrnNumber] = useState("")
   const [emailDomain, setEmailDomain] = useState("")
+  const [priceContractValidUntil, setPriceContractValidUntil] = useState("")
   const [status, setStatus] = useState<boolean>(true)
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>("money")
   // Off by default: a new company orders without budgets until a Super Admin
@@ -1366,6 +1393,8 @@ function CreateOrgDialog({
   const approvalLevelsError = approvalLevelDraftsError(approvalLevelsEnabled, approvalLevelDrafts)
   const networkError = privateNetworkDraftError(privateNetworkEnabled, networkEntries)
   const emailDomainError = emailDomainDraftError(emailDomain)
+  const priceContractError = priceContractDraftError(priceContractValidUntil)
+  const priceContractPayload = toPriceContractPayload(priceContractValidUntil)
   const unpaidInvoiceBlockThreshold = parseOrderingBlockThresholdDraft(unpaidInvoiceBlockThresholdText)
   const unacknowledgedDeliveryBlockThreshold = parseOrderingBlockThresholdDraft(unacknowledgedDeliveryBlockThresholdText)
   const thresholdsInvalid = orderingBlockThresholdsInvalid([
@@ -1386,6 +1415,7 @@ function CreateOrgDialog({
           ...(ntnNumber.trim() ? { ntnNumber: ntnNumber.trim() } : {}),
           ...(strnNumber.trim() ? { strnNumber: strnNumber.trim() } : {}),
           ...(emailDomainPayload ? { emailDomain: emailDomainPayload } : {}),
+          ...(priceContractPayload ? { priceContractValidUntil: priceContractPayload } : {}),
           status: status ? "active" : "inactive",
           budgetsEnabled,
           budgetAllocationMode,
@@ -1416,6 +1446,7 @@ function CreateOrgDialog({
       setNtnNumber("")
       setStrnNumber("")
       setEmailDomain("")
+      setPriceContractValidUntil("")
       setStatus(true)
       setBudgetAllocationMode("money")
       setBudgetsEnabled(DEFAULT_ORGANIZATION_BUDGETS_ENABLED)
@@ -1441,7 +1472,7 @@ function CreateOrgDialog({
   }
 
   function submit() {
-    if (!name || !code || saving || networkError || emailDomainError || thresholdsInvalid || approvalLevelsError) return
+    if (!name || !code || saving || networkError || emailDomainError || priceContractError || thresholdsInvalid || approvalLevelsError) return
     setConfirmModeOpen(true)
   }
 
@@ -1514,6 +1545,12 @@ function CreateOrgDialog({
                 onChange={setEmailDomain}
                 disabled={saving}
                 hint={CREATE_EMAIL_DOMAIN_HINT}
+              />
+              <PriceContractField
+                id="price-contract-valid-until"
+                value={priceContractValidUntil}
+                onChange={setPriceContractValidUntil}
+                disabled={saving}
               />
               <BudgetAllocationFields
                 idPrefix="create"
@@ -1674,7 +1711,7 @@ function CreateOrgDialog({
             <Button
               onClick={submit}
               className="gap-2 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100 disabled:shadow-none"
-              disabled={!name || !code || saving || Boolean(networkError) || Boolean(emailDomainError) || thresholdsInvalid || Boolean(approvalLevelsError)}
+              disabled={!name || !code || saving || Boolean(networkError) || Boolean(emailDomainError) || Boolean(priceContractError) || thresholdsInvalid || Boolean(approvalLevelsError)}
             >
               <Save className="h-4 w-4" />
               Save Company
@@ -1965,6 +2002,7 @@ function EditOrgDialog({
   const [ntnNumber, setNtnNumber] = useState(org.ntnNumber ?? "")
   const [strnNumber, setStrnNumber] = useState(org.strnNumber ?? "")
   const [emailDomain, setEmailDomain] = useState(org.emailDomain ?? "")
+  const [priceContractValidUntil, setPriceContractValidUntil] = useState(org.priceContractValidUntil ?? "")
   const [status, setStatus] = useState<boolean>(isActiveStatus(org.status))
   const [budgetAllocationMode, setBudgetAllocationMode] = useState<BudgetAllocationMode>(
     parseBudgetAllocationMode(org.budgetAllocationMode)
@@ -2011,6 +2049,7 @@ function EditOrgDialog({
     ? null
     : approvalLevelDraftsError(approvalLevelsEnabled, approvalLevelDrafts)
   const emailDomainError = emailDomainDraftError(emailDomain)
+  const priceContractError = isSuperAdmin ? priceContractDraftError(priceContractValidUntil) : null
   const unpaidInvoiceBlockThreshold = parseOrderingBlockThresholdDraft(unpaidInvoiceBlockThresholdText)
   const unacknowledgedDeliveryBlockThreshold = parseOrderingBlockThresholdDraft(unacknowledgedDeliveryBlockThresholdText)
   const thresholdsInvalid = isSuperAdmin && orderingBlockThresholdsInvalid([
@@ -2024,6 +2063,7 @@ function EditOrgDialog({
     setNtnNumber(org.ntnNumber ?? "")
     setStrnNumber(org.strnNumber ?? "")
     setEmailDomain(org.emailDomain ?? "")
+    setPriceContractValidUntil(org.priceContractValidUntil ?? "")
     setStatus(isActiveStatus(org.status))
     setBudgetAllocationMode(parseBudgetAllocationMode(org.budgetAllocationMode))
     setOrderApproverRole(parseOrderApproverRole(org.orderApproverRole))
@@ -2040,6 +2080,7 @@ function EditOrgDialog({
     org.ntnNumber,
     org.strnNumber,
     org.emailDomain,
+    org.priceContractValidUntil,
     org.status,
     org.budgetAllocationMode,
     org.orderApproverRole,
@@ -2223,6 +2264,14 @@ function EditOrgDialog({
               disabled={saving}
               hint={EDIT_EMAIL_DOMAIN_HINT}
             />
+            {isSuperAdmin && (
+              <PriceContractField
+                id="eprice-contract-valid-until"
+                value={priceContractValidUntil}
+                onChange={setPriceContractValidUntil}
+                disabled={saving}
+              />
+            )}
             <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
               <div>
                 <Label htmlFor="org-status-edit">Status</Label>
@@ -2414,6 +2463,7 @@ function EditOrgDialog({
               !code.trim() ||
               Boolean(networkError) ||
               Boolean(emailDomainError) ||
+              Boolean(priceContractError) ||
               thresholdsInvalid ||
               Boolean(approvalLevelsError)
             }
@@ -2439,6 +2489,7 @@ function EditOrgDialog({
                         blockOrderingOnUnacknowledgedDeliveries,
                         ...orderingBlockThresholdPayload(unpaidInvoiceBlockThreshold, unacknowledgedDeliveryBlockThreshold),
                         managedOrdering,
+                        priceContractValidUntil: toPriceContractPayload(priceContractValidUntil),
                       }
                       : {}),
                   },

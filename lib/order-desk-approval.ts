@@ -54,15 +54,47 @@ export function canExecutiveDecideOrder(input: {
   return input.reachOrganizationIds.includes(order.organizationId)
 }
 
+/** Super Admin also decides desk orders — every one, with no assignment. */
+export const SUPER_ADMIN_DESK_APPROVER_ROLE = "SUPER_ADMIN"
+
+/**
+ * Which desk orders an approver reaches: every one (an active Super Admin), or
+ * those in the organizations assigned to an executive. Resolved from the rows
+ * as they are now by `loadDeskApprovalReach`, never from the session.
+ * See plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md.
+ */
+export type DeskApprovalReach =
+  | { kind: "all" }
+  | { kind: "organizations"; organizationIds: readonly number[] }
+
+export function deskApprovalReachIsEmpty(reach: DeskApprovalReach): boolean {
+  return reach.kind === "organizations" && reach.organizationIds.length === 0
+}
+
+/**
+ * Whether Super Admin may decide this order: a desk entry whose branch belongs
+ * to the order's own organization. Never an order the tenant's staff raised —
+ * those stay with the tenant's approvers.
+ */
+export function canSuperAdminDecideDeskOrder(order: {
+  createdByRole?: string | null
+  organizationId: number | null | undefined
+  branchOrganizationId: number | null | undefined
+}): boolean {
+  if (!isDeskEnteredOrder(order)) return false
+  if (typeof order.organizationId !== "number") return false
+  return order.branchOrganizationId === order.organizationId
+}
+
 /**
  * Whether a decision queues the usual notices — to the Order Portal raiser and
- * to Super Admin. Not for an executive's decision on a desk order: desk
- * orders notify no one (the customer has no account to tell, and the desk
- * sees the outcome on its own list), and the notice builders assume a deciding
- * role inside the tenant.
+ * to Super Admin. Not for a decision on a desk order, by an executive or by
+ * Super Admin: desk orders notify no one (the customer has no account to tell,
+ * and the desk sees the outcome on its own list), and the notice builders
+ * assume a deciding role inside the tenant.
  */
 export function decisionQueuesNotifications(decisionRole: string): boolean {
-  return decisionRole !== APRICART_EXECUTIVE_ROLE
+  return decisionRole !== APRICART_EXECUTIVE_ROLE && decisionRole !== SUPER_ADMIN_DESK_APPROVER_ROLE
 }
 
 /**

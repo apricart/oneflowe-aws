@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 
-import { describeDeskReach, reachDraftFor, toggleReachBranch, toggleReachOrganization } from "./order-desk-team-view"
+import {
+  describeDeskReach,
+  filterReachOrganizations,
+  reachDraftFor,
+  setVisibleReach,
+  toggleReachBranch,
+  toggleReachOrganization,
+} from "./order-desk-team-view"
 
 const organizations = [
   { id: 1, name: "Meezan", branches: [{ id: 11, name: "North" }, { id: 12, name: "South" }] },
@@ -61,5 +68,64 @@ describe("the Order Desk Team reach editor", () => {
       expect(reachDraftFor({ organizationIds: [1], branchIds: [11] }, []))
         .toEqual({ organizationIds: new Set(), branchIds: new Set() })
     })
+  })
+})
+
+describe("searching and bulk-ticking the reach editor", () => {
+  const ids = (draft: { organizationIds: ReadonlySet<number>; branchIds: ReadonlySet<number> }) => ({
+    organizationIds: [...draft.organizationIds].sort((a, b) => a - b),
+    branchIds: [...draft.branchIds].sort((a, b) => a - b),
+  })
+  const empty = { organizationIds: new Set<number>(), branchIds: new Set<number>() }
+
+  it("lists everything, whole, for an empty or blank search", () => {
+    for (const query of ["", "   "]) {
+      const visible = filterReachOrganizations(organizations, query)
+      expect(visible.map((entry) => [entry.organization.id, entry.matchedWhole, entry.branches.length]))
+        .toEqual([[1, true, 2], [2, true, 1]])
+    }
+  })
+
+  it("lists a matching organization with every branch, ignoring case", () => {
+    const visible = filterReachOrganizations(organizations, " meez ")
+    expect(visible.map((entry) => [entry.organization.id, entry.matchedWhole, entry.branches.map((b) => b.id)]))
+      .toEqual([[1, true, [11, 12]]])
+  })
+
+  it("lists an organization only for its matching branches, and drops one with none", () => {
+    const visible = filterReachOrganizations(organizations, "SOUTH")
+    expect(visible.map((entry) => [entry.organization.id, entry.matchedWhole, entry.branches.map((b) => b.id)]))
+      .toEqual([[1, false, [12]]])
+    expect(filterReachOrganizations(organizations, "nowhere")).toEqual([])
+  })
+
+  it("select all with no search grants every organization whole and drops redundant branches", () => {
+    const next = setVisibleReach({ organizationIds: new Set(), branchIds: new Set([11]) }, filterReachOrganizations(organizations, ""), true)
+    expect(ids(next)).toEqual({ organizationIds: [1, 2], branchIds: [] })
+  })
+
+  it("select all over a branch search grants only the listed branches, never the organization", () => {
+    const next = setVisibleReach(empty, filterReachOrganizations(organizations, "south"), true)
+    expect(ids(next)).toEqual({ organizationIds: [], branchIds: [12] })
+  })
+
+  it("select all over a branch search leaves a whole grant whole", () => {
+    const next = setVisibleReach({ organizationIds: new Set([1]), branchIds: new Set() }, filterReachOrganizations(organizations, "south"), true)
+    expect(ids(next)).toEqual({ organizationIds: [1], branchIds: [] })
+  })
+
+  it("unselect all withdraws only what is listed", () => {
+    const draft = { organizationIds: new Set([2]), branchIds: new Set([11, 12]) }
+    expect(ids(setVisibleReach(draft, filterReachOrganizations(organizations, "south"), false)))
+      .toEqual({ organizationIds: [2], branchIds: [11] })
+    expect(ids(setVisibleReach(draft, filterReachOrganizations(organizations, "meezan"), false)))
+      .toEqual({ organizationIds: [2], branchIds: [] })
+    expect(ids(setVisibleReach(draft, filterReachOrganizations(organizations, ""), false)))
+      .toEqual({ organizationIds: [], branchIds: [] })
+  })
+
+  it("unselect all withdraws a whole grant listed for a branch match, since its tick is what shows", () => {
+    const next = setVisibleReach({ organizationIds: new Set([1]), branchIds: new Set() }, filterReachOrganizations(organizations, "north"), false)
+    expect(ids(next)).toEqual({ organizationIds: [], branchIds: [] })
   })
 })

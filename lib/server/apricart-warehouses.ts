@@ -4,6 +4,7 @@ import { and, asc, count, eq, inArray, isNull, ne, sql } from "drizzle-orm"
 
 import {
   apricartExecutiveAssignments,
+  apricartWarehouseMemberBranches,
   apricartWarehouseMemberships,
   apricartWarehouses,
   branches,
@@ -12,6 +13,7 @@ import {
   organizations,
   roles,
   users,
+  warehouseRouteRules,
 } from "@/db/schema"
 import { db } from "@/lib/db"
 import {
@@ -20,8 +22,12 @@ import {
   CREATE_APRICART_WAREHOUSE_AUDIT_ACTION,
   UPDATE_APRICART_WAREHOUSE_AUDIT_ACTION,
   UPDATE_APRICART_WAREHOUSE_MEMBERS_AUDIT_ACTION,
+  UPDATE_APRICART_WAREHOUSE_MEMBER_SCOPE_AUDIT_ACTION,
   UPDATE_BRANCH_FULFILLMENT_ROUTES_AUDIT_ACTION,
+  UPDATE_WAREHOUSE_ROUTE_RULES_AUDIT_ACTION,
+  UNROUTED_ORDER_LIST_LIMIT,
   WAREHOUSE_MEMBER_ROLES,
+  WAREHOUSE_ROUTE_RULE_MAX,
   classifyBranchCoverage,
   executiveCoverageGaps,
   responsibilityForRole,
@@ -29,10 +35,14 @@ import {
   type ApricartWarehouseStatus,
   type BranchCoverage,
   type BranchCoverageKind,
+  type WarehouseMemberScope,
   type WarehouseResponsibility,
 } from "@/lib/apricart-warehouses"
 import { WAREHOUSE_ROLE } from "@/lib/warehouse-access"
+import { WAREHOUSE_ORDER_OWNERSHIP, readsWarehouseMembership, type WarehouseOrderOwnershipMode } from "@/lib/warehouse-ownership-policy"
 import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
+import { branchCityKeySql, branchCityLabelSql } from "@/lib/server/branch-city-key"
+import { branchWarehouseSql, countStrandedBranches } from "@/lib/server/branch-warehouse"
 import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
 
 /**
@@ -58,10 +68,42 @@ export type ApricartWarehouse = {
   address: string | null
   contactPhone: string | null
   status: ApricartWarehouseStatus
-  members: Array<{ userId: string; responsibility: WarehouseResponsibility }>
+  members: Array<{
+    userId: string
+    responsibility: WarehouseResponsibility
+    branchScope: WarehouseMemberScope
+    /** For a `SELECTED` operator: the branches it works, ascending. */
+    selectedBranchIds: number[]
+  }>
+  /** Branches put in this warehouse by hand. */
   routedBranchCount: number
-  /** Organizations it is routed into that none of its active executive members may approve for. */
+  /** Organization or organization-and-city rules naming this warehouse. */
+  ruleCount: number
+  /** Active branches in this warehouse now, by manual route or rule. */
+  branchCount: number
+  /** Organizations it holds branches in that none of its active executive members may approve for. */
   executiveGapOrganizationIds: number[]
+}
+
+export type WarehouseRouteRuleView = {
+  id: number
+  warehouseId: number
+  organizationId: number
+  /** Null: every branch of the organization. */
+  cityKey: string | null
+  /** How the city is spelt on the organization's branches, or null. */
+  cityLabel: string | null
+  /** Active branches of the organization this rule matches today (before manual routes). */
+  branchCount: number
+}
+
+export type UnroutedOrderView = {
+  id: number
+  tid: string
+  organizationId: number
+  branchId: number
+  status: string
+  fulfillmentStatus: string | null
 }
 
 export type WarehouseMemberAccount = {
@@ -81,9 +123,19 @@ export type BranchCoverageEntry = BranchCoverage & {
 }
 
 export type ApricartWarehouseConfiguration = {
+  /** Where warehouse accounts' branches come from today (`lib/warehouse-ownership-policy.ts`). */
+  ownershipMode: WarehouseOrderOwnershipMode
   warehouses: ApricartWarehouse[]
   accounts: WarehouseMemberAccount[]
+  /** Branches put in a warehouse by hand. */
   routes: Array<{ branchId: number; warehouseId: number }>
+  rules: WarehouseRouteRuleView[]
+  /** Every (organization, city) with an active branch, for the rule picker. */
+  cityOptions: Array<{ organizationId: number; cityKey: string; label: string; branchCount: number }>
+  /** The live warehouse of every active branch that is in one. */
+  branchWarehouses: Array<{ branchId: number; warehouseId: number }>
+  /** Open orders, not transferred, whose branch is in no warehouse. */
+  unrouted: { count: number; orders: UnroutedOrderView[] }
   coverage: { summary: Record<BranchCoverageKind, number>; branches: BranchCoverageEntry[] }
 }
 
@@ -93,18 +145,80 @@ const ROUTE_LIMIT = 10000
 /** Reach is read one account at a time, a few at once, so the pool is never flooded. */
 const REACH_CONCURRENCY = 4
 
+/**
+ * Each account's reach from its own assignments — the "branch" mode, whatever
+ * mode is in force — which is what the coverage report compares warehouses with.
+ */
 async function loadReachByAccount(accountIds: string[]): Promise<Map<string, number[]>> {
   const reach = new Map<string, number[]>()
   for (let start = 0; start < accountIds.length; start += REACH_CONCURRENCY) {
     const chunk = accountIds.slice(start, start + REACH_CONCURRENCY)
-    const results = await Promise.all(chunk.map((id) => loadWarehouseReach(db, id)))
+    const results = await Promise.all(chunk.map((id) => loadWarehouseReach(db, id, { mode: "branch" })))
     chunk.forEach((id, index) => reach.set(id, results[index]))
   }
   return reach
 }
 
+const OPEN_ORDER_STATUS_SQL = sql`UPPER(${orders.status}) IN ('PENDING', 'APPROVED')`
+
+/** The rule list, each with the active branches of its organization (and city) it matches. */
+async function loadRuleViews(): Promise<WarehouseRouteRuleView[]> {
+  const rows = await db
+    .select({
+      id: warehouseRouteRules.id,
+      warehouseId: warehouseRouteRules.warehouseId,
+      organizationId: warehouseRouteRules.organizationId,
+      cityKey: warehouseRouteRules.cityKey,
+      cityLabel: sql<string | null>`(
+        SELECT min(${branchCityLabelSql(sql`b."city"`)}) FROM "branches" b
+        WHERE b."organization_id" = ${warehouseRouteRules.organizationId}
+          AND ${branchCityKeySql(sql`b."city"`)} = ${warehouseRouteRules.cityKey}
+      )`,
+      branchCount: sql<number>`(
+        SELECT count(*)::int FROM "branches" b
+        WHERE b."organization_id" = ${warehouseRouteRules.organizationId} AND b."status" = 'active'
+          AND (${warehouseRouteRules.cityKey} IS NULL OR ${branchCityKeySql(sql`b."city"`)} = ${warehouseRouteRules.cityKey})
+      )`,
+    })
+    .from(warehouseRouteRules)
+    .orderBy(asc(warehouseRouteRules.organizationId), asc(warehouseRouteRules.cityKey))
+    .limit(WAREHOUSE_ROUTE_RULE_MAX)
+  return rows.map((row) => ({ ...row, branchCount: Number(row.branchCount) }))
+}
+
+async function loadUnroutedOrders(): Promise<ApricartWarehouseConfiguration["unrouted"]> {
+  const condition = and(
+    OPEN_ORDER_STATUS_SQL,
+    isNull(orders.fulfillmentWarehouseId),
+    sql`${branchWarehouseSql()} IS NULL`,
+  )
+  const [[{ total }], rows] = await Promise.all([
+    db.select({ total: count() }).from(orders).innerJoin(branches, eq(branches.id, orders.branchId)).where(condition),
+    db
+      .select({
+        id: orders.id,
+        tid: orders.tid,
+        organizationId: orders.organizationId,
+        branchId: orders.branchId,
+        status: orders.status,
+        fulfillmentStatus: orders.fulfillmentStatus,
+      })
+      .from(orders)
+      .innerJoin(branches, eq(branches.id, orders.branchId))
+      .where(condition)
+      .orderBy(asc(orders.id))
+      .limit(UNROUTED_ORDER_LIST_LIMIT),
+  ])
+  return {
+    count: Number(total),
+    orders: rows.flatMap((row) => row.organizationId === null
+      ? []
+      : [{ ...row, organizationId: row.organizationId, tid: String(row.tid ?? row.id), status: String(row.status ?? "") }]),
+  }
+}
+
 export async function loadApricartWarehouseConfiguration(): Promise<ApricartWarehouseConfiguration> {
-  const [warehouseRows, membershipRows, accountRows, routeRows, branchRows] = await Promise.all([
+  const [warehouseRows, membershipRows, accountRows, routeRows, branchRows, selectionRows, rules, cityOptionRows, unrouted] = await Promise.all([
     db
       .select({
         id: apricartWarehouses.id,
@@ -120,9 +234,11 @@ export async function loadApricartWarehouseConfiguration(): Promise<ApricartWare
       .limit(APRICART_WAREHOUSE_MAX),
     db
       .select({
+        id: apricartWarehouseMemberships.id,
         warehouseId: apricartWarehouseMemberships.warehouseId,
         userId: apricartWarehouseMemberships.userId,
         responsibility: apricartWarehouseMemberships.responsibility,
+        branchScope: apricartWarehouseMemberships.branchScope,
       })
       .from(apricartWarehouseMemberships)
       .limit(APRICART_WAREHOUSE_MAX * APRICART_WAREHOUSE_MEMBER_MAX),
@@ -145,11 +261,32 @@ export async function loadApricartWarehouseConfiguration(): Promise<ApricartWare
       .from(branchFulfillmentRoutes)
       .limit(ROUTE_LIMIT),
     db
-      .select({ id: branches.id, organizationId: branches.organizationId })
+      .select({
+        id: branches.id,
+        organizationId: branches.organizationId,
+        warehouseId: sql<number | null>`${branchWarehouseSql()}`,
+      })
       .from(branches)
       .where(eq(branches.status, "active"))
       .orderBy(asc(branches.id))
       .limit(BRANCH_LIMIT),
+    db
+      .select({ membershipId: apricartWarehouseMemberBranches.membershipId, branchId: apricartWarehouseMemberBranches.branchId })
+      .from(apricartWarehouseMemberBranches)
+      .limit(ROUTE_LIMIT),
+    loadRuleViews(),
+    db
+      .select({
+        organizationId: branches.organizationId,
+        cityKey: sql<string>`${branchCityKeySql(branches.city)}`,
+        label: sql<string>`min(${branchCityLabelSql(branches.city)})`,
+        branchCount: sql<number>`count(*)::int`,
+      })
+      .from(branches)
+      .where(and(eq(branches.status, "active"), sql`coalesce(${branchCityKeySql(branches.city)}, '') <> ''`))
+      .groupBy(branches.organizationId, sql`${branchCityKeySql(branches.city)}`)
+      .limit(BRANCH_LIMIT),
+    loadUnroutedOrders(),
   ])
 
   const accounts: WarehouseMemberAccount[] = accountRows.flatMap((row) => {
@@ -183,48 +320,52 @@ export async function loadApricartWarehouseConfiguration(): Promise<ApricartWare
     operatorWarehouses.set(membership.userId, [...(operatorWarehouses.get(membership.userId) ?? []), membership.warehouseId])
   }
 
-  const routeByBranch = new Map(routeRows.map((row) => [row.branchId, row.warehouseId]))
-  const coverageEntries: BranchCoverageEntry[] = branchRows.flatMap((branch) => {
-    if (branch.organizationId === null) return []
+  // Each active branch's warehouse now — by manual route or rule — which is
+  // what the report compares today's account reach with.
+  const liveBranches = branchRows.flatMap((branch) => branch.organizationId === null
+    ? []
+    : [{ id: branch.id, organizationId: branch.organizationId, warehouseId: branch.warehouseId === null ? null : Number(branch.warehouseId) }])
+  const coverageEntries: BranchCoverageEntry[] = liveBranches.map((branch) => {
     const servingAccountIds = (servingByBranch.get(branch.id) ?? []).sort((a, b) => a.localeCompare(b))
-    return [{
+    return {
       branchId: branch.id,
       organizationId: branch.organizationId,
       servingAccountIds,
       ...classifyBranchCoverage({
-        routeWarehouseId: routeByBranch.get(branch.id) ?? null,
+        routeWarehouseId: branch.warehouseId,
         servingAccountIds,
         operatorWarehouses,
       }),
-    }]
+    }
   })
 
   const executiveIds = [...new Set(membershipRows
     .filter((row) => row.responsibility === "EXECUTIVE" && activeAccountIds.has(row.userId))
     .map((row) => row.userId))]
-  const routedBranchIds = routeRows.map((row) => row.branchId)
-  const [executiveAssignmentRows, routedBranchRows] = await Promise.all([
-    executiveIds.length === 0
-      ? []
-      : db
-        .select({ userId: apricartExecutiveAssignments.userId, organizationId: apricartExecutiveAssignments.organizationId })
-        .from(apricartExecutiveAssignments)
-        .where(inArray(apricartExecutiveAssignments.userId, executiveIds)),
-    routedBranchIds.length === 0
-      ? []
-      : db
-        .select({ id: branches.id, organizationId: branches.organizationId })
-        .from(branches)
-        .where(inArray(branches.id, routedBranchIds)),
-  ])
-  const organizationOfBranch = new Map(routedBranchRows.map((row) => [row.id, row.organizationId]))
+  const executiveAssignmentRows = executiveIds.length === 0
+    ? []
+    : await db
+      .select({ userId: apricartExecutiveAssignments.userId, organizationId: apricartExecutiveAssignments.organizationId })
+      .from(apricartExecutiveAssignments)
+      .where(inArray(apricartExecutiveAssignments.userId, executiveIds))
+
+  const selectedByMembership = new Map<number, number[]>()
+  for (const row of selectionRows) {
+    selectedByMembership.set(row.membershipId, [...(selectedByMembership.get(row.membershipId) ?? []), row.branchId])
+  }
 
   return {
+    ownershipMode: WAREHOUSE_ORDER_OWNERSHIP,
     warehouses: warehouseRows.map((warehouse) => {
       const members = membershipRows
         .filter((row) => row.warehouseId === warehouse.id)
-        .map((row) => ({ userId: row.userId, responsibility: row.responsibility as WarehouseResponsibility }))
-      const routed = routeRows.filter((row) => row.warehouseId === warehouse.id)
+        .map((row) => ({
+          userId: row.userId,
+          responsibility: row.responsibility as WarehouseResponsibility,
+          branchScope: row.branchScope as WarehouseMemberScope,
+          selectedBranchIds: (selectedByMembership.get(row.id) ?? []).sort((a, b) => a - b),
+        }))
+      const inWarehouse = liveBranches.filter((branch) => branch.warehouseId === warehouse.id)
       const executiveMembers = members
         .filter((member) => member.responsibility === "EXECUTIVE" && activeAccountIds.has(member.userId))
         .map((member) => member.userId)
@@ -232,12 +373,11 @@ export async function loadApricartWarehouseConfiguration(): Promise<ApricartWare
         ...warehouse,
         status: warehouse.status as ApricartWarehouseStatus,
         members,
-        routedBranchCount: routed.length,
+        routedBranchCount: routeRows.filter((row) => row.warehouseId === warehouse.id).length,
+        ruleCount: rules.filter((rule) => rule.warehouseId === warehouse.id).length,
+        branchCount: inWarehouse.length,
         executiveGapOrganizationIds: executiveCoverageGaps({
-          routedOrganizationIds: routed.flatMap((row) => {
-            const organizationId = organizationOfBranch.get(row.branchId)
-            return typeof organizationId === "number" ? [organizationId] : []
-          }),
+          routedOrganizationIds: inWarehouse.map((branch) => branch.organizationId),
           executiveOrganizationIds: executiveMembers.map((userId) => executiveAssignmentRows
             .filter((row) => row.userId === userId)
             .map((row) => row.organizationId)),
@@ -246,6 +386,12 @@ export async function loadApricartWarehouseConfiguration(): Promise<ApricartWare
     }),
     accounts,
     routes: routeRows,
+    rules,
+    cityOptions: cityOptionRows.flatMap((row) => row.organizationId === null || !row.cityKey
+      ? []
+      : [{ organizationId: row.organizationId, cityKey: row.cityKey, label: row.label, branchCount: Number(row.branchCount) }]),
+    branchWarehouses: liveBranches.flatMap((branch) => branch.warehouseId === null ? [] : [{ branchId: branch.id, warehouseId: branch.warehouseId }]),
+    unrouted,
     coverage: { summary: summarizeCoverage(coverageEntries), branches: coverageEntries },
   }
 }
@@ -349,7 +495,11 @@ export async function updateApricartWarehouse(input: {
         .select({ routed: count() })
         .from(branchFulfillmentRoutes)
         .where(eq(branchFulfillmentRoutes.warehouseId, input.warehouseId))
-      if (routed > 0) {
+      const [{ ruled }] = await tx
+        .select({ ruled: count() })
+        .from(warehouseRouteRules)
+        .where(eq(warehouseRouteRules.warehouseId, input.warehouseId))
+      if (routed > 0 || ruled > 0) {
         return { kind: "conflict", message: "Move this warehouse's branches to another warehouse before deactivating it" }
       }
       if (await countOpenTransferredOrders(tx, input.warehouseId) > 0) {
@@ -473,6 +623,22 @@ export async function setApricartWarehouseMember(input: {
   userId: string
   assigned: boolean
   actor: Actor
+  mode?: WarehouseOrderOwnershipMode
+}): Promise<WarehouseMemberOutcome> {
+  try {
+    return await setApricartWarehouseMemberInTx(input)
+  } catch (error) {
+    if (error instanceof StrandedBranchesError) return { kind: "conflict", message: error.message }
+    throw error
+  }
+}
+
+async function setApricartWarehouseMemberInTx(input: {
+  warehouseId: number
+  userId: string
+  assigned: boolean
+  actor: Actor
+  mode?: WarehouseOrderOwnershipMode
 }): Promise<WarehouseMemberOutcome> {
   return db.transaction(async (tx) => {
     // Serializes membership changes at one warehouse, so the cap holds.
@@ -500,10 +666,15 @@ export async function setApricartWarehouseMember(input: {
       .map((row) => row.userId)
       .sort((a, b) => a.localeCompare(b))
 
+    // Removing an operator can leave branches nobody works once membership decides.
+    const checkStrands = input.assigned
+      ? async () => {}
+      : await strandGuard(tx, [input.warehouseId], input.mode ?? WAREHOUSE_ORDER_OWNERSHIP)
     const change = input.assigned
       ? await addMember(tx, { ...input, responsibility, isActive: Boolean(account.isActive), memberCount: before.length, alreadyMember: before.includes(input.userId) })
       : await removeMember(tx, input)
     if (change !== "changed" && change !== "unchanged") return change
+    await checkStrands()
 
     if (change === "changed") {
       const after = input.assigned
@@ -625,4 +796,284 @@ export async function replaceBranchFulfillmentRoutes(input: {
     }
     return { kind: "updated", branchIds, moved }
   })
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: rules, member scope, and the strand guard.
+// See plans/OF-WAREHOUSE-order-ownership-and-transfer.md (phase 2).
+// ---------------------------------------------------------------------------
+
+/** Thrown inside a transaction to roll back a change that would strand branches. */
+class StrandedBranchesError extends Error {}
+
+const STRANDED_MESSAGE =
+  "This would leave branches in a warehouse that no active operator works — add an operator or widen a scope first"
+
+async function strandedCounts(tx: Transaction, warehouseIds: readonly number[]): Promise<Map<number, number>> {
+  const counts = new Map<number, number>()
+  for (const warehouseId of [...new Set(warehouseIds)].sort((a, b) => a - b)) {
+    counts.set(warehouseId, await countStrandedBranches(tx, warehouseId))
+  }
+  return counts
+}
+
+/**
+ * While membership decides who works an order, a change may not raise the
+ * number of active branches nobody works in any warehouse it touches. Branches
+ * stranded before the change do not block it. In the "branch" mode nothing
+ * reads membership, so nothing is checked: `check:warehouse-ownership` is the
+ * gate before the switch.
+ */
+async function strandGuard(
+  tx: Transaction,
+  warehouseIds: readonly number[],
+  mode: WarehouseOrderOwnershipMode,
+): Promise<() => Promise<void>> {
+  if (!readsWarehouseMembership(mode)) return async () => {}
+  const before = await strandedCounts(tx, warehouseIds)
+  return async () => {
+    const after = await strandedCounts(tx, warehouseIds)
+    for (const [warehouseId, stranded] of after) {
+      if (stranded > (before.get(warehouseId) ?? 0)) throw new StrandedBranchesError(STRANDED_MESSAGE)
+    }
+  }
+}
+
+/** The city key of a typed or listed city, computed in SQL only; null when blank. */
+async function cityKeyOf(tx: Transaction, city: string): Promise<string | null> {
+  const [row] = (await tx.execute<{ key: string | null }>(sql`SELECT ${branchCityKeySql(city)} AS key`)).rows
+  const key = row?.key ?? null
+  return key && key.trim() !== "" ? key : null
+}
+
+export type RouteRuleOutcome =
+  | {
+    kind: "updated"
+    changed: boolean
+    rule: { warehouseId: number; organizationId: number; cityKey: string | null }
+    assigned: boolean
+    movedFromWarehouseId: number | null
+  }
+  | { kind: "not-found" }
+  | { kind: "invalid"; message: string }
+  | { kind: "conflict"; message: string }
+  | { kind: "limit" }
+
+const RULE_RACE_MESSAGE = "This rule changed while it was being saved — reload and try again"
+
+/**
+ * Put every branch of an organization — or of an organization in one city —
+ * in this warehouse, or take that rule away. A rule another warehouse holds
+ * moves here, and the audit row says where from; both warehouses are locked,
+ * in id order. Removing only ever removes this warehouse's own rule.
+ * Idempotent. Audited `UPDATE_WAREHOUSE_ROUTE_RULES` inside the change.
+ */
+export async function setWarehouseRouteRule(input: {
+  warehouseId: number
+  organizationId: number
+  /** Null: every branch of the organization. Any spelling: the key is computed in SQL. */
+  city: string | null
+  assigned: boolean
+  actor: Actor
+  mode?: WarehouseOrderOwnershipMode
+}): Promise<RouteRuleOutcome> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [organization] = await tx
+        .select({ id: organizations.id })
+        .from(organizations)
+        .where(eq(organizations.id, input.organizationId))
+        .limit(1)
+      if (!organization) return { kind: "invalid", message: "The organization does not exist" } as const
+
+      const cityKey = input.city === null ? null : await cityKeyOf(tx, input.city)
+      if (input.city !== null && cityKey === null) return { kind: "invalid", message: "Name a city" } as const
+
+      const holder = () => tx
+        .select({ id: warehouseRouteRules.id, warehouseId: warehouseRouteRules.warehouseId })
+        .from(warehouseRouteRules)
+        .where(and(
+          eq(warehouseRouteRules.organizationId, input.organizationId),
+          cityKey === null ? isNull(warehouseRouteRules.cityKey) : eq(warehouseRouteRules.cityKey, cityKey),
+        ))
+        .limit(1)
+      const [initial] = await holder()
+
+      // Both warehouses, in id order, so two moves between them cannot deadlock;
+      // the reach takes them FOR SHARE, so in-flight warehouse writes finish first.
+      const lockIds = [...new Set([input.warehouseId, ...(initial ? [initial.warehouseId] : [])])].sort((a, b) => a - b)
+      const locked = await tx
+        .select({ id: apricartWarehouses.id, status: apricartWarehouses.status })
+        .from(apricartWarehouses)
+        .where(inArray(apricartWarehouses.id, lockIds))
+        .orderBy(asc(apricartWarehouses.id))
+        .for("update")
+      const target = locked.find((warehouse) => warehouse.id === input.warehouseId)
+      if (!target) return { kind: "not-found" } as const
+
+      const [existing] = await holder().for("update")
+      if ((existing?.warehouseId ?? null) !== (initial?.warehouseId ?? null)) {
+        return { kind: "conflict", message: RULE_RACE_MESSAGE } as const
+      }
+
+      const rule = { warehouseId: input.warehouseId, organizationId: input.organizationId, cityKey }
+      const unchanged = { kind: "updated", changed: false, rule, assigned: input.assigned, movedFromWarehouseId: null } as const
+      if (input.assigned && existing?.warehouseId === input.warehouseId) return unchanged
+      if (!input.assigned && existing?.warehouseId !== input.warehouseId) return unchanged
+      if (input.assigned && target.status !== "ACTIVE") {
+        return { kind: "conflict", message: "An inactive warehouse cannot take new branches" } as const
+      }
+
+      const checkStrands = await strandGuard(tx, lockIds, input.mode ?? WAREHOUSE_ORDER_OWNERSHIP)
+      let movedFromWarehouseId: number | null = null
+      if (input.assigned && existing) {
+        movedFromWarehouseId = existing.warehouseId
+        await tx.update(warehouseRouteRules).set({ warehouseId: input.warehouseId }).where(eq(warehouseRouteRules.id, existing.id))
+      } else if (input.assigned) {
+        const [{ total }] = await tx.select({ total: count() }).from(warehouseRouteRules)
+        if (total >= WAREHOUSE_ROUTE_RULE_MAX) return { kind: "limit" } as const
+        await tx.insert(warehouseRouteRules).values({ ...rule, createdByUserId: input.actor.id })
+      } else if (existing) {
+        await tx.delete(warehouseRouteRules).where(eq(warehouseRouteRules.id, existing.id))
+      }
+      await checkStrands()
+
+      await recordAuditEvent(tx, {
+        action: UPDATE_WAREHOUSE_ROUTE_RULES_AUDIT_ACTION,
+        entity: "apricart_warehouse",
+        entityId: input.warehouseId,
+        actor: input.actor,
+        organizationId: input.organizationId,
+        before: { warehouseId: existing?.warehouseId ?? null },
+        after: { warehouseId: input.assigned ? input.warehouseId : null },
+        context: { organizationId: input.organizationId, cityKey, assigned: input.assigned, movedFromWarehouseId },
+      })
+      return { kind: "updated", changed: true, rule, assigned: input.assigned, movedFromWarehouseId } as const
+    })
+  } catch (error) {
+    if (error instanceof StrandedBranchesError) return { kind: "conflict", message: error.message }
+    if (isUniqueViolation(error)) return { kind: "conflict", message: RULE_RACE_MESSAGE }
+    throw error
+  }
+}
+
+export type MemberScopeOutcome =
+  | { kind: "updated"; changed: boolean; userId: string; branchScope: WarehouseMemberScope; selectedBranchIds: number[] }
+  | { kind: "not-found" }
+  | { kind: "member-not-found" }
+  | { kind: "invalid"; message: string }
+  | { kind: "conflict"; message: string }
+
+/**
+ * Which of the warehouse's branches one operator works: all of them, or — one
+ * organization at a time, so the body stays under the WAF's 8 KB — a
+ * selection. Every selected branch must be in this warehouse now. Audited
+ * `UPDATE_APRICART_WAREHOUSE_MEMBER_SCOPE` inside the change.
+ */
+export async function setWarehouseMemberScope(input: {
+  warehouseId: number
+  userId: string
+  scope: WarehouseMemberScope
+  /** For `SELECTED`: the organization whose part of the selection this replaces. */
+  organizationId?: number
+  branchIds?: readonly number[]
+  actor: Actor
+  mode?: WarehouseOrderOwnershipMode
+}): Promise<MemberScopeOutcome> {
+  try {
+    return await db.transaction(async (tx) => {
+      const [warehouse] = await tx
+        .select({ id: apricartWarehouses.id })
+        .from(apricartWarehouses)
+        .where(eq(apricartWarehouses.id, input.warehouseId))
+        .for("update")
+        .limit(1)
+      if (!warehouse) return { kind: "not-found" } as const
+
+      const [membership] = await tx
+        .select({
+          id: apricartWarehouseMemberships.id,
+          responsibility: apricartWarehouseMemberships.responsibility,
+          branchScope: apricartWarehouseMemberships.branchScope,
+        })
+        .from(apricartWarehouseMemberships)
+        .where(and(
+          eq(apricartWarehouseMemberships.warehouseId, input.warehouseId),
+          eq(apricartWarehouseMemberships.userId, input.userId),
+        ))
+        .for("update")
+        .limit(1)
+      if (!membership) return { kind: "member-not-found" } as const
+      if (membership.responsibility !== "WAREHOUSE_OPERATOR") {
+        return { kind: "invalid", message: "Only an operator works selected branches; an executive is always all" } as const
+      }
+
+      const selection = async () => (await tx
+        .select({ branchId: apricartWarehouseMemberBranches.branchId })
+        .from(apricartWarehouseMemberBranches)
+        .where(eq(apricartWarehouseMemberBranches.membershipId, membership.id)))
+        .map((row) => row.branchId)
+        .sort((a, b) => a - b)
+      const before = await selection()
+
+      if (input.scope === "ALL" && membership.branchScope === "ALL" && before.length === 0) {
+        return { kind: "updated", changed: false, userId: input.userId, branchScope: "ALL", selectedBranchIds: [] } as const
+      }
+      const organizationId = input.organizationId
+      const branchIds = [...new Set(input.branchIds ?? [])].sort((a, b) => a - b)
+      if (input.scope === "SELECTED") {
+        if (organizationId === undefined) return { kind: "invalid", message: "Name the organization" } as const
+        const inWarehouse = branchIds.length === 0
+          ? []
+          : await tx
+            .select({ id: branches.id })
+            .from(branches)
+            .where(and(
+              inArray(branches.id, branchIds),
+              eq(branches.organizationId, organizationId),
+              sql`${branchWarehouseSql()} = ${input.warehouseId}`,
+            ))
+        if (inWarehouse.length !== branchIds.length) {
+          return { kind: "invalid", message: "Every selected branch must be one of this organization's branches in this warehouse" } as const
+        }
+      }
+
+      const checkStrands = await strandGuard(tx, [input.warehouseId], input.mode ?? WAREHOUSE_ORDER_OWNERSHIP)
+      if (input.scope === "ALL") {
+        await tx.delete(apricartWarehouseMemberBranches).where(eq(apricartWarehouseMemberBranches.membershipId, membership.id))
+      } else {
+        await tx.delete(apricartWarehouseMemberBranches).where(and(
+          eq(apricartWarehouseMemberBranches.membershipId, membership.id),
+          sql`${apricartWarehouseMemberBranches.branchId} IN (SELECT b."id" FROM "branches" b WHERE b."organization_id" = ${organizationId})`,
+        ))
+        if (branchIds.length > 0) {
+          await tx.insert(apricartWarehouseMemberBranches)
+            .values(branchIds.map((branchId) => ({ membershipId: membership.id, branchId, createdByUserId: input.actor.id })))
+        }
+      }
+      await tx.update(apricartWarehouseMemberships)
+        .set({ branchScope: input.scope })
+        .where(eq(apricartWarehouseMemberships.id, membership.id))
+      const after = await selection()
+      await checkStrands()
+
+      const changed = membership.branchScope !== input.scope || before.join(",") !== after.join(",")
+      if (changed) {
+        await recordAuditEvent(tx, {
+          action: UPDATE_APRICART_WAREHOUSE_MEMBER_SCOPE_AUDIT_ACTION,
+          entity: "apricart_warehouse",
+          entityId: input.warehouseId,
+          actor: input.actor,
+          ...(organizationId === undefined ? {} : { organizationId }),
+          before: { branchScope: membership.branchScope, branchIds: before },
+          after: { branchScope: input.scope, branchIds: after },
+          context: { userId: input.userId },
+        })
+      }
+      return { kind: "updated", changed, userId: input.userId, branchScope: input.scope, selectedBranchIds: after } as const
+    })
+  } catch (error) {
+    if (error instanceof StrandedBranchesError) return { kind: "conflict", message: error.message }
+    throw error
+  }
 }
