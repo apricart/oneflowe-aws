@@ -12,7 +12,10 @@ import {
   warehouseCityAssignments,
   warehouseCityOrganizations,
 } from "@/db/schema"
-import { db } from "@/lib/db"
+// Type only: the client is passed in, so this module (and the read-only
+// ownership check that runs it from a script) never opens the app's pool.
+import type { db } from "@/lib/db"
+import { branchIdsWithoutWarehouse, loadMembershipBranchIds } from "@/lib/server/branch-warehouse"
 import { warehouseCityBranchOn, warehouseCityOrganizationOn } from "@/lib/server/warehouse-city-rule"
 import {
   EMPTY_WAREHOUSE_ORDER_REACH,
@@ -21,6 +24,12 @@ import {
 } from "@/lib/order-warehouse-transfer"
 import { WAREHOUSE_ROLE, resolveWarehouseReach } from "@/lib/warehouse-access"
 import { isWarehouseWorkStatus } from "@/lib/warehouse-orders"
+import {
+  WAREHOUSE_ORDER_OWNERSHIP,
+  readsAccountAssignments,
+  readsWarehouseMembership,
+  type WarehouseOrderOwnershipMode,
+} from "@/lib/warehouse-ownership-policy"
 
 /**
  * The rows the warehouse reach rule (`resolveWarehouseReach`) judges, read from
@@ -42,12 +51,21 @@ type LoadOptions = {
    * Admin withdrawing the branch, the city or the organization waits for an in-flight write instead of racing past it.
    */
   lock?: boolean
+  /**
+   * Where the branches come from. Defaults to `WAREHOUSE_ORDER_OWNERSHIP`;
+   * passed explicitly only by Super Admin's coverage report and the ownership
+   * check, which compare the modes. See plans/OF-WAREHOUSE-order-ownership-and-transfer.md (phase 2).
+   */
+  mode?: WarehouseOrderOwnershipMode
 }
 
 /**
- * The branches this warehouse user serves: those assigned one by one, and every
- * branch now in a city assigned to it **and** in an organization chosen for its
- * cities. Empty means none, never "all".
+ * The branches this warehouse user serves. In the "branch" mode (production
+ * today): those assigned one by one, and every branch now in a city assigned
+ * to it **and** in an organization chosen for its cities. In the membership
+ * modes: the branches of the warehouses it is an operator of, narrowed by its
+ * scope — plus, in "membership-fallback", its own assignments among branches
+ * that are in no warehouse yet. Empty means none, never "all".
  */
 export async function loadWarehouseReach(
   client: DbClient,
@@ -62,6 +80,26 @@ export async function loadWarehouseReach(
     .limit(1)
   if (!account) return []
 
+  const mode = options.mode ?? WAREHOUSE_ORDER_OWNERSHIP
+  const assigned = readsAccountAssignments(mode) ? await loadAssignedBranchIds(client, userId, options) : []
+  let branchIds = assigned
+  if (readsWarehouseMembership(mode)) {
+    const viaWarehouses = await loadMembershipBranchIds(client, userId, options)
+    const fallback = mode === "membership-fallback" ? await branchIdsWithoutWarehouse(client, assigned) : []
+    branchIds = [...viaWarehouses, ...fallback]
+  }
+
+  return resolveWarehouseReach({
+    account: { role: account.role, isActive: account.isActive, deleted: account.deletedAt !== null },
+    assignedBranchIds: branchIds,
+  })
+}
+
+/**
+ * The branches assigned to the account itself on Warehouse Team: one by one,
+ * and by city within its chosen organizations.
+ */
+async function loadAssignedBranchIds(client: DbClient, userId: string, options: LoadOptions): Promise<number[]> {
   const assignmentQuery = client
     .select({ branchId: warehouseAssignments.branchId })
     .from(warehouseAssignments)
@@ -83,11 +121,7 @@ export async function loadWarehouseReach(
     ))
   const assignments = options.lock ? await assignmentQuery.for("share") : await assignmentQuery
   const cityBranches = options.lock ? await cityQuery.for("share", { of: [warehouseCityAssignments, warehouseCityOrganizations] }) : await cityQuery
-
-  return resolveWarehouseReach({
-    account: { role: account.role, isActive: account.isActive, deleted: account.deletedAt !== null },
-    assignedBranchIds: [...assignments, ...cityBranches].map((row) => row.branchId),
-  })
+  return [...assignments, ...cityBranches].map((row) => row.branchId)
 }
 
 /**
@@ -210,7 +244,7 @@ export async function isOrderInWarehouseReach(
   orderId: number,
   options: { client?: DbClient; lock?: boolean } = {},
 ): Promise<boolean> {
-  const client = options.client ?? db
+  const client = options.client ?? (await import("@/lib/db")).db
   const lock = options.lock === true
   const order = await readOrderScope(client, orderId, lock)
   if (!order) return false

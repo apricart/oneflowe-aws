@@ -157,14 +157,16 @@ describe("the customer's screenshot", () => {
   })
 
   it("is read back only by order id, behind the reader's reach, never cached", () => {
-    // The desk through its own reach; an Apricart Executive through its
-    // approval reach (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md).
+    // The desk through its own reach; an Apricart Executive (or Super Admin,
+    // for every desk order) through its approval reach
+    // (plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md,
+    // plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md).
     // Both stream it through the one helper that sets the headers.
     const desk = source("app/api/v1/order-desk/orders/[id]/attachment/route.ts")
     expect(desk).toContain('requireApiRole(["ORDER_DESK"])')
     expect(desk).toContain("loadDeskOrder(db, user.id, orderId)")
     const executive = source("app/api/v1/executive/approvals/[id]/attachment/route.ts")
-    expect(executive).toContain('requireApiRole(["APRICART_EXECUTIVE"])')
+    expect(executive).toContain('requireApiRole(["SUPER_ADMIN", "APRICART_EXECUTIVE"])')
     expect(executive).toContain("loadExecutiveApprovalOrder(user.id, orderId)")
     for (const route of [desk, executive]) {
       expect(route).toContain("intakeAttachmentResponse(order.intakeAttachmentKey)")

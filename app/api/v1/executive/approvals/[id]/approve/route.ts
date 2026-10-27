@@ -16,11 +16,13 @@ import { approveOrder, orderDecisionErrorResponse } from "@/lib/server/order-dec
  * between is a 409 rather than an approval of lines nobody looked at.
  *
  * The approval token is never returned: the desk fulfils its orders without it.
+ * Super Admin approves any desk order through this route too, from Order Desk
+ * Team; never any other order (plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md).
  * See plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md.
  */
 export async function POST(req: Request, props: { params: Promise<{ id: string }> }) {
   try {
-    const roleError = await requireApiRole(["APRICART_EXECUTIVE"])
+    const roleError = await requireApiRole(["SUPER_ADMIN", "APRICART_EXECUTIVE"])
     if (roleError) return roleError
 
     const orderId = Number((await props.params).id)

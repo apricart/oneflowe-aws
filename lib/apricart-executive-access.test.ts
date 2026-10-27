@@ -86,6 +86,7 @@ describe("the API allowlist", () => {
     ["POST", "/api/v1/executive/approvals/42/reject"],
     ["POST", "/api/v1/executive/approvals/42/return"],
     ["GET", "/api/v1/executive/approvals/42/attachment"],
+    ["GET", "/api/v1/price-contracts/alerts"],
   ])("admits %s %s", (method, path) => {
     expect(isApricartExecutiveApiRequestAllowed(method, path)).toBe(true)
   })
@@ -114,6 +115,8 @@ describe("the API allowlist", () => {
     ["GET", "/api/v1/apricart-executives"],
     ["PUT", "/api/v1/apricart-executives/abc/organizations"],
     ["POST", "/api/v1/order-desk/orders/42/resubmit"],
+    ["POST", "/api/v1/price-contracts/alerts"],
+    ["POST", "/api/v1/organizations/cron/price-contract-reminders"],
   ])("refuses %s %s", (method, path) => {
     expect(isApricartExecutiveApiRequestAllowed(method, path)).toBe(false)
   })
@@ -129,8 +132,16 @@ describe("the API allowlist", () => {
         expect(source, rule.route).not.toMatch(/export async function (POST|PUT|PATCH|DELETE)/)
         expect(rule.methods).toEqual(["GET"])
       } else if (rule.route.startsWith("app/api/v1/executive/approvals/")) {
-        // The executive's approvals, and nobody else's.
-        expect(source, rule.route).toContain('requireApiRole(["APRICART_EXECUTIVE"])')
+        // The executive's approvals — and Super Admin's, from Order Desk Team
+        // (plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md). No tenant role.
+        expect(source, rule.route).toContain('requireApiRole(["SUPER_ADMIN", "APRICART_EXECUTIVE"])')
+      } else if (rule.route === "app/api/v1/price-contracts/alerts/route.ts") {
+        // The price contract alert: reads only, and the executive's reach is
+        // its assignments, loaded server-side.
+        expect(source, rule.route).toContain('requireApiRole(["SUPER_ADMIN", "APRICART_EXECUTIVE"])')
+        expect(source, rule.route).toContain("loadPriceContractAlerts(")
+        expect(source, rule.route).not.toMatch(/export async function (POST|PUT|PATCH|DELETE)/)
+        expect(rule.methods).toEqual(["GET"])
       } else {
         // The password-change endpoints every signed-in account must reach.
         expect(rule.route).toMatch(/^app\/api\/v1\/users\/me\//)

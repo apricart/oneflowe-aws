@@ -14,11 +14,14 @@ export const dynamic = "force-dynamic"
  * organizations Super Admin assigned to them, with the lines and amounts they
  * are approving. The reach is re-read on every request
  * (`lib/server/apricart-executive-scope.ts`); an executive with none sees an
- * empty list. See plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md.
+ * empty list. Super Admin reads the same list for every desk order, from
+ * Order Desk Team (`loadDeskApprovalReach`, the account re-read too).
+ * See plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md and
+ * plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md.
  */
 export async function GET(req: Request) {
   try {
-    const roleError = await requireApiRole(["APRICART_EXECUTIVE"])
+    const roleError = await requireApiRole(["SUPER_ADMIN", "APRICART_EXECUTIVE"])
     if (roleError) return roleError
     const user = await getCurrentUser()
     if (!user) return error("Unauthorized", 401)

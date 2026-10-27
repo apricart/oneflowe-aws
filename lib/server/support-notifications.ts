@@ -40,7 +40,9 @@ import {
 } from "@/lib/server/email-outbox-runtime"
 import { warehouseCityBranchOn, warehouseCityOrganizationOn } from "@/lib/server/warehouse-city-rule"
 import { loadWarehouseReach } from "@/lib/server/warehouse-scope"
+import { branchIdsWithoutWarehouse, loadMembershipAccountIdsServingBranches } from "@/lib/server/branch-warehouse"
 import { WAREHOUSE_ROLE, isWarehouseRole } from "@/lib/warehouse-access"
+import { WAREHOUSE_ORDER_OWNERSHIP, readsWarehouseMembership } from "@/lib/warehouse-ownership-policy"
 
 export { isSupportEmailTemplate } from "@/lib/email/support"
 
@@ -166,18 +168,29 @@ async function warehouseRecipients(tx: any, threadId: number): Promise<SupportNo
   const branchIds = await supportThreadBranchIds(tx, threadId)
   if (branchIds.length === 0) return []
 
-  const byBranch: Array<{ userId: string }> = await tx
+  // The account's own assignments in the "branch" mode; warehouse membership in
+  // the membership modes, with the assignments kept for branches in no
+  // warehouse during "membership-fallback" — as `loadWarehouseReach` reads them.
+  // See plans/OF-WAREHOUSE-order-ownership-and-transfer.md (phase 2).
+  const mode = WAREHOUSE_ORDER_OWNERSHIP
+  const assignedBranchIds = mode === "branch"
+    ? branchIds
+    : mode === "membership-fallback" ? await branchIdsWithoutWarehouse(tx, branchIds) : []
+  const byBranch: Array<{ userId: string }> = assignedBranchIds.length === 0 ? [] : await tx
     .select({ userId: warehouseAssignments.userId })
     .from(warehouseAssignments)
-    .where(inArray(warehouseAssignments.branchId, branchIds))
-  const byCity: Array<{ userId: string }> = await tx
+    .where(inArray(warehouseAssignments.branchId, assignedBranchIds))
+  const byCity: Array<{ userId: string }> = assignedBranchIds.length === 0 ? [] : await tx
     .select({ userId: warehouseCityAssignments.userId })
     .from(warehouseCityAssignments)
     .innerJoin(branches, warehouseCityBranchOn())
     .innerJoin(warehouseCityOrganizations, warehouseCityOrganizationOn())
-    .where(inArray(branches.id, branchIds))
+    .where(inArray(branches.id, assignedBranchIds))
+  const byWarehouse = readsWarehouseMembership(mode)
+    ? (await loadMembershipAccountIdsServingBranches(tx, branchIds)).map((userId) => ({ userId }))
+    : []
 
-  const userIds = [...new Set([...byBranch, ...byCity].map((row) => row.userId))]
+  const userIds = [...new Set([...byBranch, ...byCity, ...byWarehouse].map((row) => row.userId))]
   if (userIds.length === 0) return []
 
   return tx

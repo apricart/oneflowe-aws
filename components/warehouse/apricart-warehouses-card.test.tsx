@@ -48,20 +48,31 @@ const warehouse = (overrides: Record<string, unknown> = {}) => ({
   address: null,
   contactPhone: null,
   status: "ACTIVE",
-  members: [{ userId: WH_OPERATOR, responsibility: "WAREHOUSE_OPERATOR" }],
+  members: [{ userId: WH_OPERATOR, responsibility: "WAREHOUSE_OPERATOR", branchScope: "ALL", selectedBranchIds: [] }],
   routedBranchCount: 1,
+  ruleCount: 1,
+  branchCount: 2,
   executiveGapOrganizationIds: [1],
   ...overrides,
 })
 
 const configuration = {
-  warehouses: [warehouse(), warehouse({ id: 2, code: "LHR-01", name: "Lahore", members: [{ userId: WH_OTHER, responsibility: "WAREHOUSE_OPERATOR" }], routedBranchCount: 0, executiveGapOrganizationIds: [] })],
+  ownershipMode: "branch",
+  warehouses: [warehouse(), warehouse({ id: 2, code: "LHR-01", name: "Lahore", members: [{ userId: WH_OTHER, responsibility: "WAREHOUSE_OPERATOR", branchScope: "ALL", selectedBranchIds: [] }], routedBranchCount: 0, ruleCount: 0, branchCount: 0, executiveGapOrganizationIds: [] })],
   accounts: [
     { id: WH_OPERATOR, fullName: "Kamran Store", username: "kamran.wh", email: "kamran@example.test", isActive: true, responsibility: "WAREHOUSE_OPERATOR" },
     { id: WH_OTHER, fullName: "Nadia Dock", username: "nadia.wh", email: "nadia@example.test", isActive: true, responsibility: "WAREHOUSE_OPERATOR" },
     { id: EXECUTIVE, fullName: "Asma Exec", username: "asma.exec", email: "asma@example.test", isActive: true, responsibility: "EXECUTIVE" },
   ],
   routes: [{ branchId: 13, warehouseId: 1 }],
+  rules: [{ id: 5, warehouseId: 1, organizationId: 1, cityKey: "karachi", cityLabel: "Karachi", branchCount: 1 }],
+  cityOptions: [
+    { organizationId: 1, cityKey: "karachi", label: "Karachi", branchCount: 1 },
+    { organizationId: 1, cityKey: "lahore", label: "Lahore", branchCount: 2 },
+    { organizationId: 2, cityKey: "karachi", label: "Karachi", branchCount: 1 },
+  ],
+  branchWarehouses: [{ branchId: 12, warehouseId: 1 }, { branchId: 13, warehouseId: 1 }],
+  unrouted: { count: 1, orders: [{ id: 900, tid: "TID-900", organizationId: 2, branchId: 21, status: "APPROVED", fulfillmentStatus: "IN_PROCESS" }] },
   coverage: {
     summary: { ROUTED: 1, SUGGESTED: 1, AMBIGUOUS: 1, UNMAPPED: 0, UNSERVED: 1 },
     branches: [
@@ -90,17 +101,88 @@ afterEach(() => {
 })
 
 describe("Apricart warehouses", () => {
-  it("says plainly what membership does and that default warehouses move no order", () => {
+  it("says plainly that, today, every order is still worked by the accounts assigned its branch", () => {
     render(<ApricartWarehousesCard />)
-    expect(screen.getByText(/operators fulfil the orders Super Admin transfers to it/)).toBeTruthy()
-    expect(screen.getByText(/default warehouses do not move any order/)).toBeTruthy()
+    expect(screen.getByText(/Today every order is still worked by the accounts assigned its branch on Warehouse Team/)).toBeTruthy()
+    expect(screen.getByText(/run the check below/)).toBeTruthy()
   })
 
-  it("lists each warehouse with its members and routed branches", () => {
+  it("says, once warehouses decide, that they do", () => {
+    swr.configuration = { ...configuration, ownershipMode: "membership" }
+    render(<ApricartWarehousesCard />)
+    expect(screen.getByText(/Apricart's warehouses decide who works each order/)).toBeTruthy()
+  })
+
+  it("lists each warehouse with its members, its live branches, its rules and its branches by hand", () => {
     render(<ApricartWarehousesCard />)
     const row = rowOf("KHI-01")
     expect(within(row).getByText("1 operator")).toBeTruthy()
     expect(within(row).getByText("0 executives")).toBeTruthy()
+    expect(within(row).getByText("2 active")).toBeTruthy()
+    expect(within(row).getByText("1 rule · 1 by hand")).toBeTruthy()
+  })
+
+  it("adds a rule as an organization, a city key and a yes — never a warehouse in the body", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Rules" }))
+    const dialog = screen.getByRole("dialog")
+    expect(within(dialog).getByText(/Meezan · Karachi/)).toBeTruthy()
+
+    // The organization's whole: an organization rule.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add rule" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/apricart-warehouses/1/rules")
+    expect(sentBody(0)).toEqual({ organizationId: 1, city: null, assigned: true })
+    expect(swr.mutate).toHaveBeenCalled()
+  })
+
+  it("removes only the rule asked for", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Rules" }))
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(sentBody(0)).toEqual({ organizationId: 1, city: "karachi", assigned: false })
+  })
+
+  it("narrows an operator to ticked branches of the warehouse, one organization at a time", async () => {
+    fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Members" }))
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "All branches" }))
+    const dialog = screen.getAllByRole("dialog").at(-1)!
+    // Only the warehouse's branches are offered: Saddar and Gulberg, not North.
+    expect(within(dialog).getByLabelText(/Saddar/)).toBeTruthy()
+    expect(within(dialog).queryByLabelText(/North/)).toBeNull()
+    fireEvent.click(within(dialog).getByLabelText(/Gulberg/))
+    fireEvent.click(within(dialog).getByRole("button", { name: "Work only the ticked branches" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/apricart-warehouses/1/member-scope")
+    expect(sentBody(0)).toEqual({ userId: WH_OPERATOR, scope: "SELECTED", organizationId: 1, branchIds: [13] })
+  })
+
+  it("lists the open orders whose branch is in no warehouse", () => {
+    render(<ApricartWarehousesCard />)
+    expect(screen.getByText("Open orders whose branch is in no warehouse: 1")).toBeTruthy()
+    expect(screen.getByText("TID-900")).toBeTruthy()
+  })
+
+  it("runs the ownership check on demand and says whether anyone's work would change", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      checkedAt: "2026-10-28T10:00:00.000Z",
+      accounts: [{ id: WH_OPERATOR, username: "kamran.wh", branchCount: 2 }],
+      differences: { "membership-fallback": [], membership: [{ accountId: WH_OPERATOR, lost: [11], gained: [] }] },
+      unroutedOpenOrders: 1,
+      strandedBranches: [],
+      ready: { "membership-fallback": true, membership: false },
+    }), { status: 200 }))
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(screen.getByRole("button", { name: "Run check" }))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/apricart-warehouses/ownership-check"))
+    expect(await screen.findByText("No change")).toBeTruthy()
+    expect(screen.getByText("Changes")).toBeTruthy()
+    expect(screen.getByText("kamran.wh: loses 1, gains 0 branch(es)")).toBeTruthy()
   })
 
   it("reports what needs a decision: ambiguous branches, executive gaps and inactive holders", () => {
@@ -125,7 +207,7 @@ describe("Apricart warehouses", () => {
   it("applies a suggestion only when Super Admin ticks it, and saves one organization's routes", async () => {
     fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
     render(<ApricartWarehousesCard />)
-    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Branches" }))
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "By hand" }))
     const dialog = screen.getByRole("dialog")
     expect(within(dialog).getByText("Suggested")).toBeTruthy()
     expect(within(dialog).getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true)
@@ -140,7 +222,7 @@ describe("Apricart warehouses", () => {
   it("searches organizations and selects only the branches shown by the filter", async () => {
     fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
     render(<ApricartWarehousesCard />)
-    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Branches" }))
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "By hand" }))
     const dialog = screen.getByRole("dialog")
 
     fireEvent.click(within(dialog).getByRole("combobox", { name: "Organization" }))

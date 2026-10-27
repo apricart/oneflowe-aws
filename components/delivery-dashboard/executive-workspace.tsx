@@ -7,6 +7,7 @@ import { Gauge } from "lucide-react"
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { DeliveryDashboard } from "@/components/delivery-dashboard/delivery-dashboard"
 import { EXECUTIVE_APPROVALS_KEY_PREFIX, ExecutiveApprovals } from "@/components/executive-approvals/executive-approvals"
+import { PriceContractAlerts } from "@/components/price-contracts/price-contract-alerts"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { APRICART_EXECUTIVE_LABEL } from "@/lib/apricart-executive-access"
 import type { ExecutiveApprovalCounts } from "@/lib/executive-approval-query"
@@ -49,6 +50,7 @@ export function ExecutiveWorkspace() {
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-6">
+        <PriceContractAlerts className="mb-6" />
         <Tabs defaultValue="delivery" className="space-y-6">
           <TabsList>
             <TabsTrigger value="delivery">Delivery</TabsTrigger>

@@ -99,6 +99,11 @@ export const organizations = pgTable(
     // Super Admin; null means self-service applications are refused. Not
     // unique: tenants that share a mail system share a domain.
     emailDomain: varchar("email_domain", { length: 253 }),
+    // The last day (Asia/Karachi) this tenant's agreed prices are valid for.
+    // Super Admin only; null = no contract date recorded. A reminder only — no
+    // order, price or catalogue rule reads it (lib/price-contract-validity.ts,
+    // plans/OF-PRICE-CONTRACT-organization-price-contract-validity.md).
+    priceContractValidUntil: date("price_contract_valid_until"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -106,6 +111,10 @@ export const organizations = pgTable(
     uniqueIndex("org_name_idx").on(t.name),
     uniqueIndex("org_code_idx").on(t.code),
     index("org_status_idx").on(t.status),
+    // The reminder sweep and the dashboard alert read the few dated rows only.
+    index("organizations_price_contract_valid_until_idx")
+      .on(t.priceContractValidUntil)
+      .where(sql`${t.priceContractValidUntil} IS NOT NULL`),
     check(
       "organizations_order_approver_role_ck",
       sql`${t.orderApproverRole} IN ('BRANCH_ADMIN', 'HEAD_OFFICE')`,
@@ -2869,6 +2878,11 @@ export const apricartWarehouseMemberships = pgTable(
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     responsibility: varchar("responsibility", { length: 30 }).notNull(),
+    // Which of the warehouse's branches an operator works: ALL of them, or the
+    // SELECTED ones in apricart_warehouse_member_branches. An executive is
+    // always ALL. Read only while WAREHOUSE_ORDER_OWNERSHIP is not "branch"
+    // (lib/warehouse-ownership-policy.ts). See plans/OF-WAREHOUSE-order-ownership-and-transfer.md (phase 2).
+    branchScope: varchar("branch_scope", { length: 16 }).notNull().default("ALL"),
     createdByUserId: uuid("created_by_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -2879,12 +2893,75 @@ export const apricartWarehouseMemberships = pgTable(
       "apricart_warehouse_memberships_responsibility_ck",
       sql`${t.responsibility} IN ('WAREHOUSE_OPERATOR', 'EXECUTIVE')`,
     ),
+    check(
+      "apricart_warehouse_memberships_branch_scope_ck",
+      sql`${t.branchScope} IN ('ALL', 'SELECTED') AND (${t.branchScope} = 'ALL' OR ${t.responsibility} = 'WAREHOUSE_OPERATOR')`,
+    ),
   ],
 )
 
 /**
- * The one warehouse a customer branch's new orders will default to. A route
- * is a default for orders created later, never an owner of existing ones.
+ * The branches a `SELECTED` operator works, each of which is in the
+ * membership's warehouse when written. A branch that later leaves the
+ * warehouse simply stops matching: the reach joins it to the branch's live
+ * warehouse (`branchWarehouseSql`).
+ */
+export const apricartWarehouseMemberBranches = pgTable(
+  "apricart_warehouse_member_branches",
+  {
+    id: serial("id").primaryKey(),
+    membershipId: integer("membership_id")
+      .references(() => apricartWarehouseMemberships.id, { onDelete: "cascade" })
+      .notNull(),
+    branchId: integer("branch_id")
+      .references(() => branches.id, { onDelete: "cascade" })
+      .notNull(),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("apricart_warehouse_member_branches_uq").on(t.membershipId, t.branchId),
+    index("apricart_warehouse_member_branches_branch_idx").on(t.branchId),
+  ],
+)
+
+/**
+ * Which warehouse a branch belongs to by rule: every branch of an
+ * organization (`city_key` null), or every branch of an organization in one
+ * city. Evaluated at read time by `branchWarehouseSql`
+ * (`lib/server/branch-warehouse.ts`) and never copied into rows, so a branch
+ * created or re-citied by any path is in its warehouse at once — exactly as a
+ * warehouse user's city assignment works today. A manual route overrides a
+ * rule. `city_key` is written only through `branchCityKeySql`.
+ * See plans/OF-WAREHOUSE-order-ownership-and-transfer.md (phase 2).
+ */
+export const warehouseRouteRules = pgTable(
+  "warehouse_route_rules",
+  {
+    id: serial("id").primaryKey(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    organizationId: integer("organization_id")
+      .references(() => organizations.id)
+      .notNull(),
+    cityKey: varchar("city_key", { length: 100 }),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    // One warehouse per organization, and per organization and city, so a
+    // branch never matches two warehouses at the same precedence.
+    uniqueIndex("warehouse_route_rules_org_uq").on(t.organizationId).where(sql`${t.cityKey} IS NULL`),
+    uniqueIndex("warehouse_route_rules_org_city_uq").on(t.organizationId, t.cityKey).where(sql`${t.cityKey} IS NOT NULL`),
+    index("warehouse_route_rules_warehouse_idx").on(t.warehouseId),
+    check("warehouse_route_rules_city_key_ck", sql`${t.cityKey} IS NULL OR btrim(${t.cityKey}) <> ''`),
+  ],
+)
+
+/**
+ * A branch put in a warehouse by hand. Overrides any `warehouse_route_rules`
+ * match. Read only while WAREHOUSE_ORDER_OWNERSHIP is not "branch".
  */
 export const branchFulfillmentRoutes = pgTable(
   "branch_fulfillment_routes",

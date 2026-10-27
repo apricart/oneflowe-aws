@@ -42,6 +42,27 @@ describe("who decides a desk order", () => {
     expect(scope).toContain("account.role !== APRICART_EXECUTIVE_ROLE")
   })
 
+  it("sends Super Admin down a path that decides desk orders only, on the account as it is now", () => {
+    const dispatch = policy.indexOf("if (input.scope.role === SUPER_ADMIN_DESK_APPROVER_ROLE) {")
+    expect(dispatch).toBeGreaterThan(-1)
+    // Before the tenant roles' check, which never admits Super Admin.
+    expect(dispatch).toBeLessThan(policy.indexOf("if (!canAttemptOrderDecision(input.scope.role)) {"))
+    const superAdminPath = policy.slice(policy.indexOf("async function authorizeSuperAdminDeskOrderDecision"))
+    expect(superAdminPath).toContain("loadDeskApprovalReach(tx, input.scope.userId)")
+    expect(superAdminPath).toContain('if (reach.kind !== "all") return { ok: false, reason: "forbidden" }')
+    expect(superAdminPath).toContain('if (!order?.organizationId || !isDeskEnteredOrder(order)) return { ok: false, reason: "not-found" }')
+    expect(superAdminPath).toContain("canSuperAdminDecideDeskOrder({")
+    expect(superAdminPath).toContain("decisionRole: SUPER_ADMIN_DESK_APPROVER_ROLE")
+    const scope = source("lib/server/apricart-executive-scope.ts")
+    // "Every desk order" only for an active, undeleted Super Admin account.
+    expect(scope).toContain("account?.role === SUPER_ADMIN_DESK_APPROVER_ROLE && account.isActive && account.deletedAt === null")
+    // The tenant decision routes still refuse Super Admin before any of this.
+    for (const action of ["approve", "reject", "return-for-correction"]) {
+      expect(source(`app/api/v1/orders/[id]/${action}/route.ts`))
+        .toContain('requireApiRole(["BRANCH_ADMIN", "HEAD_OFFICE", "GROUP_USER"])')
+    }
+  })
+
   it("decides through the shared service, so approve, reject and return audit alike", () => {
     expect(source("app/api/v1/executive/approvals/[id]/approve/route.ts")).toContain("approveOrder({")
     expect(source("app/api/v1/executive/approvals/[id]/reject/route.ts")).toContain("rejectOrder({")

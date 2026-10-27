@@ -12,12 +12,13 @@ import { orderCorrectionErrorResponse, returnOrderForCorrection } from "@/lib/se
  * correction, with a comment. Delegates to the shared
  * `returnOrderForCorrection`, held to the same in-transaction decision policy
  * as approve and reject. Nothing moves in money or stock; the desk edits and
- * resubmits. Outside the reach is 404.
+ * resubmits. Outside the reach is 404. Super Admin returns any desk order here
+ * too, never any other order (plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md).
  * See plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md.
  */
 export async function POST(req: Request, props: { params: Promise<{ id: string }> }) {
   try {
-    const roleError = await requireApiRole(["APRICART_EXECUTIVE"])
+    const roleError = await requireApiRole(["SUPER_ADMIN", "APRICART_EXECUTIVE"])
     if (roleError) return roleError
 
     const orderId = Number((await props.params).id)

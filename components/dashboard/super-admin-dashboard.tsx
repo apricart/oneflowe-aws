@@ -8,6 +8,7 @@ import { useOrganizations } from "@/lib/hooks/use-api"
 import { useSalesPerformance,type DateRange } from "@/lib/hooks/use-sales-performance"
 import { Card,CardContent } from "@/components/ui/card"
 import { NotificationRail } from "@/components/notifications/notification-center"
+import { PriceContractAlerts } from "@/components/price-contracts/price-contract-alerts"
 import { formatPKR,cn } from "@/lib/utils"
 import {
   TrendingUp,
@@ -351,6 +352,7 @@ export function SuperAdminDashboard() {
       className="min-h-screen bg-slate-50 dark:bg-slate-950 p-4 lg:p-6 space-y-6 max-w-[2000px] mx-auto overflow-x-hidden"
     >
       <NotificationRail className="bg-transparent border-0 shadow-none px-0" />
+      <PriceContractAlerts />
 
       {/* ━━━ Header & Filters ━━━ */}
       <div className="relative z-30 flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2">

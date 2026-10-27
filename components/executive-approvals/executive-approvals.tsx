@@ -1,9 +1,10 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import useSWR, { useSWRConfig } from "swr"
 import { format } from "date-fns"
-import { Building2, CheckCircle2, ImageIcon, Inbox, Loader2, Search, Undo2, XCircle } from "lucide-react"
+import { Building2, CheckCircle2, ExternalLink, ImageIcon, Inbox, Loader2, Search, Undo2, XCircle } from "lucide-react"
 
 import {
   AlertDialog,
@@ -41,7 +42,11 @@ import { cn, formatPKR } from "@/lib/utils"
  * for the organizations assigned to them, waiting to be approved, rejected or
  * sent back for correction. Presentation only — the server decides what is
  * listed and re-checks every action (`/api/v1/executive/approvals`).
- * See plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md.
+ * Super Admin sees the same list, for every desk order, on Order Desk Team
+ * (`audience="super-admin"`); only the wording and the link to the order page
+ * differ — what it may do is the server's to say.
+ * See plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md and
+ * plans/OF-DESK-TEAM-super-admin-desk-orders-tab.md.
  */
 
 export const EXECUTIVE_APPROVALS_KEY_PREFIX = "/api/v1/executive/approvals"
@@ -109,12 +114,32 @@ const TAB_LABELS: Record<ExecutiveApprovalTab, string> = {
   all: "All",
 }
 
+export type ExecutiveApprovalsAudience = "executive" | "super-admin"
+
 const TAB_HINTS: Record<ExecutiveApprovalTab, string> = {
   awaiting_approval: "Orders the Order Desk entered, newest first. Approve, reject, or send one back for correction.",
   returned: "Sent back for correction. They return to Awaiting approval when the desk resubmits them.",
   approved: "Approved orders, whatever happened to them after.",
   rejected: "Rejected orders. Their stock and budget were released.",
   all: "Every Order Desk order in your organizations.",
+}
+
+/** The wording that depends on who is reading. */
+const AUDIENCE_COPY: Record<ExecutiveApprovalsAudience, {
+  allHint: string
+  allOrganizations: string
+  afterApproval: string
+}> = {
+  executive: {
+    allHint: TAB_HINTS.all,
+    allOrganizations: "All my organizations",
+    afterApproval: "Super Admin can now arrange delivery.",
+  },
+  "super-admin": {
+    allHint: "Every order the Order Desk entered, in every organization.",
+    allOrganizations: "All organizations",
+    afterApproval: "Arrange delivery from the order page.",
+  },
 }
 
 const EMPTY_MESSAGES: Record<ExecutiveApprovalTab, string> = {
@@ -153,8 +178,15 @@ async function postJson(url: string, body: unknown): Promise<{ ok: boolean; stat
 function ApprovalCard({
   order,
   busy,
+  showOrderLink,
   onAction,
-}: Readonly<{ order: ExecutiveApprovalOrder; busy: boolean; onAction: (dialog: NonNullable<OpenDialog>) => void }>) {
+}: Readonly<{
+  order: ExecutiveApprovalOrder
+  busy: boolean
+  /** Super Admin may open the order page; the executive cannot reach it. */
+  showOrderLink: boolean
+  onAction: (dialog: NonNullable<OpenDialog>) => void
+}>) {
   const channel = order.intakeChannel ? INTAKE_CHANNEL_LABELS[order.intakeChannel] : null
   const status = order.status.toUpperCase()
 
@@ -268,7 +300,15 @@ function ApprovalCard({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/20 px-4 py-2.5">
-        <div className="text-sm">
+        <div className="flex flex-wrap items-center gap-4 text-sm">
+          {showOrderLink && (
+            <Link
+              href={`/orders/${order.id}`}
+              className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+            >
+              <ExternalLink className="h-4 w-4" aria-hidden="true" /> Open order
+            </Link>
+          )}
           {order.hasAttachment && (
             <a
               href={`${EXECUTIVE_APPROVALS_KEY_PREFIX}/${order.id}/attachment`}
@@ -381,7 +421,8 @@ function TextDecisionDialog({
   )
 }
 
-export function ExecutiveApprovals() {
+export function ExecutiveApprovals({ audience = "executive" }: Readonly<{ audience?: ExecutiveApprovalsAudience }> = {}) {
+  const copy = AUDIENCE_COPY[audience]
   const [tab, setTab] = useState<ExecutiveApprovalTab>("awaiting_approval")
   const [organizationId, setOrganizationId] = useState(ALL)
   const [searchInput, setSearchInput] = useState("")
@@ -403,7 +444,8 @@ export function ExecutiveApprovals() {
   const orders = data?.items ?? []
   const counts = data?.counts
   const pagination = data?.pagination
-  const noReach = data !== undefined && data.organizations.length === 0
+  // Super Admin reaches every desk order, so an empty list is just an empty list.
+  const noReach = audience === "executive" && data !== undefined && data.organizations.length === 0
 
   const chooseTab = (next: ExecutiveApprovalTab) => {
     setTab(next)
@@ -421,7 +463,7 @@ export function ExecutiveApprovals() {
       if (result.status === 409) void refresh()
       return
     }
-    toast({ title: `${order.tid} approved`, description: "Super Admin can now arrange delivery." })
+    toast({ title: `${order.tid} approved`, description: copy.afterApproval })
     await refresh()
   }
 
@@ -484,7 +526,7 @@ export function ExecutiveApprovals() {
           <Select value={organizationId} onValueChange={(value) => { setOrganizationId(value); setPage(1) }}>
             <SelectTrigger aria-label="Organization" className="w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL}>All my organizations</SelectItem>
+              <SelectItem value={ALL}>{copy.allOrganizations}</SelectItem>
               {(data?.organizations ?? []).map((organization) => (
                 <SelectItem key={organization.id} value={String(organization.id)}>{organization.name}</SelectItem>
               ))}
@@ -493,7 +535,7 @@ export function ExecutiveApprovals() {
         </CardContent>
       </Card>
 
-      <p className="text-sm text-muted-foreground">{TAB_HINTS[tab]}</p>
+      <p className="text-sm text-muted-foreground">{tab === "all" ? copy.allHint : TAB_HINTS[tab]}</p>
 
       {error && <p role="alert" className="text-sm text-destructive">Could not load orders. Refresh the page to try again.</p>}
       {isLoading && !data && (
@@ -512,7 +554,13 @@ export function ExecutiveApprovals() {
 
       <div className="space-y-3">
         {orders.map((order) => (
-          <ApprovalCard key={order.id} order={order} busy={approvingId === order.id} onAction={(next) => setDialog(next)} />
+          <ApprovalCard
+            key={order.id}
+            order={order}
+            busy={approvingId === order.id}
+            showOrderLink={audience === "super-admin"}
+            onAction={(next) => setDialog(next)}
+          />
         ))}
       </div>
 
@@ -534,7 +582,7 @@ export function ExecutiveApprovals() {
             <AlertDialogTitle>Approve {dialog?.order.tid}?</AlertDialogTitle>
             <AlertDialogDescription>
               {dialog?.order
-                ? `${dialog.order.organizationName ?? ""} · ${dialog.order.branchName ?? ""} — ${formatPKR(dialog.order.totalCents / 100)}. The order becomes Active and Super Admin can arrange delivery.`
+                ? `${dialog.order.organizationName ?? ""} · ${dialog.order.branchName ?? ""} — ${formatPKR(dialog.order.totalCents / 100)}. The order becomes Active. ${copy.afterApproval}`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>

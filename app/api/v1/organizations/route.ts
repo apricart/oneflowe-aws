@@ -29,6 +29,7 @@ import { replaceOrganizationApprovalLevels } from "@/lib/server/order-approval-l
 import { toApprovalLevels } from "@/lib/order-approval-levels"
 import { VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
 import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
+import { withoutPriceContractValidity } from "@/lib/server/price-contract-reminders"
 
 type OrganizationCreateInput = ReturnType<typeof organizationCreateSchema.parse>
 
@@ -168,8 +169,9 @@ export async function GET() {
       )
 
       return {
+        // The contract date is Apricart's commercial reminder, read by Super Admin only.
         items: items.map((item) => ({
-          ...item,
+          ...(scope.role === "SUPER_ADMIN" ? item : withoutPriceContractValidity(item)),
           budgetAllocationMode: budgetModeByOrgId.get(item.id) ?? DEFAULT_BUDGET_ALLOCATION_MODE,
         })),
         count: items.length,
@@ -256,6 +258,7 @@ export async function POST(req: Request) {
           strnNumber,
           // Already normalised by the schema; absent or blank is null.
           emailDomain: body.emailDomain ?? null,
+          priceContractValidUntil: body.priceContractValidUntil ?? null,
           status,
           orderApproverRole: body.orderApproverRole,
           orderApprovalRequired: body.orderApprovalRequired,
@@ -319,6 +322,7 @@ export async function POST(req: Request) {
           managedOrdering: body.managedOrdering,
           budgetAllocationMode,
           emailDomain: createdOrganization.emailDomain,
+          priceContractValidUntil: createdOrganization.priceContractValidUntil,
           privateNetworkLoginEnabled: privateNetworkLogin.enabled,
           allowedNetworks: resolvedNetworkRows.rows.map(formatAllowlistEntry),
           orderApprovalLevelsEnabled,
