@@ -3,9 +3,10 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { format } from "date-fns"
-import { Download, Loader2, RefreshCw, Search } from "lucide-react"
+import { Bike, Download, Loader2, RefreshCw, Search } from "lucide-react"
 import * as XLSX from "xlsx"
 
+import { AssignRiderDialog } from "@/components/warehouse/assign-rider-dialog"
 import { healthStyle } from "@/components/warehouse/delivery-health-styles"
 import { WarehouseOrderSheet } from "@/components/warehouse/warehouse-order-sheet"
 import { Badge } from "@/components/ui/badge"
@@ -111,7 +112,22 @@ export function WarehouseOrders() {
   const search = useDeferredValue(searchInput.trim())
   const [page, setPage] = useState(1)
   const [openOrderId, setOpenOrderId] = useState<number | null>(null)
+  const [assignOrder, setAssignOrder] = useState<{ id: number; tid: string; destination: string } | null>(null)
   const [exporting, setExporting] = useState(false)
+
+  const { data: assignmentIndex, mutate: mutateAssignments } = useSWR<{
+    items: Array<{ assignment: { orderId: number; status: string }; riderCode: string }>
+  }>("/api/v1/rider-ops/assignments", fetcher, { refreshInterval: 60_000 })
+  const activeAssignmentByOrder = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const row of assignmentIndex?.items ?? []) {
+      // Ignore malformed / unrelated SWR payloads (e.g. the orders list key
+      // answering this hook in tests) and finished deliveries.
+      if (!row?.assignment || row.assignment.status === "FULFILLMENT_COMPLETED") continue
+      map.set(row.assignment.orderId, row.riderCode)
+    }
+    return map
+  }, [assignmentIndex])
 
   const tab = TABS.find((candidate) => candidate.key === tabKey) ?? TABS[0]
   const key = useMemo(
@@ -296,52 +312,74 @@ export function WarehouseOrders() {
                     <th className="px-3 py-2 text-right">Total</th>
                     <th className="px-3 py-2">Payment</th>
                     <th className="px-3 py-2">{tab.view === "delivered" ? "Delivered" : "Approved"}</th>
+                    <th className="px-3 py-2">Rider</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.items.map((row) => (
-                    <tr
-                      key={row.id}
-                      className="cursor-pointer border-t hover:bg-muted/40"
-                      onClick={() => setOpenOrderId(row.id)}
-                    >
-                      <td className="px-3 py-2 font-mono text-xs tabular-nums">{row.id}</td>
-                      <td className="px-3 py-2">
-                        <button
-                          type="button"
-                          className="font-medium text-primary underline-offset-4 hover:underline"
-                          onClick={(event) => { event.stopPropagation(); setOpenOrderId(row.id) }}
-                        >
-                          {row.tid}
-                        </button>
-                        {row.invoiceNumber && <div className="text-xs text-muted-foreground">{row.invoiceNumber}</div>}
-                      </td>
-                      <td className="px-3 py-2">
-                        <div>{row.branchName}</div>
-                        <div className="text-xs text-muted-foreground">{row.organizationName}</div>
-                      </td>
-                      <td className="px-3 py-2">{row.destination}</td>
-                      <td className="px-3 py-2">
-                        <Badge variant="secondary">{row.stageLabel}</Badge>
-                        {row.stage === "DELIVERED" && !row.hasChallan && (
-                          <div className="mt-1 text-xs text-muted-foreground">No challan</div>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        {row.healthLabel && (
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${healthStyle(row.health)}`}>
-                            {row.healthLabel}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{row.itemCount}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{formatPKR(row.totalCents / 100)}</td>
-                      <td className="px-3 py-2">
-                        <Badge variant="outline">{PAYMENT_STATUS_LABELS[row.paymentStatus as PaymentStatus] ?? row.paymentStatus}</Badge>
-                      </td>
-                      <td className="px-3 py-2">{when(tab.view === "delivered" ? row.deliveredAt : row.approvedAt)}</td>
-                    </tr>
-                  ))}
+                  {data.items.map((row) => {
+                    const assignedRider = activeAssignmentByOrder.get(row.id)
+                    const canAssign = row.stage === "OUT_FOR_DELIVERY" && !assignedRider
+                    return (
+                      <tr
+                        key={row.id}
+                        className="cursor-pointer border-t hover:bg-muted/40"
+                        onClick={() => setOpenOrderId(row.id)}
+                      >
+                        <td className="px-3 py-2 font-mono text-xs tabular-nums">{row.id}</td>
+                        <td className="px-3 py-2">
+                          <button
+                            type="button"
+                            className="font-medium text-primary underline-offset-4 hover:underline"
+                            onClick={(event) => { event.stopPropagation(); setOpenOrderId(row.id) }}
+                          >
+                            {row.tid}
+                          </button>
+                          {row.invoiceNumber && <div className="text-xs text-muted-foreground">{row.invoiceNumber}</div>}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div>{row.branchName}</div>
+                          <div className="text-xs text-muted-foreground">{row.organizationName}</div>
+                        </td>
+                        <td className="px-3 py-2">{row.destination}</td>
+                        <td className="px-3 py-2">
+                          <Badge variant="secondary">{row.stageLabel}</Badge>
+                          {row.stage === "DELIVERED" && !row.hasChallan && (
+                            <div className="mt-1 text-xs text-muted-foreground">No challan</div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {row.healthLabel && (
+                            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${healthStyle(row.health)}`}>
+                              {row.healthLabel}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums">{row.itemCount}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{formatPKR(row.totalCents / 100)}</td>
+                        <td className="px-3 py-2">
+                          <Badge variant="outline">{PAYMENT_STATUS_LABELS[row.paymentStatus as PaymentStatus] ?? row.paymentStatus}</Badge>
+                        </td>
+                        <td className="px-3 py-2">{when(tab.view === "delivered" ? row.deliveredAt : row.approvedAt)}</td>
+                        <td className="px-3 py-2" onClick={(event) => event.stopPropagation()}>
+                          {assignedRider ? (
+                            <Badge variant="outline" className="font-mono text-xs">{assignedRider}</Badge>
+                          ) : canAssign ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setAssignOrder({ id: row.id, tid: row.tid, destination: row.destination })}
+                            >
+                              <Bike className="mr-1.5 h-3.5 w-3.5" />
+                              Assign
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -358,6 +396,19 @@ export function WarehouseOrders() {
       )}
 
       <WarehouseOrderSheet orderId={openOrderId} onClose={() => setOpenOrderId(null)} onChanged={() => { void mutate() }} />
+      {assignOrder && (
+        <AssignRiderDialog
+          open
+          orderId={assignOrder.id}
+          orderTid={assignOrder.tid}
+          destination={assignOrder.destination}
+          onClose={() => setAssignOrder(null)}
+          onAssigned={() => {
+            void mutate()
+            void mutateAssignments()
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -13,6 +13,13 @@ vi.mock("@/hooks/use-toast", () => ({ toast: vi.fn() }))
 
 import { WarehouseTeamCard } from "./warehouse-team-card"
 
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver
+Element.prototype.scrollIntoView ??= vi.fn()
+
 const organizations = [
   { id: 1, name: "Meezan", code: "MEZ", status: "active" },
   { id: 2, name: "UBL", code: "UBL", status: "active" },
@@ -286,6 +293,35 @@ describe("Warehouse team", () => {
   })
 
   describe("by branch", () => {
+    it("searches organizations before switching the branch list", () => {
+      swr.data = team([member()])
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      showTab(dialog, "By branch")
+
+      fireEvent.click(within(dialog).getByRole("combobox", { name: "Organization" }))
+      fireEvent.change(screen.getByLabelText("Search organizations"), { target: { value: "ubl" } })
+      fireEvent.click(screen.getByRole("option", { name: /UBL/ }))
+
+      expect(within(dialog).getByLabelText(/Clifton/)).toBeTruthy()
+      expect(within(dialog).queryByLabelText(/North/)).toBeNull()
+    })
+
+    it("selects only filtered branches and preserves hidden selections", async () => {
+      swr.data = team([member({ branchIds: [11] })])
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ item: {} }), { status: 200 }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      showTab(dialog, "By branch")
+
+      fireEvent.change(within(dialog).getByLabelText("Filter branches"), { target: { value: "south" } })
+      fireEvent.click(within(dialog).getByRole("button", { name: "Select all shown" }))
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      expect(sentBody(0)).toEqual({ organizationId: 1, branchIds: [11, 12] })
+    })
+
     it("replaces one organization's branches with what is ticked, once, and refreshes", async () => {
       swr.data = team([member()])
       let finish: (value: Response) => void = () => {}
@@ -323,7 +359,7 @@ describe("Warehouse team", () => {
       expect(save.disabled).toBe(true)
     })
 
-    it("shows a branch an assigned city covers as served and locked, and leaves it out of All / none", async () => {
+    it("shows a branch an assigned city covers as served and leaves it out of the bulk action", async () => {
       swr.data = team([member({ branchIds: [11], cityKeys: ["karachi"], cityOrganizationIds: [1] })])
       fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ item: {} }), { status: 200 }))
       render(<WarehouseTeamCard />)
@@ -336,8 +372,8 @@ describe("Warehouse team", () => {
       expect(within(dialog).getAllByText("via Karachi")).toHaveLength(2)
       expect(within(dialog).getByText("3 of 3 served in this organization (2 through a city).")).toBeTruthy()
 
-      // North is the only branch no city covers: All / none withdraws just it.
-      fireEvent.click(within(dialog).getByRole("button", { name: "All / none" }))
+      // North is the only branch no city covers: unselecting all withdraws just it.
+      fireEvent.click(within(dialog).getByRole("button", { name: "Unselect all" }))
       fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
       expect(sentBody(0)).toEqual({ organizationId: 1, branchIds: [] })

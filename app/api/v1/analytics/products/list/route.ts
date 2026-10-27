@@ -7,6 +7,7 @@ import { globalProducts, organizationInventory, branchInventory, branches } from
 import { and, eq, inArray, isNull } from "drizzle-orm"
 import { resolveAnalyticsOrganizationIds } from "@/lib/server/analytics-scope"
 import { fenceBranchIdsToOrganization } from "@/lib/server/user-analytics-branch-scope"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 
 export async function GET(req: NextRequest) {
     try {
@@ -19,15 +20,20 @@ export async function GET(req: NextRequest) {
         const branchIdsParam = url.searchParams.get("branchIds")
 
         // An organization-wide Viewer reads as Head Office; a pinned one is refused.
-        const role = viewerReadRole(session.user as any)
+        let role = viewerReadRole(session.user as any)
         if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
         const userOrganizationId = (session.user as any).organizationId
         // Which products a tenant has assigned is the tenant's own business:
         // anyone but Super Admin filters by its own organization only.
         const requestedOrganizationIds = organizationIdsParam ? organizationIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
-        const organizationIds = role === "SUPER_ADMIN" || requestedOrganizationIds.length === 0
+        // Finance reads as Super Admin, inside the organizations assigned to it.
+        const financeScope = await resolveFinanceReadScope({ role, userId: (session.user as any).id, requestedOrganizationIds })
+        if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+        if (financeScope) role = "SUPER_ADMIN"
+        let organizationIds = role === "SUPER_ADMIN" || requestedOrganizationIds.length === 0
             ? requestedOrganizationIds
             : resolveAnalyticsOrganizationIds({ role, userOrganizationId, requestedOrganizationIds })
+        if (financeScope) organizationIds = financeScope.organizationIds
         const groupIds = groupIdsParam ? groupIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
         let branchIds = branchIdsParam ? branchIdsParam.split(",").map(Number).filter(n => !Number.isNaN(n)) : []
 
@@ -41,6 +47,12 @@ export async function GET(req: NextRequest) {
 
         const requestedAnyBranch = branchIds.length > 0
         branchIds = await fenceBranchIdsToOrganization({ role, userOrganizationId, branchIds })
+        if (financeScope && branchIds.length > 0) {
+            const fenced = await db.select({ id: branches.id }).from(branches)
+                .where(and(inArray(branches.id, branchIds), inArray(branches.organizationId, financeScope.organizationIds)))
+            const reachable = new Set(fenced.map((branch) => branch.id))
+            branchIds = branchIds.filter((branchId) => reachable.has(branchId))
+        }
         if (requestedAnyBranch && branchIds.length === 0) return NextResponse.json({ items: [] })
 
         const conditions: any[] = [isNull(globalProducts.deletedAt)]

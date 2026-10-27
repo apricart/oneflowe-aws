@@ -52,6 +52,11 @@ describe("selecting branches", () => {
     expect(toggleAllBranches([12, 11], [11, 12])).toEqual([])
     expect(toggleAllBranches([], [])).toEqual([])
   })
+
+  it("keeps selections hidden by a branch filter", () => {
+    expect(toggleAllBranches([11, 21], [11, 12])).toEqual([11, 12, 21])
+    expect(toggleAllBranches([11, 12, 21], [11, 12])).toEqual([21])
+  })
 })
 
 describe("select all / unselect all", () => {

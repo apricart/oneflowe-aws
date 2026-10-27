@@ -13,6 +13,7 @@ vi.mock("@/components/auth/order-portal-profile-menu", () => ({
   OrderPortalProfileMenu: ({ name }: { name: string }) => <div>{name}</div>,
 }))
 vi.mock("@/components/warehouse/warehouse-orders", () => ({ WarehouseOrders: () => <div>orders section</div> }))
+vi.mock("@/components/warehouse/warehouse-riders", () => ({ WarehouseRiders: () => <div>riders section</div> }))
 vi.mock("@/components/warehouse/warehouse-catalog", () => ({ WarehouseCatalog: () => <div>catalog section</div> }))
 vi.mock("@/components/warehouse/catalog/warehouse-organization-products", () => ({ WarehouseOrganizationProducts: () => <div>organization products section</div> }))
 vi.mock("@/components/warehouse/catalog/warehouse-group-products", () => ({ WarehouseGroupProducts: () => <div>group products section</div> }))
@@ -41,9 +42,14 @@ beforeEach(() => window.history.replaceState(null, "", "/warehouse"))
 afterEach(() => cleanup())
 
 describe("the warehouse side menu", () => {
-  it("offers the three sections in order and opens on the Dashboard", () => {
+  it("offers the four sections in order and opens on the Dashboard", () => {
     render(<WarehouseWorkspace />)
-    expect(menu().getAllByRole("button").map((button) => button.textContent)).toEqual(["Dashboard", "Orders", "Product Catalog"])
+    expect(menu().getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Dashboard",
+      "Orders",
+      "Riders",
+      "Product Catalog",
+    ])
     expect(menu().getByRole("button", { name: "Product Catalog" }).getAttribute("aria-expanded")).toBe("false")
     expect(current().map((button) => button.textContent)).toEqual(["Dashboard"])
     expect(screen.getByText("dashboard section /api/v1/warehouse/workload with order ID tools")).toBeTruthy()

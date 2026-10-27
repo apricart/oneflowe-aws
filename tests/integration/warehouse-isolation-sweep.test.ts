@@ -20,6 +20,7 @@ import {
   warehouseAssignments,
 } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
+import { RIDER_OPS_API_RULES } from "@/lib/rider-access"
 import { WAREHOUSE_API_RULES } from "@/lib/warehouse-access"
 
 import { hasTestDatabase } from "./helpers/pricing-fixtures"
@@ -29,7 +30,8 @@ import { hasTestDatabase } from "./helpers/pricing-fixtures"
  * See plans/OF-WAREHOUSE-warehouse-fulfilment-role.md.
  *
  * `proxy.ts` refuses a warehouse session every API path outside
- * `WAREHOUSE_API_RULES`, but the proxy is a second layer, never the boundary
+ * `WAREHOUSE_API_RULES` and `RIDER_OPS_API_RULES` (rider management / POD),
+ * but the proxy is a second layer, never the boundary
  * (`.claude/rules/01-architecture.md`). So this sweep skips it: it calls
  * **every GET handler under `app/api/v1`** directly, as a warehouse user,
  * pointing each dynamic id and each tenant filter at rows outside its reach,
@@ -328,9 +330,12 @@ describe.skipIf(!hasTestDatabase)("a warehouse user, calling every API handler d
     expect(leaks, `Data outside the warehouse's branches reached it:\n${leaks.join("\n")}`).toEqual([])
 
     // Defence in depth: the only handlers that answer a warehouse session at
-    // all are its own, the account's own password endpoints, and those that
-    // answer every signed-in caller with nothing tenant-shaped.
-    const ownRoutes = new Set(WAREHOUSE_API_RULES.map((rule) => rule.route))
+    // all are its own (queue + rider-ops), the account's own password endpoints,
+    // and those that answer every signed-in caller with nothing tenant-shaped.
+    const ownRoutes = new Set([
+      ...WAREHOUSE_API_RULES.map((rule) => rule.route),
+      ...RIDER_OPS_API_RULES.map((rule) => rule.route),
+    ])
     const unexpected = [...new Set(admitted.map((entry) => entry.split(" ")[0]))]
       .filter((route) => !ownRoutes.has(route))
       .filter((route) => !ANSWERS_ANY_SIGNED_IN_CALLER.has(route))
@@ -358,7 +363,6 @@ const ANSWERS_ANY_SIGNED_IN_CALLER = new Set<string>([
   // already reads on its own Product Catalog tab. No tenant's assignment,
   // override or price is joined for a caller with no organization.
   "app/api/v1/analytics/products/list/route.ts",
-  "app/api/v1/analytics/products/catalog-performance/route.ts",
   // The support raise dialog's product picker: a caller with no organization —
   // the warehouse, which answers threads and raises none — gets an empty list.
   "app/api/v1/support/products/route.ts",

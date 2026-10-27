@@ -40,6 +40,7 @@ import {
 } from "@/lib/apricart-warehouses"
 import { toggleAllBranches, toggleBranch } from "@/lib/warehouse-team-view"
 import { WAREHOUSE_TEAM_KEY } from "@/components/warehouse/warehouse-team-card"
+import { OrganizationCombobox } from "@/components/warehouse/organization-combobox"
 
 type Warehouse = {
   id: number
@@ -329,7 +330,12 @@ function RoutesDialog({
   const warehouseCode = new Map(configuration.warehouses.map((entry) => [entry.id, entry.code]))
   const routeOf = new Map(routes.map((route) => [route.branchId, route.warehouseId]))
   const organizationBranches = team.branches.filter((branch) => branch.organizationId === organizationId)
-  const shown = organizationBranches.filter((branch) => branch.name.toLowerCase().includes(filter.trim().toLowerCase()))
+  const branchNeedle = filter.trim().toLowerCase()
+  const shown = organizationBranches.filter((branch) => (
+    `${branch.name} ${branch.city ?? ""}`.toLowerCase().includes(branchNeedle)
+  ))
+  const shownIds = shown.map((branch) => branch.id)
+  const allShownSelected = shownIds.length > 0 && shownIds.every((id) => selected.includes(id))
   const saved = organizationId === null ? [] : routedHere(organizationId)
   const sortedSelected = [...selected].sort((a, b) => a - b)
   const dirty = saved.join(",") !== sortedSelected.join(",")
@@ -338,8 +344,7 @@ function RoutesDialog({
     : suggestedBranchIdsFor({ coverage: configuration.coverage.branches, warehouseId: warehouse.id, organizationId })
   const movingIn = sortedSelected.filter((id) => routeOf.has(id) && routeOf.get(id) !== warehouse.id)
 
-  const switchOrganization = (value: string) => {
-    const next = Number(value)
+  const switchOrganization = (next: number) => {
     setOrganizationId(next)
     setSelected(routedHere(next))
     setFilter("")
@@ -386,16 +391,17 @@ function RoutesDialog({
         <div className="space-y-3">
           <div className="space-y-1">
             <Label htmlFor="apricart-routes-org">Organization</Label>
-            <Select value={organizationId === null ? undefined : String(organizationId)} onValueChange={switchOrganization} disabled={saving || dirty}>
-              <SelectTrigger id="apricart-routes-org"><SelectValue placeholder="Choose an organization" /></SelectTrigger>
-              <SelectContent>
-                {team.organizations.map((organization) => (
-                  <SelectItem key={organization.id} value={String(organization.id)}>
-                    {organization.name} ({routedHere(organization.id).length})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <OrganizationCombobox
+              id="apricart-routes-org"
+              value={organizationId}
+              options={team.organizations.map((organization) => ({
+                id: organization.id,
+                label: organization.name,
+                hint: `(${routedHere(organization.id).length})`,
+              }))}
+              disabled={saving || dirty}
+              onValueChange={switchOrganization}
+            />
             {dirty && <p className="text-xs text-amber-600">Save or reset this organization first.</p>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -413,10 +419,10 @@ function RoutesDialog({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => setSelected((current) => toggleAllBranches(current, organizationBranches.map((branch) => branch.id)))}
-              disabled={saving || warehouse.status !== "ACTIVE" || organizationBranches.length === 0}
+              onClick={() => setSelected((current) => toggleAllBranches(current, shownIds))}
+              disabled={saving || warehouse.status !== "ACTIVE" || shownIds.length === 0}
             >
-              All / none
+              {allShownSelected ? "Unselect" : "Select"} all{branchNeedle ? " shown" : ""}
             </Button>
           </div>
           <fieldset className="max-h-72 space-y-1 overflow-y-auto rounded-md border p-2" disabled={saving}>

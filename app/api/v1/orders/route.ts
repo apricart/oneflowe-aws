@@ -80,6 +80,7 @@ import {
   isApricartSupportRole,
 } from "@/lib/apricart-support-access"
 import { getRequestScope } from "@/lib/auth"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 
 /**
  * Thrown inside the creation transaction when an Order Desk user's grant to the
@@ -222,6 +223,7 @@ function getOrderListParams(req: NextRequest) {
     startDate: searchParams.get("startDate") || undefined,
     endDate: searchParams.get("endDate") || undefined,
     organizationId: searchParams.get("organizationId") || undefined,
+    organizationIds: parseNumberList(searchParams.get("organizationIds") || undefined, 1),
     id,
     groupId: searchParams.get("groupId") || undefined,
     createdByRole: searchParams.get("createdByRole"),
@@ -265,9 +267,12 @@ function addOrderSearchCondition(conditions: any[], query: string | undefined) {
 // without an explicit scope, so the absence of a filter can never mean "all".
 const DENY_ALL_ORDERS = sql`false`
 
-function addSuperAdminOrderScope(conditions: any[], organizationIdParam: unknown) {
+function addSuperAdminOrderScope(conditions: any[], organizationIdParam: unknown, organizationIdsParam: unknown) {
   if (typeof organizationIdParam === "string" && /^\d+$/.test(organizationIdParam)) {
     conditions.push(eq(orders.organizationId, Number(organizationIdParam)))
+  }
+  if (Array.isArray(organizationIdsParam) && organizationIdsParam.length > 0) {
+    conditions.push(inArray(orders.organizationId, organizationIdsParam))
   }
 }
 
@@ -283,8 +288,17 @@ function addMultiBranchOrderScope(conditions: any[], scopedBranchIds: unknown) {
 
 function addOrderRoleConditions(conditions: any[], context: any) {
   const { role, organizationId: orgIdNum, branchId: branchIdFromUser, userId: currentUserId } = context
+  // Finance reads as Super Admin inside the organizations assigned to it,
+  // already fenced against what the request asked for. Never empty here, and
+  // an empty list would still match nothing rather than everything.
+  if (Array.isArray(context.financeOrganizationIds)) {
+    conditions.push(context.financeOrganizationIds.length > 0
+      ? inArray(orders.organizationId, context.financeOrganizationIds)
+      : DENY_ALL_ORDERS)
+    return
+  }
   if (role === "SUPER_ADMIN" || isApricartSupportRole(role)) {
-    addSuperAdminOrderScope(conditions, context.organizationIdParam)
+    addSuperAdminOrderScope(conditions, context.organizationIdParam, context.organizationIdsParam)
     return
   }
 
@@ -1359,11 +1373,24 @@ export async function GET(req: NextRequest) {
     const scopedBranchIds = usesMultiBranchScope(role) && typeof currentUserId === "string"
       ? await resolveScopedBranchIds(db, currentUserId)
       : null
+    const financeScope = await resolveFinanceReadScope({
+      role,
+      userId: currentUserId,
+      requestedOrganizationIds: [
+        ...(params.organizationId ? [params.organizationId] : []),
+        ...params.organizationIds,
+      ],
+    })
+    if (financeScope && !financeScope.ok) {
+      return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+    }
     addOrderRoleConditions(conditions, {
       role,
       organizationId: orgIdNum,
       branchId: branchIdFromUser,
       organizationIdParam: params.organizationId,
+      organizationIdsParam: params.organizationIds,
+      financeOrganizationIds: financeScope?.organizationIds ?? null,
       userId: currentUserId,
       scopedBranchIds,
     })

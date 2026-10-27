@@ -1,6 +1,7 @@
 "use client"
 import { viewerAccessFor } from "@/lib/viewer-access"
 import { isApricartSupportRole } from "@/lib/apricart-support-access"
+import { canUpdatePaymentStatus, isFinanceRole } from "@/lib/finance-access"
 import React,{ Suspense,useState,useMemo,useEffect,useCallback } from "react"
 import { useSearchParams } from "next/navigation"
 import useSWR from "swr"
@@ -185,6 +186,9 @@ function OrdersManagementContent() {
   const { role: sessionRole, viewRole, readOnly: viewerReadOnly } = viewerAccessFor(session?.user)
   const userRole = viewRole ?? undefined
   const isApricartSupport = isApricartSupportRole(sessionRole)
+  // Finance reads as Super Admin, read-only, and may mark orders Paid / Unpaid.
+  const isFinance = isFinanceRole(sessionRole)
+  const mayUpdatePaymentStatus = canUpdatePaymentStatus(sessionRole)
   const isReadOnly = viewerReadOnly || isApricartSupport
   const isBranchAdmin = userRole === "BRANCH_ADMIN"
   const isHeadOffice = userRole === "HEAD_OFFICE"
@@ -384,7 +388,8 @@ function OrdersManagementContent() {
     && ordersData?.capabilities?.canRejectOrders,
   )
   const showSplitFilter = statusFilter === "fulfilled" || statusFilter === "refunded"
-  const showPaymentFilter = statusFilter === "fulfilled" && deliveryFilter === null
+  const showPaymentFilter = (statusFilter === "fulfilled" || (mayUpdatePaymentStatus && statusFilter === "approved"))
+    && deliveryFilter === null
 
   useEffect(() => {
     if (!showSplitFilter && splitFilter !== "all") {
@@ -500,6 +505,7 @@ function OrdersManagementContent() {
 
   const scopeDescription = (() => {
     if (isApricartSupport) return "View orders across every organization. This workspace is read only."
+    if (isFinance) return "Orders across your assigned organizations. Mark approved orders paid or unpaid; nothing else changes here."
     if (isBranchAdmin) return "Review orders placed from your branch's Order Initiator Portal."
     if (isGroupUser) return "Review orders placed from the branches assigned to you."
     return `Monitor approvals and fulfillment pipelines across ${scopeText.toLowerCase()}.`
@@ -844,6 +850,7 @@ function OrdersManagementContent() {
               isBranchAdmin={isBranchAdmin}
               isHeadOffice={isHeadOffice}
               readOnly={isReadOnly}
+              canUpdatePaymentStatus={mayUpdatePaymentStatus}
               showOrganization={isSuperAdmin || isApricartSupport}
               showInvoiceLink={!isApricartSupport}
               canDecideOrders={canDecideOrders}

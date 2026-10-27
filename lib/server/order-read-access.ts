@@ -12,6 +12,8 @@ import { verifyResourceAccess, type RequestScope } from "@/lib/auth"
 import { db } from "@/lib/db"
 import { canOrderPortalReadOrder } from "@/lib/group-order-visibility"
 import { canUseScopedBranch, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
+import { FINANCE_ROLE, isFinanceRole } from "@/lib/finance-access"
+import { financeReachesOrganization } from "@/lib/server/finance-scope"
 
 /**
  * Who may read one order — the rule `GET /api/v1/orders/{id}` applies, in one
@@ -28,6 +30,8 @@ export const ORDER_DETAIL_READ_ROLES = [
   "GROUP_ORDER_PORTAL",
   "ORDER_PORTAL",
   APRICART_SUPPORT_ROLE,
+  // Every order of the organizations assigned to it (lib/finance-access.ts).
+  FINANCE_ROLE,
 ] as const
 
 export type OrderReadOptions = {
@@ -57,6 +61,12 @@ export async function hasBranchAccessForOrderRead(
   options: OrderReadOptions = {},
 ): Promise<boolean> {
   if (hasApricartSupportOrderReadScope(role, userId, scope)) return true
+  // Finance has no organization of its own: it reaches an order only in an
+  // organization assigned to it, re-read from the database here.
+  if (isFinanceRole(role)) {
+    if (typeof userId !== "string" || !scope || scope.userId !== userId || scope.role !== role) return false
+    return financeReachesOrganization(db, userId, order.organizationId)
+  }
   if (!usesMultiBranchScope(role)) {
     return verifyResourceAccess(order.organizationId, order.branchId, options)
   }

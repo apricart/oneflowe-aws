@@ -44,7 +44,11 @@ describe("order list tenant scoping", () => {
       orders.indexOf("function addOrderDimensionConditions"),
     )
     expect(roleConditions).toContain('if (role === "SUPER_ADMIN" || isApricartSupportRole(role))')
-    expect(orders).toContain("addSuperAdminOrderScope(conditions, context.organizationIdParam)")
+    expect(orders).toContain("addSuperAdminOrderScope(conditions, context.organizationIdParam, context.organizationIdsParam)")
+    // Finance is fenced to its assigned organizations before the Super Admin
+    // path is reached, and an empty fence matches nothing.
+    expect(roleConditions).toContain("if (Array.isArray(context.financeOrganizationIds)) {")
+    expect(roleConditions).toContain(": DENY_ALL_ORDERS)")
     expect(roleConditions).toContain('if (role === "HEAD_OFFICE") return')
     expect(roleConditions).toContain('role === "ORDER_PORTAL" && currentUserId')
     expect(roleConditions).toContain("eq(orders.createdByUserId, currentUserId)")

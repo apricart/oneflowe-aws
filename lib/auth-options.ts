@@ -287,6 +287,7 @@ const AUTH_FAILURE_REASONS: Record<string, AuthFailureReason> = {
   BRANCH_INACTIVE: "branch_inactive",
   USER_INACTIVE: "user_inactive",
   MFA_REQUIRED: "mfa_required",
+  RIDER_USE_MOBILE_APP: "rider_use_mobile_app",
   [NETWORK_RESTRICTED_ERROR]: "network_restricted",
   [NETWORK_UNAVAILABLE_ERROR]: "network_unavailable",
   [ACCOUNT_LOCKED_ERROR]: "account_locked",
@@ -760,6 +761,12 @@ async function authorizeStaffPassword(
   const roleName = u.roleName || "BRANCH_ADMIN"
   context.role = roleName
 
+  // Riders are mobile API-only — a web cookie for them has no shell and looks
+  // like "login failed" (redirect loop to /login). Use POST /api/v1/rider/auth/login.
+  if (roleName === "RIDER") {
+    throw new Error("RIDER_USE_MOBILE_APP")
+  }
+
   // Checked before the MFA branch so a restricted user never triggers an
   // OTP they could not complete a login with.
   await assertLoginNetworkAccess(roleName, u.organizationId)
@@ -826,6 +833,10 @@ async function authorizeStaffMfa(
 
   const roleName = u.roleName || "BRANCH_ADMIN"
   context.role = roleName
+
+  if (roleName === "RIDER") {
+    throw new Error("RIDER_USE_MOBILE_APP")
+  }
 
   // Checked before the OTP is consumed so a restricted user cannot burn
   // a valid code on a login that will be refused anyway.

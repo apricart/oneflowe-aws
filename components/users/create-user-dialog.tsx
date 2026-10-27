@@ -4,6 +4,8 @@ import useSWR from "swr"
 import { APRICART_EXECUTIVE_LABEL, APRICART_EXECUTIVE_ROLE } from "@/lib/apricart-executive-access"
 import { WAREHOUSE_LABEL, WAREHOUSE_ROLE } from "@/lib/warehouse-access"
 import { APRICART_SUPPORT_LABEL, APRICART_SUPPORT_ROLE } from "@/lib/apricart-support-access"
+import { FINANCE_LABEL, FINANCE_ROLE } from "@/lib/finance-access"
+import { OrganizationMultiSelect } from "@/components/finance/organization-multi-select"
 import { jsonFetcher } from "@/lib/fetcher"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogTrigger, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
@@ -85,12 +87,13 @@ function getRoleLabel(role: string) {
   if (role === APRICART_EXECUTIVE_ROLE) return APRICART_EXECUTIVE_LABEL
   if (role === WAREHOUSE_ROLE) return WAREHOUSE_LABEL
   if (role === APRICART_SUPPORT_ROLE) return APRICART_SUPPORT_LABEL
+  if (role === FINANCE_ROLE) return FINANCE_LABEL
   return ROLE_DISPLAY_NAMES.ORDER_PORTAL
 }
 
 // Apricart's own cross-tenant staff created from this dialog: no organization,
 // no branch. Their reach is granted elsewhere (or is every tenant).
-const APRICART_STAFF_ROLES = new Set<string>([APRICART_EXECUTIVE_ROLE, WAREHOUSE_ROLE, APRICART_SUPPORT_ROLE])
+const APRICART_STAFF_ROLES = new Set<string>([APRICART_EXECUTIVE_ROLE, WAREHOUSE_ROLE, APRICART_SUPPORT_ROLE, FINANCE_ROLE])
 
 // Roles pinned to exactly one branch. The group roles are deliberately
 // excluded: their reach comes from the group/branch assignments instead.
@@ -145,6 +148,8 @@ function getInitialCreateUserForm(
     // user may order on behalf of.
     groupIds: [] as string[],
     branchIds: [] as string[],
+    // Finance only — the organizations it reads and marks paid in.
+    financeOrganizationIds: [] as number[],
     mfaEnabled: false,
     isActive: true,
     budgetAllocationEnabled: false,
@@ -232,12 +237,16 @@ function getAssignmentErrors(form: CreateUserForm) {
   ) {
     errors.groupScope = "Assign at least one group or one branch"
   }
+  if (form.role === FINANCE_ROLE && form.financeOrganizationIds.length === 0) {
+    errors.financeOrganizations = "Choose at least one organization"
+  }
   return errors
 }
 
 /** Whether the Role & Assignment step has everything the chosen role needs. */
 function isAssignmentStepComplete(form: CreateUserForm) {
   if (!form.role) return false
+  if (form.role === FINANCE_ROLE) return form.financeOrganizationIds.length > 0
   if (isSingleBranchRole(form.role)) return Boolean(form.branchId)
   if (usesMultiBranchScope(form.role)) {
     return form.groupIds.length > 0 || form.branchIds.length > 0
@@ -451,7 +460,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
     if (!isValid && autoJump) {
       if (newErrors.firstName || newErrors.lastName || newErrors.email || newErrors.password || newErrors.phone || newErrors.employeeId) {
         setStep(1)
-      } else if (newErrors.role || newErrors.organizationId || newErrors.branchId || newErrors.groupScope) {
+      } else if (newErrors.role || newErrors.organizationId || newErrors.branchId || newErrors.groupScope || newErrors.financeOrganizations) {
         setStep(2)
       }
     }
@@ -491,6 +500,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
             : null,
           groupIds: usesMultiBranchScope(form.role) ? form.groupIds.map(Number) : [],
           branchIds: usesMultiBranchScope(form.role) ? form.branchIds.map(Number) : [],
+          ...(form.role === FINANCE_ROLE ? { financeOrganizationIds: form.financeOrganizationIds } : {}),
           ...(form.role === "GROUP_USER" ? { budgetAllocationEnabled: form.budgetAllocationEnabled } : {}),
           ...approvalLevelBody(approvalLevelChoice, form.orderApprovalLevel),
           mfaEnabled: form.mfaEnabled,
@@ -955,7 +965,7 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                 {/* Role Selector */}
                 <div className="space-y-2">
                   <Label htmlFor="role">Role *</Label>
-                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [], budgetAllocationEnabled: false, orderApprovalLevel: "" })}>
+                  <Select value={form.role} onValueChange={value => setForm({ ...form, role: value, branchId: "", groupIds: [], branchIds: [], financeOrganizationIds: [], budgetAllocationEnabled: false, orderApprovalLevel: "" })}>
                     <SelectTrigger name="role" className={errors.role ? 'border-red-500' : ''}>
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
@@ -983,6 +993,11 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                           {APRICART_SUPPORT_LABEL} (support queue only)
                         </SelectItem>
                       )}
+                      {userRole === "SUPER_ADMIN" && (
+                        <SelectItem value={FINANCE_ROLE}>
+                          {FINANCE_LABEL} (assigned organizations, payments only)
+                        </SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                   {errors.role && (
@@ -1006,7 +1021,33 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                       requests, and reaches nothing else. No organization or branch is assigned.
                     </p>
                   )}
+                  {form.role === FINANCE_ROLE && (
+                    <p className="text-xs text-muted-foreground">
+                      Apricart finance. Reads orders and every report of the organizations chosen below,
+                      view only, and can mark approved orders paid or unpaid. Nothing else.
+                    </p>
+                  )}
                 </div>
+
+                {form.role === FINANCE_ROLE && (
+                  <div className="space-y-2">
+                    <Label htmlFor="create-finance-organizations">Organizations *</Label>
+                    <OrganizationMultiSelect
+                      id="create-finance-organizations"
+                      options={organizations
+                        .map((organization: any) => ({ id: organization.id, label: organization.name, keywords: organization.code ?? null }))
+                        .sort((a: { label: string }, b: { label: string }) => a.label.localeCompare(b.label))}
+                      value={form.financeOrganizationIds}
+                      onChange={(financeOrganizationIds) => setForm({ ...form, financeOrganizationIds })}
+                      disabled={submitting}
+                      invalid={Boolean(errors.financeOrganizations)}
+                      describedBy={errors.financeOrganizations ? "create-finance-organizations-error" : undefined}
+                    />
+                    {errors.financeOrganizations && (
+                      <p id="create-finance-organizations-error" className="text-xs text-red-600" role="alert">{errors.financeOrganizations}</p>
+                    )}
+                  </div>
+                )}
 
                 <ApprovalLevelField
                   id="create-approval-level"

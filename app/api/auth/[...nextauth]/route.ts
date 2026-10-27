@@ -76,6 +76,7 @@ function sanitizeAuthCallbackError(error: string | null): string | null {
         "USER_INACTIVE",
         "NETWORK_RESTRICTED",
         "ACCOUNT_LOCKED",
+        "RIDER_USE_MOBILE_APP",
     ])
 
     if (safeErrors.has(error)) return error
@@ -120,6 +121,7 @@ const CREDENTIALS_VERIFIED_ERRORS = new Set([
     "BRANCH_INACTIVE",
     "USER_INACTIVE",
     "NETWORK_RESTRICTED",
+    "RIDER_USE_MOBILE_APP",
 ])
 
 function provesValidCredentials(callbackError: string | null): boolean {

@@ -35,12 +35,20 @@ export function isOrderPortalRefundEligible(
     && stringifyPrimitive(fulfillmentStatus).trim().toUpperCase() === "DELIVERED"
 }
 
+/**
+ * Whether an order's Paid / Unpaid flag may be changed: any approved order —
+ * `APPROVED` at any delivery stage, or `FULFILLED` — and nothing pending,
+ * rejected, cancelled or refunded (plans/OF-FINANCE-finance-role.md). The
+ * delivery stage is no longer part of the rule; the parameter is kept so the
+ * callers and the atomic claim in `transitionOrderPaymentStatusColumn` read
+ * the same inputs.
+ */
 export function isPaymentStatusUpdateEligible(
   orderStatus: unknown,
-  fulfillmentStatus: unknown,
+  _fulfillmentStatus?: unknown,
 ): boolean {
-  return normalizeOrderStatus(orderStatus) === "FULFILLED"
-    && stringifyPrimitive(fulfillmentStatus).trim().toUpperCase() === "DELIVERED"
+  const status = normalizeOrderStatus(orderStatus)
+  return status === "APPROVED" || status === "FULFILLED"
 }
 
 export function isUniquePositiveIdList(ids: number[]): boolean {

@@ -72,6 +72,7 @@ export type AuthFailureReason =
   | "network_unavailable"
   | "account_locked"
   | "mfa_required"
+  | "rider_use_mobile_app"
   | "mfa_invalid"
   | "mfa_not_enrolled"
   | "email_unroutable"

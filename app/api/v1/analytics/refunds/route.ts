@@ -1,4 +1,5 @@
 import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { alias } from "drizzle-orm/pg-core"
@@ -215,7 +216,7 @@ export async function GET(req: NextRequest) {
 
         // Read from the user row: an organization-wide Viewer reads as Head
         // Office, a pinned one is refused.
-        const role = viewerReadRole({
+        let role = viewerReadRole({
             role: String(currentUser?.roleName || sessionUser.role || "")
                 .toUpperCase()
                 .replace(/\s+/g, "_"),
@@ -223,11 +224,19 @@ export async function GET(req: NextRequest) {
             branchId: currentUser?.branchId,
         })
         if (!role) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
+        const { searchParams } = new URL(req.url)
+        const requestedOrganizationIds = parseRequestedOrganizationIds({
+            organizationIds: searchParams.get("organizationIds"),
+            organizationId: searchParams.get("organizationId"),
+        })
+        // Finance reads as Super Admin, inside the organizations assigned to it.
+        const financeScope = await resolveFinanceReadScope({ role, userId: sessionUser.id, requestedOrganizationIds })
+        if (financeScope && !financeScope.ok) return NextResponse.json({ error: financeScope.error }, { status: financeScope.status })
+        if (financeScope) role = "SUPER_ADMIN"
         if (!["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "BRANCH_MANAGER", "GROUP_USER"].includes(role)) {
             return NextResponse.json({ error: "Access denied" }, { status: 403 })
         }
 
-        const { searchParams } = new URL(req.url)
         const page = Math.min(Math.max(Math.trunc(Number(searchParams.get("page"))) || 1, 1), 10_000)
         const limit = Math.min(Math.max(Math.trunc(Number(searchParams.get("limit"))) || 25, 1), 100)
         const offset = (page - 1) * limit
@@ -238,20 +247,18 @@ export async function GET(req: NextRequest) {
         const query = searchParams.get("q")?.trim()
         const branchIds = parsePositiveIds(searchParams.get("branchIds") || searchParams.get("branchId"))
         const groupIds = parsePositiveIds(searchParams.get("groupIds") || searchParams.get("groupId"))
-        const requestedOrganizationIds = parseRequestedOrganizationIds({
-            organizationIds: searchParams.get("organizationIds"),
-            organizationId: searchParams.get("organizationId"),
-        })
 
         if (query && query.length > 100) {
             return NextResponse.json({ error: "Search query must be at most 100 characters" }, { status: 400 })
         }
 
-        const scopedOrganizationIds = resolveAnalyticsOrganizationIds({
-            role,
-            userOrganizationId: currentUser?.organizationId ?? sessionUser.organizationId,
-            requestedOrganizationIds,
-        })
+        const scopedOrganizationIds = financeScope
+            ? financeScope.organizationIds
+            : resolveAnalyticsOrganizationIds({
+                role,
+                userOrganizationId: currentUser?.organizationId ?? sessionUser.organizationId,
+                requestedOrganizationIds,
+            })
 
         const access = getRefundAccessConditions({
             role,

@@ -28,6 +28,7 @@ import { formatAllowlistEntry } from "@/lib/security/ip-allowlist"
 import { replaceOrganizationApprovalLevels } from "@/lib/server/order-approval-levels"
 import { toApprovalLevels } from "@/lib/order-approval-levels"
 import { VIEWER_READ_REFUSED, viewerReadScope } from "@/lib/viewer-access"
+import { resolveFinanceReadScope } from "@/lib/server/finance-scope"
 
 type OrganizationCreateInput = ReturnType<typeof organizationCreateSchema.parse>
 
@@ -88,11 +89,31 @@ function validateOrganizationFields(body: OrganizationCreateInput) {
  */
 export async function GET() {
   try {
-    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL"], { viewerReadsAsHeadOffice: true })
+    const err = await requireApiRole(["SUPER_ADMIN", "HEAD_OFFICE", "BRANCH_ADMIN", "GROUP_USER", "ORDER_PORTAL", "FINANCE"], { viewerReadsAsHeadOffice: true })
     if (err) return err
 
     const scope = viewerReadScope(await getRequestScope())
     if (!scope) return error(VIEWER_READ_REFUSED, 403)
+
+    // Finance: its assigned organizations, and only what a filter needs to
+    // name one — never the whole row Super Admin reads.
+    const financeScope = await resolveFinanceReadScope({ role: scope.role, userId: scope.userId })
+    if (financeScope) {
+      if (!financeScope.ok) return ok({ items: [], count: 0 })
+      const items = await db
+        .select({
+          id: orgsTable.id,
+          name: orgsTable.name,
+          code: orgsTable.code,
+          status: orgsTable.status,
+          budgetsEnabled: orgsTable.budgetsEnabled,
+        })
+        .from(orgsTable)
+        .where(inArray(orgsTable.id, financeScope.organizationIds))
+        .orderBy(orgsTable.name)
+        .limit(500)
+      return ok({ items, count: items.length })
+    }
 
     // Validate scope data
     if (!scope?.role) {

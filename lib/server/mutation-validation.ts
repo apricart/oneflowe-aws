@@ -50,6 +50,7 @@ import { MAX_PRICE_CENTS } from "@/lib/price-ladder"
 import { CANCELLATION_REASON_MAX_LENGTH, INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH } from "@/lib/order-desk-access"
 import { GROUP_ORDER_CANCEL_REASON_MAX_LENGTH } from "@/lib/group-order-cancel"
 import { APRICART_EXECUTIVE_ASSIGNMENT_MAX } from "@/lib/apricart-executive-access"
+import { FINANCE_ORGANIZATION_MAX } from "@/lib/finance-access"
 import {
   WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION,
   WAREHOUSE_CITY_BULK_MAX,
@@ -155,6 +156,11 @@ export const systemRoleSchema = z.enum([
   // Apricart's support agents: answer every organization's support requests
   // and reach nothing else (`lib/apricart-support-access.ts`).
   "APRICART_SUPPORT",
+  // Apricart's riders: deliver assigned orders (`lib/rider-access.ts`).
+  "RIDER",
+  // Apricart finance: reads orders and reports for the organizations Super
+  // Admin assigns, and marks orders Paid or Unpaid (`lib/finance-access.ts`).
+  "FINANCE",
 ])
 
 export type SystemRole = z.infer<typeof systemRoleSchema>
@@ -218,6 +224,13 @@ export const userCreateSchema = z.object({
   // the role and organization admit one is checked inside the creation
   // transaction (plans/OF-APPROVAL-LEVELS-assign-users-to-levels.md).
   orderApprovalLevel: userOrderApprovalLevel.optional().default(null),
+  // FINANCE only: the organizations it reads. Required non-empty for that
+  // role and refused for every other, by the route (`financeOrganizationsError`).
+  financeOrganizationIds: z.array(positiveId)
+    .max(FINANCE_ORGANIZATION_MAX)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" })
+    .optional()
+    .default([]),
 }).strict().refine((input) => input.role === "GROUP_USER" || input.budgetAllocationEnabled === undefined, {
   message: "Budget allocation access applies only to Group Financial Approvers",
   path: ["budgetAllocationEnabled"],
@@ -240,6 +253,16 @@ export const userScopeUpdateSchema = z.object({
 export const orderDeskAssignmentsUpdateSchema = z.object({
   organizationIds: assignedIdList,
   branchIds: assignedIdList,
+}).strict()
+
+/**
+ * Replaces the organizations a Finance account reads. Sending an empty list
+ * withdraws every organization: the account then reads nothing.
+ */
+export const financeOrganizationsUpdateSchema = z.object({
+  organizationIds: z.array(positiveId)
+    .max(FINANCE_ORGANIZATION_MAX)
+    .refine(isUniquePositiveIdList, { message: "Duplicate ids are not allowed" }),
 }).strict()
 
 /**

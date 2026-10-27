@@ -34,6 +34,12 @@ export type InvoiceRequesterScope = {
   organizationId: number | null
   branchId: number | null
   scopedBranchIds?: number[] | null
+  /**
+   * The organizations a Finance account was assigned, re-read from the
+   * database. Required for that role and unused by every other; an empty set
+   * means "no organizations", never "every organization".
+   */
+  assignedOrganizationIds?: number[] | null
 }
 
 export type InvoiceAccessDenial = {
@@ -44,13 +50,14 @@ export type InvoiceAccessDenial = {
 /**
  * How far one role reaches when reading an invoice.
  *
- * `tenant`      — "platform" crosses organizations; every other role is pinned
- *                 to its own.
+ * `tenant`      — "platform" crosses organizations; "assigned-organizations"
+ *                 reaches the organizations assigned to the account; every
+ *                 other role is pinned to its own.
  * `branches`    — which branches inside that tenant it may read.
  * `ownOrdersOnly` — whether it is further limited to orders it placed itself.
  */
 type InvoiceRoleRule = {
-  tenant: "platform" | "own-organization"
+  tenant: "platform" | "own-organization" | "assigned-organizations"
   branches: "all" | "own-organization" | "own-branch" | "assigned" | "none"
   ownOrdersOnly: boolean
   /**
@@ -90,6 +97,9 @@ type InvoiceRoleRule = {
  *                          money at all.
  *  - WAREHOUSE           — nothing, for the same reason; it reads invoice
  *                          figures on its own order endpoint instead.
+ *  - RIDER               — nothing; mobile delivery only, no invoice surface.
+ *  - FINANCE             — every order of the organizations assigned to it,
+ *                          like its order list (`lib/finance-access.ts`).
  */
 const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   SUPER_ADMIN: { tenant: "platform", branches: "all", ownOrdersOnly: false },
@@ -117,6 +127,18 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   // Reads no invoice: its area is the support queue alone. No organization, so
   // the tenant check refuses it, and "none" refuses it again.
   APRICART_SUPPORT: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
+  // Reads no invoice: mobile delivery only. No organization, so the tenant
+  // check refuses it, and "none" refuses it again.
+  RIDER: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
+  // Every invoice of the organizations assigned to it, like its order list.
+  FINANCE: { tenant: "assigned-organizations", branches: "all", ownOrdersOnly: false },
+}
+
+/** Roles whose tenant reach is the organizations assigned to the account. */
+export function invoiceScopeNeedsAssignedOrganizations(role: string | null | undefined): boolean {
+  return typeof role === "string"
+    && isValidRole(role)
+    && INVOICE_ROLE_RULES[role].tenant === "assigned-organizations"
 }
 
 /** Roles whose branch reach comes from group and branch assignments. */
@@ -195,6 +217,18 @@ export function resolveInvoiceAccess(input: {
       order.organizationId === null ||
       order.organizationId === undefined ||
       scope.organizationId !== order.organizationId
+    ) {
+      return FORBIDDEN
+    }
+  }
+
+  if (rule.tenant === "assigned-organizations") {
+    // Fail closed: no assignments means no organizations, never all of them.
+    if (
+      order.organizationId === null ||
+      order.organizationId === undefined ||
+      !Array.isArray(scope.assignedOrganizationIds) ||
+      !scope.assignedOrganizationIds.includes(order.organizationId)
     ) {
       return FORBIDDEN
     }

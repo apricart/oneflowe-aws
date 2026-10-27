@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
 import { orders, orderItems, branches, globalProducts, categories, organizationInventory, branchInventory } from "@/db/schema"
-import { resolveAnalyticsOrganizationIds } from "@/lib/server/analytics-scope"
+import { lacksAnalyticsTenant, resolveAnalyticsOrganizationIds } from "@/lib/server/analytics-scope"
 import { fenceBranchIdsToOrganization } from "@/lib/server/user-analytics-branch-scope"
 import { and, eq, gte, lte, inArray, desc, isNull, sql, exists, or, isNotNull } from "drizzle-orm"
 import { getCached, scopedCacheKey, CACHE_TTL } from "@/lib/cache-utils"
@@ -82,6 +82,13 @@ export async function GET(req: NextRequest) {
         const userRole = viewerReadRole({ ...(session.user as any), role: ((session.user as any).role || "").toUpperCase().replace(/\s+/g, '_') })
         if (!userRole) return NextResponse.json({ error: VIEWER_READ_REFUSED }, { status: 403 })
         const userOrgId = (session.user as any).organizationId
+        // A caller with no organization but Super Admin would otherwise read
+        // every tenant's sales here: the organization filter below is added
+        // only when there is one. Refused, as the other analytics handlers of
+        // this shape do (plans/OF-FINANCE-finance-role.md found it).
+        if (lacksAnalyticsTenant(userRole, userOrgId)) {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+        }
         const userBranchId = (session.user as any).branchId
         const pricesHidden = await shouldHidePricesForRole(userRole, userOrgId)
         const isBranchScopedRole = userRole === "BRANCH_ADMIN" || userRole === "BRANCH_MANAGER" || userRole === "ORDER_PORTAL"
