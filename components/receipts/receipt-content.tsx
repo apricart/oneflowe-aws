@@ -542,7 +542,7 @@ export function ReceiptContent({ orderId, standalone = false, onClose }: Readonl
                             <span className="party-label">Approver:</span>{" "}
                             {toDisplayNameCase(receiptData.approvedByName || "N/A")}
                         </p>
-                        {!isFrozen && (
+                        {(!isFrozen || Boolean(receiptData.fulfilledByName)) && (
                             <p className="party-line">
                                 <span className="party-label">Fulfiller:</span>{" "}
                                 {toDisplayNameCase(receiptData.fulfilledByName || "N/A")}

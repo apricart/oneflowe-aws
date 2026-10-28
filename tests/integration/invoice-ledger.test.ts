@@ -434,6 +434,25 @@ describe.skipIf(!hasTestDatabase)("the invoice ledger", () => {
         await db.update(organizations).set({ ntnNumber: null, strnNumber: null }).where(eq(organizations.id, f.organizationId))
       }
     })
+
+    it("names the fulfiller on the issued invoice once the order is fulfilled", async () => {
+      const { orderId } = await seedApprovedOrder()
+      await deliver(orderId)
+      const issued = await invoiceOf(orderId)
+      await db.update(orders).set({ status: "FULFILLED", fulfilledAt: new Date() }).where(eq(orders.id, orderId))
+
+      signIn(headOffice())
+      const response = await receiptRoute.GET(
+        request("GET", `http://localhost/api/v1/receipts/${orderId}`),
+        { params: Promise.resolve({ orderId: String(orderId) }) },
+      )
+      const body = await response.json()
+      expect(response.status).toBe(200)
+      expect(body.receiptData).toMatchObject({ frozen: true, invoiceNumber: issued.number })
+      // No token hand-off was recorded, so the approver stands in, as on every invoice.
+      expect(body.receiptData.fulfilledByName).toBe(body.receiptData.approvedByName)
+      expect(body.receiptData.fulfilledByName).not.toBe("N/A")
+    })
   })
 
   describe("immutability, enforced by the database", () => {

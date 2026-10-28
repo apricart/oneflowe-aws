@@ -18,6 +18,7 @@ import {
   isTaxInvoiceStatus,
   toInvoiceStatus,
 } from "@/lib/invoice-status"
+import { NO_PARTICIPANT } from "@/lib/server/invoice-participants"
 
 /**
  * Reads of the invoice ledger for one order. They take the order id the caller
@@ -156,7 +157,9 @@ export async function loadCreditNoteForOrder(
  * The document an order's invoice reads as, for the preview and the PDF alike.
  *
  * An invoice issued at supply is printed from its ledger rows alone
- * (`frozenInvoiceDocument`). Anything else — a proforma, or a legacy invoice
+ * (`frozenInvoiceDocument`), plus the fulfiller the caller resolved
+ * (`loadInvoiceParticipants`), which exists only once the order is fulfilled.
+ * Anything else — a proforma, or a legacy invoice
  * copied into the ledger by the backfill — keeps the snapshot-based document
  * the caller built, exactly as it has always printed, plus the credit notes
  * issued against it since.
@@ -168,11 +171,15 @@ export async function invoiceDocumentForOrder<T extends Record<string, unknown> 
   const ledger = await loadLedgerInvoiceForOrder(order)
   if (!ledger) return legacyDocument
   if (ledger.invoice.origin === "ISSUED_AT_SUPPLY") {
+    const fulfilledByName = legacyDocument?.fulfilledByName
     return frozenInvoiceDocument({
       invoice: ledger.invoice,
       lines: ledger.lines,
       order: { id: order.id, tid: order.tid, paymentStatus: order.paymentStatus },
       creditNotes: ledger.creditNotes,
+      fulfilledByName: typeof fulfilledByName === "string" && fulfilledByName !== NO_PARTICIPANT
+        ? fulfilledByName
+        : null,
     })
   }
   if (legacyDocument === null) return legacyDocument

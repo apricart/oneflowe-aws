@@ -74,6 +74,19 @@ describe("the downloaded invoice", () => {
     expect(printedText(withoutFulfiller)).toContain("Fulfiller:")
   })
 
+  it("names the fulfiller on an issued invoice once the order is fulfilled", () => {
+    const pdf = printedText({ ...receiptData, frozen: true })
+
+    expect(pdf).toContain("Fulfiller:")
+    expect(pdf).toContain("Sana Iqbal")
+  })
+
+  it("names no fulfiller on an issued invoice before fulfilment", () => {
+    const { fulfilledByName, ...withoutFulfiller } = receiptData
+
+    expect(printedText({ ...withoutFulfiller, frozen: true })).not.toContain("Fulfiller:")
+  })
+
   it("keeps the subtotal out of the header", () => {
     expect(printedText()).not.toContain("Subtotal")
   })

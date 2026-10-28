@@ -34,7 +34,7 @@ export interface InvoiceParticipantIds {
  * token over. Such an invoice reports no fulfiller rather than inventing one,
  * the same way an unapproved order reports no approver.
  */
-const NO_PARTICIPANT = "N/A"
+export const NO_PARTICIPANT = "N/A"
 const UNRESOLVED_PARTICIPANT = "Unknown"
 
 /** Written by both token hand-off endpoints, single-order and group alike. */
