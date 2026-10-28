@@ -159,6 +159,30 @@ describe("invoice header", () => {
         expect(header).toContain("N/A")
     })
 
+    it("names the fulfiller on an issued invoice once the order is fulfilled", () => {
+        swrResponse = {
+            data: { ...receiptResponse, receiptData: { ...receiptResponse.receiptData, frozen: true } },
+            error: undefined,
+            isLoading: false,
+        }
+        const header = renderInvoice().container.textContent || ""
+
+        expect(header).toContain("Fulfiller:")
+        expect(header).toContain("Sana Iqbal")
+    })
+
+    it("names no fulfiller on an issued invoice before fulfilment", () => {
+        const { fulfilledByName, ...withoutFulfiller } = receiptResponse.receiptData
+        swrResponse = {
+            data: { ...receiptResponse, receiptData: { ...withoutFulfiller, frozen: true } },
+            error: undefined,
+            isLoading: false,
+        }
+        const header = renderInvoice().container.textContent || ""
+
+        expect(header).not.toContain("Fulfiller:")
+    })
+
     it("lists the initiator, approver and fulfiller after the delivery address", () => {
         const { container } = renderInvoice()
         const header = container.textContent || ""
