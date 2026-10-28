@@ -22,10 +22,11 @@ const base: OrderWarehousePanelData = {
   branchServingAccountCount: 1,
   refusal: null,
   targets: [
-    { id: 1, code: "KHI", name: "Karachi", city: "Karachi", operatorCount: 1 },
-    { id: 2, code: "LHE", name: "Lahore", city: "Lahore", operatorCount: 2 },
-    { id: 3, code: "EMP", name: "Empty", city: null, operatorCount: 0 },
+    { id: 1, code: "KHI", name: "Karachi", city: "Karachi", operatorCount: 1, stockShortfalls: [] },
+    { id: 2, code: "LHE", name: "Lahore", city: "Lahore", operatorCount: 2, stockShortfalls: [] },
+    { id: 3, code: "EMP", name: "Empty", city: null, operatorCount: 0, stockShortfalls: [] },
   ],
+  handBackStockShortfalls: [],
   history: [],
 }
 
@@ -84,6 +85,40 @@ describe("the order's fulfilment warehouse", () => {
       targetWarehouseId: 2,
       expectedWarehouseId: null,
       reason: "Out of stock in Karachi",
+    })
+  })
+
+  it("warns that the target is short of stock and transfers only once that is confirmed", async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ item: {} }), { status: 200 }))
+    swr.data = {
+      ...base,
+      targets: base.targets.map((target) => target.id === 2
+        ? { ...target, stockShortfalls: [{ globalProductId: 9, productName: "Tissue box", requested: 10, available: 4 }] }
+        : target),
+    }
+    render(<OrderWarehousePanel orderId={7} />)
+    fireEvent.click(screen.getByRole("button", { name: /Transfer to another warehouse/ }))
+    const dialog = screen.getByRole("dialog")
+    const submit = within(dialog).getByRole("button", { name: /Transfer order/ }) as HTMLButtonElement
+
+    fireEvent.keyDown(within(dialog).getByRole("combobox", { name: "Move to" }), { key: "ArrowDown" })
+    fireEvent.click(screen.getByRole("option", { name: /LHE — Lahore/ }))
+    fireEvent.change(within(dialog).getByLabelText("Reason"), { target: { value: "Karachi van is down" } })
+
+    expect(within(dialog).getByText(/does not have enough stock/)).toBeTruthy()
+    expect(within(dialog).getByText("Tissue box: available 4, needed 10")).toBeTruthy()
+    expect(submit.disabled).toBe(true)
+
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Transfer anyway" }))
+    expect(submit.disabled).toBe(false)
+    fireEvent.click(submit)
+
+    await waitFor(() => expect(swr.mutate).toHaveBeenCalled())
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
+      targetWarehouseId: 2,
+      expectedWarehouseId: null,
+      reason: "Karachi van is down",
+      acknowledgeStockShortfall: true,
     })
   })
 

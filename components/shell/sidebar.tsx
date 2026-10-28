@@ -152,6 +152,8 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       // Apricart's warehouse staff and the branches each one serves — Super
       // Admin's alone (lib/warehouse-access.ts).
       { href: "/warehouse-team", label: "Warehouse Team", icon: Warehouse },
+      // Each warehouse's stock figures — Super Admin's alone (lib/warehouse-stock-access.ts).
+      { href: "/warehouse-stock", label: "Warehouse Stock", icon: Boxes },
       { href: "/refunds", label: "Refunds", icon: Wallet },
       {
         href: "/inventory",

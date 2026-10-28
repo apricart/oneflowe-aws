@@ -6,6 +6,7 @@ import { format } from "date-fns"
 import { ArrowRightLeft, Loader2, Warehouse } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
@@ -27,6 +28,8 @@ import {
   ORDER_WAREHOUSE_TRANSFER_REFUSAL_MESSAGES,
   type OrderWarehouseTransferRefusal,
 } from "@/lib/order-warehouse-transfer"
+import { formatQuantity } from "@/lib/quantity"
+import type { StockShortfall } from "@/lib/warehouse-stock"
 
 /**
  * Which Apricart warehouse fulfils this order, and moving it to another one.
@@ -44,7 +47,8 @@ export type OrderWarehousePanelData = {
   workedBy: Array<{ id: string; name: string }>
   branchServingAccountCount: number
   refusal: OrderWarehouseTransferRefusal | null
-  targets: Array<WarehouseSummary & { operatorCount: number }>
+  targets: Array<WarehouseSummary & { operatorCount: number; stockShortfalls: StockShortfall[] }>
+  handBackStockShortfalls: StockShortfall[]
   history: Array<{
     id: number
     from: WarehouseSummary | null
@@ -76,19 +80,30 @@ function TransferDialog({
 }>) {
   const [target, setTarget] = useState<string>("")
   const [reason, setReason] = useState("")
+  const [acknowledged, setAcknowledged] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
   const currentId = data.currentWarehouse?.id ?? null
   const choices = data.targets.filter((warehouse) => warehouse.id !== currentId)
   const canHandBack = currentId !== null
   const trimmedReason = reason.trim()
-  const ready = target !== "" && trimmedReason.length >= ORDER_WAREHOUSE_TRANSFER_REASON_MIN_LENGTH && !submitting
+  // Counted per warehouse, a target short of stock is a warning to confirm, never a refusal.
+  const shortfalls = target === ""
+    ? []
+    : target === BRANCH_REACH_VALUE
+      ? data.handBackStockShortfalls
+      : data.targets.find((warehouse) => String(warehouse.id) === target)?.stockShortfalls ?? []
+  const ready = target !== ""
+    && trimmedReason.length >= ORDER_WAREHOUSE_TRANSFER_REASON_MIN_LENGTH
+    && (shortfalls.length === 0 || acknowledged)
+    && !submitting
 
   const close = (next: boolean) => {
     if (submitting) return
     if (!next) {
       setTarget("")
       setReason("")
+      setAcknowledged(false)
     }
     onOpenChange(next)
   }
@@ -104,6 +119,7 @@ function TransferDialog({
           targetWarehouseId: target === BRANCH_REACH_VALUE ? null : Number(target),
           expectedWarehouseId: currentId,
           reason: trimmedReason,
+          ...(shortfalls.length > 0 ? { acknowledgeStockShortfall: true } : {}),
         }),
       })
       const result = await response.json().catch(() => ({}))
@@ -111,6 +127,7 @@ function TransferDialog({
       toast({ title: "Order transferred", description: `Order ${data.order.tid} has moved warehouse.` })
       setTarget("")
       setReason("")
+      setAcknowledged(false)
       onOpenChange(false)
       onTransferred()
     } catch (caught) {
@@ -137,7 +154,7 @@ function TransferDialog({
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="order-warehouse-target">Move to</Label>
-            <Select value={target} onValueChange={setTarget} disabled={submitting}>
+            <Select value={target} onValueChange={(value) => { setTarget(value); setAcknowledged(false) }} disabled={submitting}>
               <SelectTrigger id="order-warehouse-target">
                 <SelectValue placeholder="Choose a warehouse" />
               </SelectTrigger>
@@ -162,6 +179,28 @@ function TransferDialog({
               </p>
             )}
           </div>
+          {shortfalls.length > 0 && (
+            <div className="space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200" role="alert">
+              <p className="font-semibold">This warehouse does not have enough stock for this order.</p>
+              <ul className="list-disc space-y-0.5 pl-4">
+                {shortfalls.map((shortfall) => (
+                  <li key={shortfall.globalProductId}>
+                    {shortfall.productName}: available {formatQuantity(shortfall.available)}, needed {formatQuantity(shortfall.requested)}
+                  </li>
+                ))}
+              </ul>
+              <p>It cannot be marked In Process there until stock arrives.</p>
+              <div className="flex items-center gap-2 pt-1">
+                <Checkbox
+                  id="order-warehouse-acknowledge"
+                  checked={acknowledged}
+                  onCheckedChange={(checked) => setAcknowledged(checked === true)}
+                  disabled={submitting}
+                />
+                <Label htmlFor="order-warehouse-acknowledge" className="text-xs font-medium">Transfer anyway</Label>
+              </div>
+            </div>
+          )}
           <div className="space-y-2">
             <Label htmlFor="order-warehouse-reason">Reason</Label>
             <Textarea

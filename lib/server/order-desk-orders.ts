@@ -25,6 +25,7 @@ import { loadOrderDeskReach, orderDeskOrderCondition } from "@/lib/server/order-
 import { fulfillApprovedOrder, type OrderFulfillmentOutcome } from "@/lib/server/order-fulfillment"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
 
 /**
  * The Order Desk's own orders: listing, cancelling, resubmitting and
@@ -423,7 +424,8 @@ function cancelInTransaction(input: {
       .select({ globalProductId: orderItems.globalProductId, quantity: orderItems.quantity })
       .from(orderItems)
       .where(eq(orderItems.orderId, cancelled.id))
-    for (const item of items) {
+    // Counted per warehouse, an order not yet In Process took nothing, so nothing goes back.
+    for (const item of usesWarehouseStock() ? [] : items) {
       await tx
         .update(globalProducts)
         .set({ stockQuantity: sql`${globalProducts.stockQuantity} + ${item.quantity}`, updatedAt: now })

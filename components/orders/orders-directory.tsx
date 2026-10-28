@@ -13,6 +13,7 @@ import {
   Building2,
   Calendar as CalendarIcon,
   Copy,
+  RotateCw,
   Send,
   Truck,
   Banknote,
@@ -73,7 +74,15 @@ import { isAwaitingCorrection } from "@/lib/order-correction"
 import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
 import { DeliveryChallanUploadDialog } from "@/components/orders/delivery-challan"
 import { InvoiceStatusBadge } from "@/components/orders/invoice-status-badge"
-import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
+import {
+  TOKEN_SENT_LABEL,
+  TOKEN_SETTLEMENT_FAILED_TITLE,
+  TOKEN_SETTLEMENT_RETRY_LABEL,
+  isTokenAlreadySent,
+  readTokenSendRefusal,
+  readTokenSettlementFailure,
+  tokenSettlementNeedsRetry,
+} from "@/lib/order-token-handoff"
 import {
   DELIVERED_UNFULFILLED_LABEL,
   orderRowFulfilmentAction,
@@ -589,7 +598,9 @@ export function OrdersDirectory({
   }
 
   const sendTokenToAdmin = async (order: any) => {
-    if (!order || isTokenAlreadySent(order.tokenHandoffAt) || sendingTokenOrderId !== null) return
+    if (!order || sendingTokenOrderId !== null) return
+    // A sent token is offered again only as a retry of a settlement that failed.
+    if (isTokenAlreadySent(order.tokenHandoffAt) && !tokenSettlementNeedsRetry(order)) return
 
     setSendingTokenOrderId(order.id)
     try {
@@ -618,6 +629,18 @@ export function OrdersDirectory({
           current?.id === order.id && refusal.status ? { ...current, status: refusal.status } : current
         ))
         toast({ title: "Order already updated", description: refusal.message })
+        onUpdate()
+        return
+      }
+      // The token reached the admin (or had already), but the order is still
+      // not fulfilled: say so, and leave the retry on offer.
+      const settlementFailure = readTokenSettlementFailure(data)
+      if (settlementFailure) {
+        const sentAt = new Date().toISOString()
+        setViewingOrder((current: any) => (
+          current?.id === order.id ? { ...current, tokenHandoffAt: current.tokenHandoffAt ?? sentAt } : current
+        ))
+        toast({ title: TOKEN_SETTLEMENT_FAILED_TITLE, description: settlementFailure.message, variant: "destructive" })
         onUpdate()
         return
       }
@@ -1015,7 +1038,25 @@ export function OrdersDirectory({
                         className={cn(PINNED_CELL_CLASS, "py-3 pl-3 pr-5 text-right")}
                         style={{ right: 0 }}
                       >
-                        {rowAction === "send-token" && isTokenAlreadySent(order.tokenHandoffAt) && (
+                        {rowAction === "send-token" && tokenSettlementNeedsRetry(order) && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="destructive"
+                            disabled={sendingTokenOrderId !== null}
+                            className="h-8 gap-1.5 rounded-lg px-3 text-xs font-bold"
+                            aria-label={`Retry fulfilment of order ${order.tid}; its token already reached the admin`}
+                            title="The token reached the admin but the order could not be marked fulfilled"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void sendTokenToAdmin(order)
+                            }}
+                          >
+                            <RotateCw className={cn("h-3.5 w-3.5", sendingTokenOrderId === order.id && "animate-spin")} />
+                            {sendingTokenOrderId === order.id ? "Retrying..." : TOKEN_SETTLEMENT_RETRY_LABEL}
+                          </Button>
+                        )}
+                        {rowAction === "send-token" && isTokenAlreadySent(order.tokenHandoffAt) && !tokenSettlementNeedsRetry(order) && (
                           <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
                             {TOKEN_SENT_LABEL}
                           </span>

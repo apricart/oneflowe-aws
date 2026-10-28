@@ -182,6 +182,7 @@ export async function recordGroupTokenHandoff({
   recipient,
   fulfilledOrderIds,
   awaitingDeliveryOrderIds,
+  failedOrderIds,
 }: {
   userId: string
   organizationId: number
@@ -191,6 +192,8 @@ export async function recordGroupTokenHandoff({
   fulfilledOrderIds?: ReadonlySet<number>
   /** The orders whose hand-off is recorded and waiting on their delivery. */
   awaitingDeliveryOrderIds?: ReadonlySet<number>
+  /** Delivered orders whose settlement failed and which are waiting on a retry. */
+  failedOrderIds?: ReadonlySet<number>
 }): Promise<void> {
   if (bundle.entries.length === 0) return
 
@@ -207,6 +210,44 @@ export async function recordGroupTokenHandoff({
       groupOrderReference: bundle.reference,
       fulfilled: Boolean(fulfilledOrderIds?.has(entry.orderId)),
       awaitingDelivery: Boolean(awaitingDeliveryOrderIds?.has(entry.orderId)),
+      settlementFailed: Boolean(failedOrderIds?.has(entry.orderId)),
+    },
+  })))
+}
+
+/**
+ * Record a retried settlement against each order it attempted — the ones it
+ * settled and the ones still waiting — the same per-order trail the
+ * single-order retry leaves. Nothing was emailed, so it is not a token send.
+ */
+export async function recordGroupTokenSettlementRetry({
+  userId,
+  organizationId,
+  bundle,
+  fulfilledOrderIds,
+  failedOrderIds,
+}: {
+  userId: string
+  organizationId: number
+  bundle: GroupOrderTokenBundle
+  fulfilledOrderIds: ReadonlySet<number>
+  failedOrderIds: ReadonlySet<number>
+}): Promise<void> {
+  const attempted = bundle.entries.filter((entry) =>
+    fulfilledOrderIds.has(entry.orderId) || failedOrderIds.has(entry.orderId))
+  if (attempted.length === 0) return
+
+  await db.insert(auditLogs).values(attempted.map((entry) => ({
+    userId,
+    organizationId,
+    branchId: entry.branchId,
+    action: "RETRY_ORDER_TOKEN_FULFILMENT",
+    entity: "ORDER",
+    entityId: String(entry.orderId),
+    metadata: {
+      tid: entry.tid,
+      groupOrderReference: bundle.reference,
+      fulfilled: fulfilledOrderIds.has(entry.orderId),
     },
   })))
 }

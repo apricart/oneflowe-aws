@@ -1,5 +1,6 @@
 import { error, ok, readJson, requireApiRole } from "@/lib/api"
 import { INVOICE_CODE_MISSING_MESSAGE } from "@/lib/invoice-number"
+import { NO_STOCK_WAREHOUSE_MESSAGE, stockShortageMessage } from "@/lib/warehouse-stock"
 import { getCurrentUser, verifyResourceAccess } from "@/lib/auth"
 import { normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
 import { fulfillmentStatusSchema, validationMessage } from "@/lib/server/mutation-validation"
@@ -63,6 +64,10 @@ export async function POST(
       return error("Fulfillment progress was already changed by another request", 409)
     case "invoice-code-missing":
       return error(INVOICE_CODE_MISSING_MESSAGE, 409)
+    case "stock-short":
+      return error(stockShortageMessage(outcome.shortfalls), 409)
+    case "no-stock-warehouse":
+      return error(NO_STOCK_WAREHOUSE_MESSAGE, 409)
     case "updated":
       return ok({
         message: outcome.fulfilled

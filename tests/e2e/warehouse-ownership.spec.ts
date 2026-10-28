@@ -100,7 +100,9 @@ test.describe.serial("warehouses own branches", () => {
     const members = page.getByRole("dialog")
     await members.getByLabel(new RegExp(WAREHOUSE_NAME)).click()
     await expect(members.getByRole("button", { name: "All branches" })).toBeVisible({ timeout: 150_000 })
-    await members.getByRole("button", { name: "Close" }).click()
+    // Two buttons are named Close (the footer and the corner); Escape closes either way.
+    await page.keyboard.press("Escape")
+    await expect(members).toBeHidden()
 
     await warehouseRow(page).getByRole("button", { name: "Rules" }).click()
     const rules = page.getByRole("dialog")
@@ -111,7 +113,8 @@ test.describe.serial("warehouses own branches", () => {
     await page.getByRole("option", { name: `${CITY} (2)` }).click()
     await rules.getByRole("button", { name: "Add rule" }).click()
     await expect(rules.getByText(`${tenant.organizationName} · ${CITY}`)).toBeVisible({ timeout: 150_000 })
-    await rules.getByRole("button", { name: "Close" }).click()
+    await page.keyboard.press("Escape")
+    await expect(rules).toBeHidden()
 
     // The rule is live: its two branches are in the warehouse, the other city's is not.
     await expect(warehouseRow(page)).toContainText("2 active")

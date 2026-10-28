@@ -215,6 +215,33 @@ export async function sendTokenEmailOncePerOrder(
   })
 }
 
+export type TokenSettlementState = {
+  status: string
+  fulfillmentStatus: string
+  tokenHandoffAt: string | null
+}
+
+/**
+ * The three fields that say whether an order is waiting on a failed settlement
+ * (`tokenSettlementNeedsRetry`), read live inside the authorized scope. Null
+ * when no order matches it.
+ */
+export async function loadTokenSettlementState(
+  target: TokenHandoffTarget,
+): Promise<TokenSettlementState | null> {
+  const [row] = await db
+    .select({
+      status: orders.status,
+      fulfillmentStatus: fulfillmentStatusSql,
+      tokenHandoffAt: handoffAtSql,
+    })
+    .from(orders)
+    .where(scopedToOrder(target))
+    .limit(1)
+
+  return row ?? null
+}
+
 /**
  * The hand-off waiting on this order, if the token has already been handed over
  * and the order has not been settled yet. Returns null when no token was ever

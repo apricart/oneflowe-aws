@@ -41,7 +41,12 @@ import {
 } from "@/lib/order-status"
 import { calculateLineCents, formatQuantity } from "@/lib/quantity"
 import { FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
-import { TOKEN_SENT_LABEL, isTokenAlreadySent } from "@/lib/order-token-handoff"
+import {
+  TOKEN_SENT_LABEL,
+  TOKEN_SETTLEMENT_RETRY_LABEL,
+  isTokenAlreadySent,
+  tokenSettlementNeedsRetry,
+} from "@/lib/order-token-handoff"
 import { PAYMENT_STATUS_LABELS, normalizePaymentStatus } from "@/lib/payment-status"
 import { getFulfillmentProgressColor, getPaymentStatusColor } from "@/lib/order-status-colors"
 import {
@@ -148,7 +153,8 @@ export function OrderDetailPanel({
   const isActiveOrder = normalizedOrderStatus === "APPROVED"
   const isFulfilledOrder = ["FULFILLED", "PARTIAL", "PARTIALLY_FULFILLED"].includes(normalizedOrderStatus)
   const isDeliveredOrder = normalizeFulfillmentStatus(order.fulfillmentStatus) === "DELIVERED"
-  const tokenAlreadySent = isTokenAlreadySent(order.tokenHandoffAt)
+  const tokenNeedsRetry = tokenSettlementNeedsRetry(order)
+  const tokenAlreadySent = isTokenAlreadySent(order.tokenHandoffAt) && !tokenNeedsRetry
 
   return (
             <div className="flex flex-col h-full font-sans">
@@ -348,15 +354,22 @@ export function OrderDetailPanel({
                           <Send className={cn("mr-2 h-4 w-4", isSendingToken && "animate-pulse")} />
                           {(() => {
                             if (isSendingToken) return "Sending Token..."
+                            if (tokenNeedsRetry) return TOKEN_SETTLEMENT_RETRY_LABEL
                             return tokenAlreadySent ? TOKEN_SENT_LABEL : "Send Token to Admin"
                           })()}
                         </Button>
                       )}
-                      <p className="text-[9px] font-bold text-slate-400 leading-tight">
-                        {onSendToken
-                          ? "Sending this token to the admin marks the order fulfilled. Copy it to hand it over another way."
-                          : "Provide this security token to the Super Admin to mark this order as fulfilled."}
-                      </p>
+                      {onSendToken && tokenNeedsRetry ? (
+                        <p role="alert" className="text-[10px] font-bold text-rose-600 dark:text-rose-400 leading-tight">
+                          The token reached the admin, but the order could not be marked fulfilled. Retry — the token will not be emailed twice.
+                        </p>
+                      ) : (
+                        <p className="text-[9px] font-bold text-slate-400 leading-tight">
+                          {onSendToken
+                            ? "Sending this token to the admin marks the order fulfilled. Copy it to hand it over another way."
+                            : "Provide this security token to the Super Admin to mark this order as fulfilled."}
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}

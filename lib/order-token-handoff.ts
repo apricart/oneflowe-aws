@@ -35,6 +35,12 @@ export type TokenHandoffResult = {
    * and will therefore settle when their delivery is recorded.
    */
   awaitingDeliveryCount?: number
+  /**
+   * How many had been delivered, so should have settled, but could not be
+   * marked fulfilled. Their token did reach the admin; the settlement is what
+   * failed, and `tokenSettlementNeedsRetry` is what offers it again.
+   */
+  failedCount?: number
 }
 
 /**
@@ -72,6 +78,43 @@ export const TOKEN_SEND_IN_PROGRESS_MESSAGE =
 
 /** Shown in place of the send action once the token has gone. */
 export const TOKEN_SENT_LABEL = "Token sent"
+
+/**
+ * A token that reached the admin for a delivered order whose fulfilment then
+ * failed. The send routes answer a retry that fails again with this code; the
+ * first send still answers 200, because its email did leave, and says so with
+ * `settlementFailed`.
+ */
+export const TOKEN_SETTLEMENT_FAILED_CODE = "TOKEN_SETTLEMENT_FAILED"
+
+/** Shown in place of "Token sent" while the order is waiting on a retry. */
+export const TOKEN_SETTLEMENT_RETRY_LABEL = "Retry fulfilment"
+
+export const TOKEN_SETTLEMENT_FAILED_TITLE = "Order not marked fulfilled"
+
+export const TOKEN_SETTLEMENT_RETRY_FAILED_MESSAGE =
+  "The order still could not be marked fulfilled. Please try again in a few minutes; if it keeps failing, contact support."
+
+/**
+ * Whether the order is waiting on a settlement that failed.
+ *
+ * Its token has reached the admin and its goods have arrived, which is the
+ * whole of what fulfils an order (`tokenHandoffSettlesNow`), yet it is still
+ * approved. In normal running that lasts only for the instant inside the request
+ * that settles it, so an order seen in this state is one whose settlement failed
+ * — after the hand-off, or when its delivery was recorded — and the send action
+ * is offered again as a retry. The send routes apply the same rule to the live
+ * row before they retry, and never email the token a second time.
+ */
+export function tokenSettlementNeedsRetry(order: {
+  status?: string | null
+  fulfillmentStatus?: string | null
+  tokenHandoffAt?: string | Date | null
+} | null | undefined): boolean {
+  if (!order) return false
+  return isTokenAlreadySent(order.tokenHandoffAt)
+    && tokenHandoffSettlesNow(order.status, order.fulfillmentStatus)
+}
 
 /**
  * The order is no longer approved, so it has no token to send. A screen that
@@ -119,6 +162,20 @@ export function readTokenSendRefusal(
     return { kind: "not-approved", message: message || tokenOrderNotApprovedMessage(status), status }
   }
   return null
+}
+
+/**
+ * Read a send-route answer as "the order is still not fulfilled", whichever way
+ * it came: a first send whose email left but whose settlement failed (200), or
+ * a retry that failed again (503). Either way the caller shows it as an error
+ * and offers the retry; null means anything else.
+ */
+export function readTokenSettlementFailure(
+  body: { code?: unknown; error?: unknown; message?: unknown } | null | undefined,
+): { message: string } | null {
+  if (!body || body.code !== TOKEN_SETTLEMENT_FAILED_CODE) return null
+  const text = [body.message, body.error].find((value) => typeof value === "string" && value.trim())
+  return { message: typeof text === "string" ? text : TOKEN_SETTLEMENT_RETRY_FAILED_MESSAGE }
 }
 
 /**
@@ -177,6 +234,7 @@ export function tokenHandoffMessage({
   sentCount,
   fulfilledCount,
   awaitingDeliveryCount = 0,
+  failedCount = 0,
 }: TokenHandoffResult): string {
   const tokens = sentCount === 1 ? "1 fulfilment token" : `${sentCount} fulfilment tokens`
   const sent = `Sent ${tokens} to the admin`
@@ -184,6 +242,34 @@ export function tokenHandoffMessage({
   const settled = settledClause(sentCount, fulfilledCount)
   const awaiting = awaitingClause(sentCount, awaitingDeliveryCount, settled !== null)
   const clauses = [settled, awaiting].filter((clause): clause is string => clause !== null)
+  const message = clauses.length === 0 ? sent : `${sent} — ${clauses.join("; ")}`
 
-  return clauses.length === 0 ? sent : `${sent} — ${clauses.join("; ")}`
+  return failedCount > 0 ? `${message}. ${failedClause(sentCount, failedCount)}` : message
+}
+
+/** The part of the message about delivered orders that could not be settled. */
+function failedClause(sentCount: number, failedCount: number): string {
+  const which = sentCount === 1
+    ? "the order could not be marked fulfilled"
+    : `${failedCount} of ${sentCount} orders could not be marked fulfilled`
+  const tokens = failedCount === 1 ? "Its token has" : "Their tokens have"
+  return `However, ${which}. ${tokens} reached the admin, so press "${TOKEN_SETTLEMENT_RETRY_LABEL}" to try again — nothing will be emailed twice.`
+}
+
+/**
+ * The message after a retry, which sends no email: it only settles orders whose
+ * token had already reached the admin.
+ */
+export function tokenSettlementRetryMessage({
+  fulfilledCount,
+  failedCount,
+}: { fulfilledCount: number; failedCount: number }): string {
+  if (failedCount > 0) {
+    return fulfilledCount > 0
+      ? `${fulfilledCount} order${fulfilledCount === 1 ? " is" : "s are"} now marked fulfilled, but ${failedCount} still could not be. Please try again in a few minutes; if it keeps failing, contact support.`
+      : TOKEN_SETTLEMENT_RETRY_FAILED_MESSAGE
+  }
+  return fulfilledCount === 1
+    ? "The order is now marked fulfilled. Its token had already reached the admin, so it was not emailed again."
+    : `All ${fulfilledCount} orders are now marked fulfilled. Their tokens had already reached the admin, so they were not emailed again.`
 }

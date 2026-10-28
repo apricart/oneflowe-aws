@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation"
 import NextImage from "next/image"
 import useSWR,{ useSWRConfig } from "swr"
 import { fetcher } from "@/lib/fetcher"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
 import {
   DEFAULT_TAX_RATE_BP,
   resolveTaxRateBp,
@@ -698,20 +699,31 @@ export function ProductForm({ mode, initialProduct, onCancel, onSuccess }: Reado
                 />
                 <p className="mt-1 text-xs text-muted-foreground">Measurement</p>
               </div>
-              <div>
-                <label htmlFor="product-stock-quantity" className="block text-sm font-medium mb-1">Stock Quantity <span className="text-destructive">*</span></label>
-                <Input
-                  id="product-stock-quantity"
-                  type="number"
-                  min="0"
-                  step={productData.allowDecimalQuantity ? "any" : "1"}
-                  value={productData.stockQuantity ?? ""}
-                  onChange={(e) => setProductData({ ...productData, stockQuantity: e.target.value })}
-                  placeholder="0"
-                  required
-                />
-                <p className="mt-1 text-xs text-muted-foreground">Available</p>
-              </div>
+              {usesWarehouseStock() ? (
+                // Counted per warehouse, the global figure is no longer read
+                // (lib/stock-ledger-policy.ts); each warehouse's is changed there.
+                <div>
+                  <p className="block text-sm font-medium mb-1">Stock Quantity</p>
+                  <p className="text-xs text-muted-foreground">
+                    Stock is counted per warehouse. Change it on <a href="/warehouse-stock" className="underline">Warehouse Stock</a>.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label htmlFor="product-stock-quantity" className="block text-sm font-medium mb-1">Stock Quantity <span className="text-destructive">*</span></label>
+                  <Input
+                    id="product-stock-quantity"
+                    type="number"
+                    min="0"
+                    step={productData.allowDecimalQuantity ? "any" : "1"}
+                    value={productData.stockQuantity ?? ""}
+                    onChange={(e) => setProductData({ ...productData, stockQuantity: e.target.value })}
+                    placeholder="0"
+                    required
+                  />
+                  <p className="mt-1 text-xs text-muted-foreground">Available</p>
+                </div>
+              )}
             </div>
             <div className="rounded-lg border bg-muted/20 p-4">
               <div className="flex items-start justify-between gap-4">

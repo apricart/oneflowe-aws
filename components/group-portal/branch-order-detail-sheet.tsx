@@ -11,6 +11,7 @@ import { RefundManagement } from "@/components/refund-management"
 import { OrderCorrectionNotice } from "@/components/orders/order-correction"
 import { isCancellableGroupOrderStatus } from "@/lib/group-order-cancel"
 import { isAwaitingCorrection } from "@/lib/order-correction"
+import { tokenSettlementNeedsRetry } from "@/lib/order-token-handoff"
 import { Button } from "@/components/ui/button"
 import {
   Sheet,
@@ -148,6 +149,7 @@ export function BranchOrderDetailSheet({
                     tid={order.tid}
                     token={token}
                     branchName={order.branchName ?? undefined}
+                    needsRetry={tokenSettlementNeedsRetry(detailedOrder)}
                     onFulfilled={() => {
                       onChanged()
                       closeSheet()

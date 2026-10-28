@@ -11,6 +11,9 @@ import { settleDeliveredOrderAfterTokenHandoff } from "@/lib/server/order-fulfil
 import { issueTaxInvoice } from "@/lib/server/invoice-issuance"
 import { isInvoiceCodeMissingError } from "@/lib/invoice-number"
 import { issuesTaxInvoiceOnStep } from "@/lib/invoice-policy"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
+import { issueOrderStock, StockIssueRefusal } from "@/lib/server/warehouse-stock"
+import type { StockShortfall } from "@/lib/warehouse-stock"
 import {
   attemptImmediateOrderEmailDelivery,
   queueOrderDeliveredNotifications,
@@ -57,6 +60,10 @@ export type FulfillmentProgressOutcome =
   | { kind: "challan-refused" }
   /** The organization has no usable company code, so its tax invoice cannot be numbered. */
   | { kind: "invoice-code-missing" }
+  /** Counted per warehouse: the order's warehouse does not hold all of it. */
+  | { kind: "stock-short"; shortfalls: StockShortfall[] }
+  /** Counted per warehouse: the order's branch is in no warehouse and it was not transferred to one. */
+  | { kind: "no-stock-warehouse" }
   | { kind: "conflict" }
   | { kind: "missing-column" }
 
@@ -145,6 +152,11 @@ function transitionErrorOutcome(transitionError: unknown): FulfillmentProgressOu
   if (transitionError.message === DELIVERY_CHALLAN_NOT_ATTACHABLE) return { kind: "challan-refused" }
   if (transitionError.message === OUT_OF_SCOPE) return { kind: "out-of-scope" }
   if (isInvoiceCodeMissingError(transitionError)) return { kind: "invoice-code-missing" }
+  if (transitionError instanceof StockIssueRefusal) {
+    return transitionError.reason === "no-warehouse"
+      ? { kind: "no-stock-warehouse" }
+      : { kind: "stock-short", shortfalls: transitionError.shortfalls }
+  }
   return null
 }
 
@@ -220,6 +232,13 @@ export async function progressOrderFulfillment(input: {
           ...(deliveryChallanId !== null ? { deliveryChallanId } : {}),
         },
       })
+
+      // Processing has started, so the goods leave the shelf of the warehouse
+      // working the order — when stock is counted per warehouse — in this
+      // transaction: a short shelf refuses the step and rolls it back.
+      if (usesWarehouseStock() && currentStatus === "NOT_STARTED") {
+        await issueOrderStock(tx, { orderId, actor })
+      }
 
       // Processing has started, so the tax invoice is issued now, numbered and
       // dated in this transaction: if it cannot be, the step is not recorded

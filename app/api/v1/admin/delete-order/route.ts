@@ -8,6 +8,7 @@ import { releaseQuantityBudgetForDeletedOrder } from "@/lib/server/product-quant
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { orderSelectColumns } from "@/lib/order-select"
 import { auditActorFromSession, recordAuditEvent } from "@/lib/server/activity-audit"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
 
 const TAX_INVOICED_MESSAGE = "An order with a tax invoice cannot be deleted; refund it instead"
 
@@ -130,8 +131,9 @@ export async function DELETE(req: NextRequest) {
             // 4. Delete order items
             await tx.delete(orderItems).where(eq(orderItems.orderId, orderIdNum))
 
-            // 5. Restore stock to global products
-            for (const item of items) {
+            // 5. Restore stock to global products. Counted per warehouse, an
+            // order without a tax invoice was never issued, so nothing goes back.
+            for (const item of usesWarehouseStock() ? [] : items) {
                 await tx.update(globalProducts)
                     .set({
                         stockQuantity: sql`${globalProducts.stockQuantity} + ${item.quantity}`,

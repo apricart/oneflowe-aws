@@ -3013,6 +3013,80 @@ export const orderWarehouseTransfers = pgTable(
   ],
 )
 
+/**
+ * What each Apricart warehouse holds of each product: the **on hand** figure.
+ * Read only while `STOCK_LEDGER_MODE` is "warehouse" (`lib/stock-ledger-policy.ts`).
+ * What open orders have promised is never stored — it is worked out from the
+ * orders, live (`lib/warehouse-stock.ts`). Written only by
+ * `lib/server/warehouse-stock.ts` and the opening script, each with a
+ * `stock_movements` row in the same transaction.
+ * See plans/OF-STOCK-per-warehouse-stock.md.
+ */
+export const warehouseStock = pgTable(
+  "warehouse_stock",
+  {
+    id: serial("id").primaryKey(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id)
+      .notNull(),
+    onHandQuantity: numeric("on_hand_quantity", { precision: 12, scale: 3, mode: "number" }).notNull().default(0),
+    updatedByUserId: uuid("updated_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("warehouse_stock_warehouse_product_uq").on(t.warehouseId, t.globalProductId),
+    index("warehouse_stock_product_idx").on(t.globalProductId),
+    check("warehouse_stock_on_hand_ck", sql`${t.onHandQuantity} >= 0`),
+  ],
+)
+
+/**
+ * Every change to a warehouse's on-hand figure, append-only (a trigger refuses
+ * UPDATE, and DELETE outside the opening script's own rollback and test
+ * cleanup). `order_id` and `actor_user_id` deliberately carry no foreign key:
+ * the history outlives a deleted order or account, as `audit_logs` does.
+ */
+export const stockMovements = pgTable(
+  "stock_movements",
+  {
+    id: serial("id").primaryKey(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id)
+      .notNull(),
+    movementType: varchar("movement_type", { length: 32 }).notNull(),
+    quantityDelta: numeric("quantity_delta", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    balanceAfter: numeric("balance_after", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    orderId: integer("order_id"),
+    reason: varchar("reason", { length: 500 }),
+    batchId: varchar("batch_id", { length: 64 }),
+    actorUserId: uuid("actor_user_id"),
+    actorRole: varchar("actor_role", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("stock_movements_warehouse_product_idx").on(t.warehouseId, t.globalProductId, t.id),
+    index("stock_movements_order_idx").on(t.orderId).where(sql`${t.orderId} IS NOT NULL`),
+    // One issue per order and product: a retried In Process step finds it and stops.
+    uniqueIndex("stock_movements_order_issue_uq")
+      .on(t.orderId, t.globalProductId)
+      .where(sql`${t.movementType} = 'ORDER_ISSUE'`),
+    check("stock_movements_type_ck", sql`${t.movementType} IN ('OPENING', 'ADJUSTMENT', 'ORDER_ISSUE')`),
+    check("stock_movements_delta_ck", sql`${t.quantityDelta} <> 0`),
+    check("stock_movements_balance_ck", sql`${t.balanceAfter} >= 0`),
+    check(
+      "stock_movements_order_ck",
+      sql`(${t.movementType} = 'ORDER_ISSUE') = (${t.orderId} IS NOT NULL)`,
+    ),
+  ],
+)
+
 // ========================================
 // GROUP ORDERS (multi-branch submissions)
 // ========================================

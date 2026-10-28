@@ -51,6 +51,8 @@ import {
   queueSuperAdminAutoApprovalNotifications,
 } from "@/lib/server/order-notifications"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
+import { assertWarehouseStockAvailable } from "@/lib/server/warehouse-stock"
 import {
   loadGroupPriceOverrides,
   resolveBranchGroupId,
@@ -483,6 +485,15 @@ function assertStockAvailable(items: PricedLine[], locked: LockedCatalogue): voi
   }
 }
 
+/** The global check, or — counted per warehouse — the branch's warehouse (lib/stock-ledger-policy.ts). */
+async function assertBranchStockAvailable(tx: Transaction, branchId: number, items: PricedLine[], locked: LockedCatalogue): Promise<void> {
+  if (usesWarehouseStock()) {
+    await assertWarehouseStockAvailable(tx, { branchId, lines: items })
+    return
+  }
+  assertStockAvailable(items, locked)
+}
+
 async function lockQuantityBudgets(
   tx: Transaction,
   context: {
@@ -537,7 +548,9 @@ async function applyLedgerHolds(
     quantityBudgets: Map<number, { id: number }>
   },
 ) {
-  for (const item of context.items) {
+  // Counted per warehouse, the order reserves by existing; nothing is taken
+  // until it is marked In Process (lib/stock-ledger-policy.ts).
+  for (const item of usesWarehouseStock() ? [] : context.items) {
     await tx
       .update(globalProducts)
       .set({
@@ -697,7 +710,7 @@ async function createBranchOrder(context: BranchCreationContext): Promise<Branch
         const shortfall = budgetShortfallMessage(priced.total, available)
         if (shortfall) throw new Error(shortfall)
       }
-      assertStockAvailable(priced.items, locked)
+      await assertBranchStockAvailable(tx, branchId, priced.items, locked)
 
       const quantityBudgets = budgetTracked
         ? await lockQuantityBudgets(tx, {

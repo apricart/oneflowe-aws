@@ -4,7 +4,11 @@ import { and, eq, gte, sql } from "drizzle-orm"
 
 import { budgets, orders } from "@/db/schema"
 import { db } from "@/lib/db"
-import { isTokenHandoffEligible, tokenHandoffSettlesNow } from "@/lib/order-token-handoff"
+import {
+  isTokenHandoffEligible,
+  tokenHandoffSettlesNow,
+  tokenSettlementNeedsRetry,
+} from "@/lib/order-token-handoff"
 import { orderSelectColumns } from "@/lib/order-select"
 import { budgetPeriodOf } from "@/lib/budget-consumption"
 import { recordAuditEvent } from "@/lib/server/activity-audit"
@@ -12,6 +16,7 @@ import { moveHeldQuantityBudgetToUsedForOrder } from "@/lib/server/product-quant
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import {
   findPendingTokenHandoff,
+  loadTokenSettlementState,
   recordOrderTokenHandoff,
   type TokenHandoffTarget,
 } from "@/lib/server/order-token-handoff-store"
@@ -193,13 +198,39 @@ export async function fulfillApprovedOrder({
  *
  * `fulfilledOrderIds` are the orders that were already delivered and are now
  * settled; `awaitingDeliveryOrderIds` are the ones whose hand-off is recorded
- * and which will settle the moment their delivery is recorded. An order in
- * neither set had its token sent but could not be recorded — a fulfilment
- * someone else won, or a status that moved underneath the request.
+ * and which will settle the moment their delivery is recorded;
+ * `failedOrderIds` are delivered orders whose settlement failed and which are
+ * still waiting on it, so the caller must say so and offer a retry. An order in
+ * none of the sets had moved on already — a fulfilment someone else won, or a
+ * status that changed underneath the request.
  */
 export type TokenHandoffSettlement = {
   fulfilledOrderIds: Set<number>
   awaitingDeliveryOrderIds: Set<number>
+  failedOrderIds: Set<number>
+}
+
+const emptySettlement = (): TokenHandoffSettlement => ({
+  fulfilledOrderIds: new Set<number>(),
+  awaitingDeliveryOrderIds: new Set<number>(),
+  failedOrderIds: new Set<number>(),
+})
+
+/**
+ * Whether a settlement that did not happen left the order waiting on one.
+ *
+ * A lost race (someone else fulfilled it) is not a failure, so the live row
+ * decides. When even that read fails the answer is yes: a retry re-checks the
+ * row before it moves anything, so telling the customer to retry is safe, and
+ * telling them nothing is what left orders stuck.
+ */
+async function isStillAwaitingSettlement(target: TokenHandoffTarget): Promise<boolean> {
+  try {
+    return tokenSettlementNeedsRetry(await loadTokenSettlementState(target))
+  } catch (readError) {
+    console.error(`[TokenHandoff] Could not re-read order ${target.orderId} after a failed settlement:`, readError)
+    return true
+  }
 }
 
 /**
@@ -240,8 +271,12 @@ async function settleOneTokenHandoff(
     branchId: candidate.branchId,
     fulfilledByUserId: candidate.handedOffByUserId,
   })
-  if (outcome === "fulfilled") settlement.fulfilledOrderIds.add(candidate.orderId)
-  else console.warn(`[TokenHandoff] Order ${candidate.orderId} not fulfilled: ${outcome}`)
+  if (outcome === "fulfilled") {
+    settlement.fulfilledOrderIds.add(candidate.orderId)
+    return
+  }
+  console.warn(`[TokenHandoff] Order ${candidate.orderId} not fulfilled: ${outcome}`)
+  if (await isStillAwaitingSettlement(candidate)) settlement.failedOrderIds.add(candidate.orderId)
 }
 
 /**
@@ -261,10 +296,7 @@ async function settleOneTokenHandoff(
 export async function settleOrdersAfterTokenHandoff(
   candidates: ReadonlyArray<TokenHandoffCandidate>,
 ): Promise<TokenHandoffSettlement> {
-  const settlement: TokenHandoffSettlement = {
-    fulfilledOrderIds: new Set<number>(),
-    awaitingDeliveryOrderIds: new Set<number>(),
-  }
+  const settlement = emptySettlement()
 
   for (const candidate of candidates) {
     if (!isTokenHandoffEligible(candidate.status)) continue
@@ -272,7 +304,42 @@ export async function settleOrdersAfterTokenHandoff(
       await settleOneTokenHandoff(candidate, settlement)
     } catch (fulfillmentError) {
       console.error(`[TokenHandoff] Hand-off failed for order ${candidate.orderId}:`, fulfillmentError)
+      if (await isStillAwaitingSettlement(candidate)) settlement.failedOrderIds.add(candidate.orderId)
     }
+  }
+
+  return settlement
+}
+
+/**
+ * Settle again the orders whose token already reached the admin but whose
+ * settlement failed. No email is sent: the token is not handed over twice.
+ *
+ * Only an order the live row says is waiting (`tokenSettlementNeedsRetry`) is
+ * touched — handed over, delivered, still approved — so a retry can never
+ * settle an undelivered order or one that has moved on. It is credited to whoever
+ * handed the token over, exactly as the delivery-time settlement is, rather
+ * than to whoever pressed retry. The settlement is `fulfillApprovedOrder`'s
+ * single-winner claim, so two retries at once move the ledgers once. Like the
+ * hand-off, authorization is the caller's.
+ */
+export async function retryTokenHandoffSettlements(
+  targets: ReadonlyArray<TokenHandoffTarget>,
+): Promise<TokenHandoffSettlement> {
+  const settlement = emptySettlement()
+
+  for (const target of targets) {
+    try {
+      if (!tokenSettlementNeedsRetry(await loadTokenSettlementState(target))) continue
+      const outcome = await settleDeliveredOrderAfterTokenHandoff(target)
+      if (outcome === "fulfilled") {
+        settlement.fulfilledOrderIds.add(target.orderId)
+        continue
+      }
+    } catch (retryError) {
+      console.error(`[TokenHandoff] Retried settlement failed for order ${target.orderId}:`, retryError)
+    }
+    if (await isStillAwaitingSettlement(target)) settlement.failedOrderIds.add(target.orderId)
   }
 
   return settlement

@@ -71,6 +71,8 @@ import { ORDER_LIST_PRICE_SORT_KEYS,ORDER_LIST_SORT_KEYS,sortKeysForCaller,type 
 import { parseSortParams } from "@/lib/table-sort"
 import { orderBySortSql } from "@/lib/server/sort-sql"
 import { mayCreateOrder } from "@/lib/order-creation-access"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
+import { assertWarehouseStockAvailable } from "@/lib/server/warehouse-stock"
 import { isOrderDeskRole, orderIntakeError } from "@/lib/order-desk-access"
 import { isDeskEnteredOrder } from "@/lib/order-desk-approval"
 import { isOrderDeskTarget } from "@/lib/server/order-desk-scope"
@@ -740,7 +742,9 @@ async function saveOrderReceipt(tx: any, context: any) {
 }
 
 async function saveCreationLedgers(tx: any, context: any) {
-  for (const item of context.items) {
+  // Counted per warehouse, the order reserves by existing; nothing is taken
+  // until it is marked In Process (lib/stock-ledger-policy.ts).
+  for (const item of usesWarehouseStock() ? [] : context.items) {
     await tx.update(globalProducts).set({
       stockQuantity: sql`${globalProducts.stockQuantity} - ${item.quantity}`,
       updatedAt: new Date(),
@@ -1003,7 +1007,11 @@ async function processOrderCreationTransaction(tx: any, context: any) {
     const budgetError = getBudgetError(calculated.total, money.available, context.pricesHidden)
     if (budgetError) throw new Error(budgetError)
   }
-  validateCreationStock(calculated.items, productById)
+  if (usesWarehouseStock()) {
+    await assertWarehouseStockAvailable(tx, { branchId: context.branchId, lines: calculated.items })
+  } else {
+    validateCreationStock(calculated.items, productById)
+  }
   return persistCreatedOrder(tx, {
     ...context,
     budgetTracked,

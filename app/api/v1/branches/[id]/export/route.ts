@@ -1,4 +1,5 @@
 import { stringifyPrimitive } from "@/lib/stringify-primitive"
+import { productStockDisplaySql } from "@/lib/server/warehouse-stock"
 import { desc, eq, inArray } from "drizzle-orm"
 import { error, ok, requireApiRole } from "@/lib/api"
 import { db } from "@/lib/db"
@@ -219,7 +220,7 @@ export async function GET(
           categoryName: categories.name,
           unit: globalProducts.unit,
           globalStatus: globalProducts.status,
-          globalStockQuantity: globalProducts.stockQuantity,
+          globalStockQuantity: productStockDisplaySql(),
           basePriceCents: globalProducts.basePrice,
           customPriceCents: organizationInventory.customPrice,
           // The group tier is exported as its own column rather than folded

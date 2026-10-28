@@ -21,6 +21,7 @@ import {
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { orderTakesBudget } from "@/lib/organization-budget-policy"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
 
 /**
  * The approve and reject transitions, extracted so every caller reaches them
@@ -303,8 +304,9 @@ export async function rejectOrder({
 
       // 3. Restore stock
 
+      // Counted per warehouse, a pending order took nothing, so nothing goes back.
       const items = await tx.select().from(orderItems).where(eq(orderItems.orderId, orderId))
-      for (const item of items) {
+      for (const item of usesWarehouseStock() ? [] : items) {
         await tx.update(globalProducts)
           .set({
             stockQuantity: sql`${globalProducts.stockQuantity} + ${item.quantity}`,

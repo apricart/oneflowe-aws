@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { INVOICE_CODE_MISSING_MESSAGE } from "@/lib/invoice-number"
+import { NO_STOCK_WAREHOUSE_MESSAGE, stockShortageMessage } from "@/lib/warehouse-stock"
 
 import { error, readJson, requireApiRole } from "@/lib/api"
 import { getCurrentUser } from "@/lib/auth"
@@ -72,6 +73,10 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
         return error("This order was moved by someone else a moment ago. Refresh and try again.", 409)
       case "invoice-code-missing":
         return error(INVOICE_CODE_MISSING_MESSAGE, 409)
+      case "stock-short":
+        return error(stockShortageMessage(outcome.shortfalls), 409)
+      case "no-stock-warehouse":
+        return error(NO_STOCK_WAREHOUSE_MESSAGE, 409)
       case "updated":
         return NextResponse.json({
           message: outcome.fulfilled ? "Delivery recorded — the order is now fulfilled" : "Delivery progress updated",

@@ -51,6 +51,7 @@ import { CANCELLATION_REASON_MAX_LENGTH, INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_L
 import { GROUP_ORDER_CANCEL_REASON_MAX_LENGTH } from "@/lib/group-order-cancel"
 import { APRICART_EXECUTIVE_ASSIGNMENT_MAX } from "@/lib/apricart-executive-access"
 import { FINANCE_ORGANIZATION_MAX } from "@/lib/finance-access"
+import { MAX_STOCK_QUANTITY, STOCK_ADJUSTMENT_MODES, STOCK_ADJUSTMENT_REASON_MAX_LENGTH } from "@/lib/warehouse-stock"
 import {
   WAREHOUSE_ASSIGNMENT_MAX_PER_ORGANIZATION,
   WAREHOUSE_CITY_BULK_MAX,
@@ -895,6 +896,25 @@ export const orderWarehouseTransferSchema = z.object({
   reason: z.string().trim()
     .min(ORDER_WAREHOUSE_TRANSFER_REASON_MIN_LENGTH, { message: "Give a reason for the transfer" })
     .max(ORDER_WAREHOUSE_TRANSFER_REASON_MAX_LENGTH),
+  // Counted per warehouse: Super Admin saw that the target is short of stock
+  // for this order and moves it anyway (plans/OF-STOCK-per-warehouse-stock.md).
+  acknowledgeStockShortfall: z.boolean().optional(),
+}).strict()
+
+/**
+ * Super Admin changes one warehouse's on-hand figure for one product: set it
+ * to a counted number, or add or remove a quantity, always with a reason.
+ * The arithmetic and its limits are `planStockAdjustment` (lib/warehouse-stock.ts).
+ * See plans/OF-STOCK-per-warehouse-stock.md.
+ */
+export const warehouseStockAdjustmentSchema = z.object({
+  warehouseId: z.number().int().positive().max(2_147_483_647),
+  globalProductId: z.number().int().positive().max(2_147_483_647),
+  mode: z.enum(STOCK_ADJUSTMENT_MODES),
+  quantity: z.number().finite().min(0).max(MAX_STOCK_QUANTITY),
+  reason: z.string().trim()
+    .min(3, { message: "Give a reason for the change" })
+    .max(STOCK_ADJUSTMENT_REASON_MAX_LENGTH),
 }).strict()
 
 /** Replacing a delivered order's challan with another uploaded one. */

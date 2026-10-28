@@ -43,6 +43,7 @@ import {
   isWarehouseApiRequestAllowed,
   isWarehouseRole,
 } from "@/lib/warehouse-access"
+import { WAREHOUSE_STOCK_AREA, WAREHOUSE_STOCK_MANAGER_ROLES } from "@/lib/warehouse-stock-access"
 import {
   RIDER_AREAS,
   RIDER_HOME,
@@ -106,6 +107,8 @@ const protectedPrefixes = [
   "/support",
   "/warehouse",
   "/warehouse-team",
+  // Per-warehouse stock; Super Admin only, gated in ROLE_GATED_AREAS below.
+  WAREHOUSE_STOCK_AREA,
   "/users",
 ]
 const SESSION_COOKIE_NAMES = [
@@ -581,6 +584,8 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   { prefix: WAREHOUSE_HOME, roles: ["WAREHOUSE"], home: "/dashboard" },
   // Assigning warehouse accounts their branches is Super Admin's alone.
   { prefix: WAREHOUSE_TEAM_AREA, roles: WAREHOUSE_MANAGER_ROLES, home: "/dashboard" },
+  // Each warehouse's stock figures are Super Admin's alone to change.
+  { prefix: WAREHOUSE_STOCK_AREA, roles: WAREHOUSE_STOCK_MANAGER_ROLES, home: "/dashboard" },
   // Inside /reports, which Branch Admin and Group User also reach; the report
   // is Super Admin's and Head Office's, and both its endpoints re-check.
   { prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: [...CONSOLIDATED_INVOICE_REPORT_ROLES, "VIEWER"], home: "/reports" },

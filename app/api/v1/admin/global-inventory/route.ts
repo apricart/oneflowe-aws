@@ -1,4 +1,5 @@
 import { NextRequest,NextResponse } from "next/server"
+import { productStockDisplaySql } from "@/lib/server/warehouse-stock"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
 import { db } from "@/lib/db"
@@ -58,7 +59,7 @@ async function getSingleProductResponse(searchParams: URLSearchParams) {
       taxRateBp: globalProducts.taxRateBp,
       unit: globalProducts.unit,
       status: globalProducts.status,
-      stockQuantity: globalProducts.stockQuantity,
+      stockQuantity: productStockDisplaySql(),
       allowDecimalQuantity: globalProducts.allowDecimalQuantity,
       quantityStep: globalProducts.quantityStep,
       metadata: globalProducts.metadata,
@@ -200,7 +201,7 @@ export async function GET(req: NextRequest) {
       taxRateBp: globalProducts.taxRateBp,
         unit: globalProducts.unit,
         status: globalProducts.status,
-        stockQuantity: globalProducts.stockQuantity,
+        stockQuantity: productStockDisplaySql(),
         allowDecimalQuantity: globalProducts.allowDecimalQuantity,
         quantityStep: globalProducts.quantityStep,
         metadata: lite ? sql<Record<string, any> | null>`NULL` : globalProducts.metadata,
