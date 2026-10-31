@@ -14,6 +14,7 @@ import {
   isTerminalSupportStatus,
   nextSupportStatusAfterMessage,
   parseSupportOrderSearch,
+  parseSupportPlaceFilterId,
   parseSupportThreadReference,
   supportOrderSearchId,
   SUPPORT_APRICART_ROLES,
@@ -306,6 +307,19 @@ describe("searching the queue by order id", () => {
   it("refuses zero and anything past the safe integer range", () => {
     expect(supportOrderSearchId("0")).toBeNull()
     expect(supportOrderSearchId("9".repeat(30))).toBeNull()
+  })
+})
+
+describe("reading the queue's place filters", () => {
+  it("reads a positive whole number as the id to narrow to", () => {
+    expect(parseSupportPlaceFilterId("42")).toBe(42)
+    expect(parseSupportPlaceFilterId(" 7 ")).toBe(7)
+  })
+
+  it("reads anything else as no filter, never as a filter that matches nothing", () => {
+    for (const value of [null, undefined, "", "0", "-3", "4.5", "1e3", "abc", "12 13", "9".repeat(10)]) {
+      expect(parseSupportPlaceFilterId(value), String(value)).toBeUndefined()
+    }
   })
 })
 

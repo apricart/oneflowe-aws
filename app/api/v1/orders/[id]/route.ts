@@ -134,6 +134,8 @@ import { canOrderPortalReadOrder, isGroupPortalOrder } from "@/lib/group-order-v
 // The read rule, shared with what is attached to an order (its delivery challan).
 import { ORDER_DETAIL_READ_ROLES, hasBranchAccessForOrderRead } from "@/lib/server/order-read-access"
 import { loadGroupPriceOverrides, resolveBranchGroupId, resolveEffectivePriceCents } from "@/lib/server/effective-price"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
+import { assertWarehouseStockAvailable } from "@/lib/server/warehouse-stock"
 
 
 /**
@@ -298,8 +300,9 @@ function calculateEditedItems(normalizedItems: any[], inventoryData: any, orgTax
       basePriceCents: product.basePrice,
     })
     if (priceCents === null || !Number.isSafeInteger(priceCents) || priceCents < 0) throw new Error(`Pricing is unavailable for ${product.name}`)
+    // Counted per warehouse, the whole edit is checked at once after pricing.
     const availableStock = Number(product.stockQuantity) + (inventoryData.oldQuantities.byProduct.get(product.id) || 0)
-    if (validation.quantity > availableStock) {
+    if (!usesWarehouseStock() && validation.quantity > availableStock) {
       throw new Error(`Insufficient stock for ${product.name}. Available: ${formatQuantity(availableStock)}, Requested: ${formatQuantity(validation.quantity)}`)
     }
     // Prices are tax-inclusive, so the gross line amount is what the branch
@@ -407,6 +410,8 @@ async function updateOrderQuantityBudgets(tx: any, context: any) {
 }
 
 async function updateOrderStock(tx: any, context: any) {
+  // Counted per warehouse, a pending order's reservation is its lines: nothing to move.
+  if (usesWarehouseStock()) return
   const nextByProduct = new Map<number, number>()
   for (const item of context.calculatedItems) {
     nextByProduct.set(item.globalProductId, roundQuantity((nextByProduct.get(item.globalProductId) || 0) + item.quantity))
@@ -606,6 +611,15 @@ async function processOrderEditTransaction(tx: any, baseContext: any) {
   const inventory = await loadOrderEditInventory(tx, context)
   const orgTaxRateBp = await getOrganizationTaxRateBp(context.organizationId)
   const calculated = calculateEditedItems(context.normalizedItems, inventory, orgTaxRateBp)
+  // What this order already reserves counts as available to it.
+  if (usesWarehouseStock()) {
+    await assertWarehouseStockAvailable(tx, {
+      branchId: access.existingOrder.branchId,
+      fulfillmentWarehouseId: access.existingOrder.fulfillmentWarehouseId,
+      lines: calculated.items,
+      excludeOrderId: access.existingOrder.id,
+    })
+  }
   // An order placed while its tenant had budgets off took no hold, so an edit
   // neither checks nor moves one — whatever the tenant's setting is now. Stock
   // is still re-validated above.

@@ -288,6 +288,7 @@ export const VIEWER_ORGANIZATION_READ_ROUTES: readonly string[] = [
   "app/api/v1/support/threads/route.ts",
   "app/api/v1/support/threads/[id]/route.ts",
   "app/api/v1/support/stats/route.ts",
+  "app/api/v1/support/filters/route.ts",
   "app/api/v1/support/attachments/[id]/route.ts",
   // Activity Log
   "app/api/v1/activity-logs/route.ts",

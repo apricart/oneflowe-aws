@@ -8,6 +8,7 @@ import { withRateLimit } from "@/lib/rate-limiter"
 import { orderWarehouseTransferSchema, validationMessage } from "@/lib/server/mutation-validation"
 import { loadOrderWarehousePanel, transferOrderWarehouse } from "@/lib/server/order-warehouse-transfer"
 import { parseRouteId } from "@/lib/warehouse-orders"
+import { transferStockShortfallMessage } from "@/lib/warehouse-stock"
 
 /**
  * Which Apricart warehouse fulfils one order, and moving it to another.
@@ -61,6 +62,7 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
       targetWarehouseId: parsed.data.targetWarehouseId,
       expectedWarehouseId: parsed.data.expectedWarehouseId,
       reason: parsed.data.reason,
+      acknowledgeStockShortfall: parsed.data.acknowledgeStockShortfall,
       actor: { id: user.id, role: user.role, email: user.email },
     })
 
@@ -81,6 +83,12 @@ export async function POST(req: Request, props: { params: Promise<{ id: string }
         return error(parsed.data.targetWarehouseId === null
           ? "No active warehouse account serves this order's branch — choose a warehouse instead"
           : "That warehouse has no active operator to fulfil the order. Add one on Warehouse Team first.", 409)
+      case "stock-shortfall":
+        return NextResponse.json({
+          error: transferStockShortfallMessage(outcome.shortfalls),
+          code: "STOCK_SHORTFALL",
+          stockShortfalls: outcome.shortfalls,
+        }, { status: 409, headers: NO_STORE })
       case "transferred":
         return NextResponse.json({
           message: "Order transferred",

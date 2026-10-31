@@ -22,9 +22,11 @@ import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
 import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { loadOrderDeskReach, orderDeskOrderCondition } from "@/lib/server/order-desk-scope"
+import { orderLineMatchesSql } from "@/lib/server/order-line-search-sql"
 import { fulfillApprovedOrder, type OrderFulfillmentOutcome } from "@/lib/server/order-fulfillment"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
 
 /**
  * The Order Desk's own orders: listing, cancelling, resubmitting and
@@ -131,7 +133,11 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
   if (query.search) {
     // A parameter, with the LIKE wildcards in what was typed escaped.
     const pattern = `%${escapeLikePattern(query.search)}%`
-    conditions.push(or(ilike(orders.tid, pattern), ilike(orders.intakeReference, pattern)) as SQL)
+    conditions.push(or(
+      ilike(orders.tid, pattern),
+      ilike(orders.intakeReference, pattern),
+      orderLineMatchesSql(pattern),
+    ) as SQL)
   }
   const scopeWhere = and(...conditions)
   const tab = tabCondition(query.status)
@@ -423,7 +429,8 @@ function cancelInTransaction(input: {
       .select({ globalProductId: orderItems.globalProductId, quantity: orderItems.quantity })
       .from(orderItems)
       .where(eq(orderItems.orderId, cancelled.id))
-    for (const item of items) {
+    // Counted per warehouse, an order not yet In Process took nothing, so nothing goes back.
+    for (const item of usesWarehouseStock() ? [] : items) {
       await tx
         .update(globalProducts)
         .set({ stockQuantity: sql`${globalProducts.stockQuantity} + ${item.quantity}`, updatedAt: now })

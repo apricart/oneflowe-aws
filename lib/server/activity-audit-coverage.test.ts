@@ -263,6 +263,29 @@ const VIA_LIB: readonly { file: string; module: string }[] = [
   { file: "app/api/v1/apricart-warehouses/[id]/member-scope/route.ts", module: "lib/server/apricart-warehouses.ts" },
   // Moving one order to another warehouse records inside the move.
   { file: "app/api/v1/orders/[id]/fulfillment-warehouse/route.ts", module: "lib/server/order-warehouse-transfer.ts" },
+  // Super Admin's change to a warehouse's stock records inside the adjustment.
+  { file: "app/api/v1/admin/warehouse-stock/adjustments/route.ts", module: "lib/server/warehouse-stock.ts" },
+  // Purchasing: every write records inside its own transaction
+  // (plans/OF-PROCUREMENT-purchasing.md).
+  ...[
+    "app/api/v1/procurement/suppliers/route.ts",
+    "app/api/v1/procurement/suppliers/[id]/route.ts",
+    "app/api/v1/procurement/requisitions/route.ts",
+    "app/api/v1/procurement/requisitions/[id]/route.ts",
+    "app/api/v1/procurement/purchase-orders/route.ts",
+    "app/api/v1/procurement/purchase-orders/[id]/route.ts",
+    "app/api/v1/procurement/purchase-orders/[id]/receipts/route.ts",
+    "app/api/v1/procurement/supplier-invoices/route.ts",
+    "app/api/v1/procurement/supplier-invoices/[id]/route.ts",
+    "app/api/v1/procurement/settings/route.ts",
+    "app/api/v1/procurement/returns/route.ts",
+    "app/api/v1/procurement/returns/[id]/route.ts",
+    "app/api/v1/warehouse/procurement/requisitions/route.ts",
+    "app/api/v1/warehouse/procurement/requisitions/[id]/route.ts",
+    "app/api/v1/warehouse/procurement/purchase-orders/[id]/receipts/route.ts",
+    "app/api/v1/warehouse/procurement/returns/route.ts",
+    "app/api/v1/executive/returns/[id]/route.ts",
+  ].map((file) => ({ file, module: "lib/server/procurement.ts" })),
   // Rider delivery ops: assign / pin / reorder / POD decide in the shared module.
   { file: "app/api/v1/rider-ops/assignments/route.ts", module: "lib/server/rider-assignments.ts" },
   { file: "app/api/v1/rider-ops/assignments/[id]/route.ts", module: "lib/server/rider-assignments.ts" },

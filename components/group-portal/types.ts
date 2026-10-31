@@ -186,6 +186,8 @@ export type GroupOrderHistoryItem = {
     correctionRequestNote?: string | null
     /** Server-gated: only ever set for an approved order this user raised. */
     approvalToken: string | null
+    /** Set once the token reached the admin; with a delivered, approved order it means the settlement failed. */
+    tokenHandoffAt?: string | null
   }>
 }
 

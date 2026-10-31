@@ -41,6 +41,7 @@
     "repair:ke-order-creators": "tsx scripts/repair-ke-order-creators.ts",
     "migrate:warehouse-city-rules": "tsx --conditions=react-server scripts/migrate-warehouse-city-rules.ts",
     "check:warehouse-ownership": "tsx --conditions=react-server scripts/check-warehouse-ownership.ts",
+    "open:warehouse-stock": "tsx --conditions=react-server scripts/open-warehouse-stock.ts",
     "backfill:invoice-ledger": "tsx scripts/backfill-invoice-ledger.ts",
     "report:invoice-number-register": "tsx scripts/report-invoice-number-register.ts",
     "repair:ke-price-history": "tsx scripts/dedupe-ke-price-history.ts",

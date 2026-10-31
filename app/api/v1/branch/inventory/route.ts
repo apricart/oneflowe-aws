@@ -12,6 +12,7 @@ import { shouldHidePricesForRole } from "@/lib/price-visibility"
 import { getBudgetAllocationModeForOrganization } from "@/lib/server/budget-allocation-mode"
 import { isOrganizationBudgetEnabled } from "@/lib/server/organization-budget-policy"
 import { groupPriceJoinOn,groupPriceTier,resolveBranchGroupId,scopedOverrideCentsSql } from "@/lib/server/effective-price"
+import { loadBranchAvailableStock } from "@/lib/server/warehouse-stock"
 
 function parseOptionalId(value: unknown) {
   if (!value) return null
@@ -222,13 +223,14 @@ export async function GET(req: NextRequest) {
     })
     const groupPriceOn = groupPriceJoinOn({ organizationId: orgIdNum, groupId: branchGroupId })
 
-    const result = await getCached(cacheKey, async () => {
+    const cachedResult = await getCached(cacheKey, async () => {
       const [items, totalResult] = await Promise.all([
         db.select({
           id: branchInventory.id,
           branchId: branchInventory.branchId,
           organizationId: branchInventory.organizationId,
           organizationInventoryId: branchInventory.organizationInventoryId,
+          globalProductId: globalProducts.id,
           isVisible: branchInventory.isVisible,
           isActive: branchInventory.isActive,
           stockQuantity: globalProducts.stockQuantity,
@@ -291,6 +293,24 @@ export async function GET(req: NextRequest) {
         pricesHidden,
       }
     }, CACHE_TTL.INVENTORY)
+
+    // Counted per warehouse, the figure is what this branch can order now — read
+    // fresh, never from the cached listing, like the quantity budget below.
+    // Null while stock is counted globally: the listing is returned as it was.
+    const availableStock = await loadBranchAvailableStock(
+      db,
+      branchId,
+      cachedResult.items.map((item) => Number(item.globalProductId)),
+    )
+    const result = availableStock
+      ? {
+        ...cachedResult,
+        items: cachedResult.items.map((item) => ({
+          ...item,
+          stockQuantity: availableStock.get(Number(item.globalProductId)) ?? 0,
+        })),
+      }
+      : cachedResult
 
     if (!shouldApplyQuantityBudget || !quantityBudgetCatalogActive) {
       return NextResponse.json({

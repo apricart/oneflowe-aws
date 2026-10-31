@@ -14,6 +14,7 @@ import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { notifyRaiserOfOrderWrite } from "@/lib/server/order-write-audit"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
 
 /**
  * A group requester withdrawing group orders that are still waiting for
@@ -166,7 +167,8 @@ async function cancelLockedOrder(tx: Tx, input: {
     .select({ globalProductId: orderItems.globalProductId, quantity: orderItems.quantity })
     .from(orderItems)
     .where(eq(orderItems.orderId, order.id))
-  for (const item of items) {
+  // Counted per warehouse, a pending order took nothing, so nothing goes back.
+  for (const item of usesWarehouseStock() ? [] : items) {
     await tx
       .update(globalProducts)
       .set({ stockQuantity: sql`${globalProducts.stockQuantity} + ${item.quantity}`, updatedAt: now })

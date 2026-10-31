@@ -42,6 +42,7 @@ import { UserBranchCell } from "@/components/users/user-branch-cell"
 import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 import { FinanceOrganizationsDialog } from "@/components/finance/finance-organizations-dialog"
 import { FINANCE_LABEL, FINANCE_ROLE } from "@/lib/finance-access"
+import { PROCUREMENT_LABEL, PROCUREMENT_ROLE } from "@/lib/procurement-access"
 import {
   describeUserBranches,
   userBranchExportText,
@@ -878,6 +879,9 @@ function RoleAssignmentFields({
                 {/* And for a Finance account, whose organizations are edited
                     from its details panel. */}
                 <SelectItem value={FINANCE_ROLE}>{FINANCE_LABEL}</SelectItem>
+                {/* And for a Procurement account, whose role is fixed and which
+                    has no organization or branch to change. */}
+                <SelectItem value={PROCUREMENT_ROLE}>{PROCUREMENT_LABEL}</SelectItem>
               </>
             )}
           </SelectContent>
@@ -1357,6 +1361,8 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
         return <Badge className="bg-sky-100 text-sky-800">Apricart Support</Badge>
       case FINANCE_ROLE:
         return <Badge className="bg-emerald-100 text-emerald-800">{FINANCE_LABEL}</Badge>
+      case PROCUREMENT_ROLE:
+        return <Badge className="bg-orange-100 text-orange-800">{PROCUREMENT_LABEL}</Badge>
       default:
         return <Badge variant="outline">{role}</Badge>
     }
@@ -1472,6 +1478,7 @@ export function HeadOfficeUsersTable({ users, branches, organizations, userRole,
             <SelectItem value="WAREHOUSE">Warehouse (Apricart)</SelectItem>
             <SelectItem value="APRICART_SUPPORT">Apricart Support</SelectItem>
             <SelectItem value={FINANCE_ROLE}>{FINANCE_LABEL}</SelectItem>
+            <SelectItem value={PROCUREMENT_ROLE}>{PROCUREMENT_LABEL}</SelectItem>
           </SelectContent>
         </Select>
 

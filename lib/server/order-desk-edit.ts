@@ -30,6 +30,9 @@ import { loadDeskBranchLineage } from "@/lib/server/order-desk-catalogue"
 import { isOrderDeskTarget, loadOrderDeskReach, orderDeskOrderCondition } from "@/lib/server/order-desk-scope"
 import { getOrganizationTaxRateBp } from "@/lib/server/tax-rate"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
+import { usesWarehouseStock } from "@/lib/stock-ledger-policy"
+import { findStockShortfalls } from "@/lib/server/warehouse-stock"
+import { stockShortfallMessage } from "@/lib/warehouse-stock"
 
 /**
  * An Order Desk edit: the lines, notes and PO number of a desk order that is
@@ -89,7 +92,11 @@ export async function editDeskOrder(input: EditInput): Promise<DeskEditOutcome> 
 async function editInTransaction(tx: any, input: EditInput): Promise<DeskEditOutcome> {
   const reach = await loadOrderDeskReach(tx, input.actor.id, "manage")
   const [order] = await tx
-    .select({ ...orderSelectColumns, intakeAttachmentKey: orders.intakeAttachmentKey })
+    .select({
+      ...orderSelectColumns,
+      intakeAttachmentKey: orders.intakeAttachmentKey,
+      fulfillmentWarehouseId: orders.fulfillmentWarehouseId,
+    })
     .from(orders)
     .where(and(eq(orders.id, input.orderId), orderDeskOrderCondition(reach)))
     .for("update")
@@ -116,6 +123,16 @@ async function editInTransaction(tx: any, input: EditInput): Promise<DeskEditOut
   const inventory = await lockEditProducts(tx, { orderId: order.id, organizationId, branchId, items: input.items })
   const orgTaxRateBp = await getOrganizationTaxRateBp(organizationId)
   const priced = priceEditedLines(input.items, inventory, orgTaxRateBp)
+  // Counted per warehouse: what this order already reserves counts as available to it.
+  if (usesWarehouseStock()) {
+    const [shortfall] = await findStockShortfalls(tx, {
+      branchId,
+      fulfillmentWarehouseId: order.fulfillmentWarehouseId,
+      lines: priced.items,
+      excludeOrderId: order.id,
+    })
+    if (shortfall) throw new DeskEditRefusal(stockShortfallMessage(shortfall))
+  }
 
   const tracked = orderTakesBudget(order)
   const period = budgetPeriodOf(order.createdAt)
@@ -252,7 +269,8 @@ function priceEditedLines(items: EditInput["items"], inventory: EditInventory, o
     lineageByProductId: inventory.lineageByProductId,
     organizationTaxRateBp: orgTaxRateBp,
   })
-  for (const line of priced.items) {
+  // Counted per warehouse, the caller checks the whole edit against the warehouse.
+  for (const line of usesWarehouseStock() ? [] : priced.items) {
     const product = inventory.productById.get(line.globalProductId)
     // Stock this order already holds counts as available to it.
     const available = Number(product.stockQuantity) + (inventory.oldByProduct.get(line.globalProductId) ?? 0)
@@ -366,6 +384,8 @@ function quantitiesByInventory(items: readonly PricedLine[]): Map<number, number
 }
 
 async function moveStock(tx: any, input: { inventory: EditInventory; items: PricedLine[] }) {
+  // Counted per warehouse, a pending order's reservation is its lines: nothing to move.
+  if (usesWarehouseStock()) return
   const nextByProduct = new Map<number, number>()
   for (const item of input.items) {
     nextByProduct.set(item.globalProductId, roundQuantity((nextByProduct.get(item.globalProductId) ?? 0) + item.quantity))

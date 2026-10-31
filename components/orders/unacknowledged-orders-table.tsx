@@ -1,6 +1,6 @@
 "use client"
 
-import { CheckCircle2, Copy, Eye, PackageCheck, Send } from "lucide-react"
+import { CheckCircle2, Copy, Eye, PackageCheck, RotateCw, Send } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -18,7 +18,12 @@ import {
   canSendTokenFromTab,
   type UnacknowledgedOrderSource,
 } from "@/lib/unacknowledged-orders"
-import { TOKEN_SENT_LABEL, isTokenAlreadySent } from "@/lib/order-token-handoff"
+import {
+  TOKEN_SENT_LABEL,
+  TOKEN_SETTLEMENT_RETRY_LABEL,
+  isTokenAlreadySent,
+  tokenSettlementNeedsRetry,
+} from "@/lib/order-token-handoff"
 import { cn } from "@/lib/utils"
 
 export type UnacknowledgedOrderRow = UnacknowledgedOrderSource & {
@@ -97,7 +102,10 @@ export function UnacknowledgedOrdersTable<T extends UnacknowledgedOrderRow>({
             {orders.map((order) => {
               const token = canSendTokenFromTab(order) ? String(order.approvalToken) : null
               const sending = sendingOrderId === order.id
-              const alreadySent = isTokenAlreadySent(order.tokenHandoffAt)
+              // A sent token on an order still listed here means its settlement
+              // failed, so the action comes back as a retry.
+              const needsRetry = tokenSettlementNeedsRetry(order)
+              const alreadySent = isTokenAlreadySent(order.tokenHandoffAt) && !needsRetry
               return (
                 <TableRow key={order.id}>
                   <TableCell className="align-top">
@@ -159,7 +167,22 @@ export function UnacknowledgedOrdersTable<T extends UnacknowledgedOrderRow>({
                           {TOKEN_SENT_LABEL}
                         </Button>
                       )}
-                      {token && !alreadySent && (
+                      {token && needsRetry && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="destructive"
+                          disabled={sendingOrderId !== null}
+                          aria-label={`Retry fulfilment of order ${order.tid}; its token already reached the admin`}
+                          title="The token reached the admin but the order could not be marked fulfilled"
+                          onClick={() => onSendToken(order)}
+                          className="gap-2 whitespace-nowrap"
+                        >
+                          <RotateCw className={cn("h-4 w-4", sending && "animate-spin")} />
+                          {sending ? "Retrying..." : TOKEN_SETTLEMENT_RETRY_LABEL}
+                        </Button>
+                      )}
+                      {token && !alreadySent && !needsRetry && (
                         <Button
                           type="button"
                           size="sm"

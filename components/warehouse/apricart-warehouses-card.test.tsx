@@ -65,7 +65,10 @@ const configuration = {
     { id: EXECUTIVE, fullName: "Asma Exec", username: "asma.exec", email: "asma@example.test", isActive: true, responsibility: "EXECUTIVE" },
   ],
   routes: [{ branchId: 13, warehouseId: 1 }],
-  rules: [{ id: 5, warehouseId: 1, organizationId: 1, cityKey: "karachi", cityLabel: "Karachi", branchCount: 1 }],
+  rules: [
+    { id: 5, warehouseId: 1, organizationId: 1, cityKey: "karachi", cityLabel: "Karachi", branchCount: 1 },
+    { id: 6, warehouseId: 2, organizationId: 2, cityKey: "karachi", cityLabel: "Karachi", branchCount: 1 },
+  ],
   cityOptions: [
     { organizationId: 1, cityKey: "karachi", label: "Karachi", branchCount: 1 },
     { organizationId: 1, cityKey: "lahore", label: "Lahore", branchCount: 2 },
@@ -87,6 +90,13 @@ const configuration = {
 const fetchMock = vi.fn()
 const sentBody = (call: number) => JSON.parse(String((fetchMock.mock.calls[call][1] as RequestInit).body))
 const rowOf = (code: string) => screen.getByText(new RegExp(`^${code} ·`)).closest("tr")!
+
+/** Opens a multi-select, ticks the named options, and closes it again. */
+const choose = (dialog: HTMLElement, label: string, options: string[]) => {
+  fireEvent.click(within(dialog).getByRole("combobox", { name: label }))
+  for (const option of options) fireEvent.click(screen.getByRole("option", { name: new RegExp(option) }))
+  fireEvent.keyDown(screen.getByLabelText(`Search ${label.toLowerCase()}`), { key: "Escape" })
+}
 
 beforeEach(() => {
   fetchMock.mockReset()
@@ -129,7 +139,10 @@ describe("Apricart warehouses", () => {
     const dialog = screen.getByRole("dialog")
     expect(within(dialog).getByText(/Meezan · Karachi/)).toBeTruthy()
 
-    // The organization's whole: an organization rule.
+    expect(within(dialog).getByRole("button", { name: "Add rule" }).hasAttribute("disabled")).toBe(true)
+
+    // The organization's whole, with no city chosen: an organization rule.
+    choose(dialog, "Organizations", ["Meezan"])
     fireEvent.click(within(dialog).getByRole("button", { name: "Add rule" }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/apricart-warehouses/1/rules")
@@ -141,7 +154,7 @@ describe("Apricart warehouses", () => {
     fetchMock.mockResolvedValue(new Response("{}", { status: 200 }))
     render(<ApricartWarehousesCard />)
     fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Rules" }))
-    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove" }))
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove Meezan · Karachi" }))
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     expect(sentBody(0)).toEqual({ organizationId: 1, city: "karachi", assigned: false })
   })
@@ -225,17 +238,101 @@ describe("Apricart warehouses", () => {
     fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "By hand" }))
     const dialog = screen.getByRole("dialog")
 
-    fireEvent.click(within(dialog).getByRole("combobox", { name: "Organization" }))
+    fireEvent.click(within(dialog).getByRole("combobox", { name: "Organizations" }))
     fireEvent.change(screen.getByLabelText("Search organizations"), { target: { value: "ubl" } })
     fireEvent.click(screen.getByRole("option", { name: /UBL/ }))
-    expect(within(dialog).getByLabelText(/Clifton/)).toBeTruthy()
+    fireEvent.keyDown(screen.getByLabelText("Search organizations"), { key: "Escape" })
+    // Both organizations are listed now, each branch naming its own.
+    expect(within(dialog).getByLabelText(/Clifton/).closest("div")?.textContent).toContain("UBL")
+    expect(within(dialog).getByLabelText(/North/)).toBeTruthy()
 
     fireEvent.change(within(dialog).getByLabelText("Filter branches"), { target: { value: "clif" } })
     fireEvent.click(within(dialog).getByRole("button", { name: "Select all shown" }))
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
 
+    // Only the organization whose ticks changed is sent.
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
     expect(sentBody(0)).toEqual({ organizationId: 2, branchIds: [21] })
+  })
+
+  it("saves branches ticked in several organizations, one request per organization", async () => {
+    fetchMock.mockImplementation(async () => new Response("{}", { status: 200 }))
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "By hand" }))
+    const dialog = screen.getByRole("dialog")
+    choose(dialog, "Organizations", ["UBL"])
+
+    fireEvent.click(within(dialog).getByLabelText(/Clifton/))
+    fireEvent.click(within(dialog).getByLabelText(/North/))
+    expect(within(dialog).getByText("Saves 2 organizations, one after another.")).toBeTruthy()
+    // The organizations cannot change under unsaved ticks.
+    expect(within(dialog).getByRole("combobox", { name: "Organizations" }).hasAttribute("disabled")).toBe(true)
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(sentBody(0)).toEqual({ organizationId: 1, branchIds: [11, 13] })
+    expect(sentBody(1)).toEqual({ organizationId: 2, branchIds: [21] })
+    await waitFor(() => expect(swr.mutate).toHaveBeenCalled())
+  })
+
+  it("searches the warehouse's rules by organization or city", () => {
+    swr.configuration = {
+      ...configuration,
+      rules: [
+        ...configuration.rules,
+        { id: 7, warehouseId: 1, organizationId: 2, cityKey: null, cityLabel: null, branchCount: 1 },
+      ],
+    }
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Rules" }))
+    const dialog = screen.getByRole("dialog")
+    expect(within(dialog).getByText("Rules (2)")).toBeTruthy()
+
+    fireEvent.change(within(dialog).getByLabelText("Search rules"), { target: { value: "ubl" } })
+    expect(within(dialog).getByText("Rules (1 of 2)")).toBeTruthy()
+    expect(within(dialog).getByText(/UBL · all cities/)).toBeTruthy()
+    expect(within(dialog).queryByText(/Meezan · Karachi/)).toBeNull()
+
+    fireEvent.change(within(dialog).getByLabelText("Search rules"), { target: { value: "karachi meezan" } })
+    expect(within(dialog).getByText(/Meezan · Karachi/)).toBeTruthy()
+    fireEvent.change(within(dialog).getByLabelText("Search rules"), { target: { value: "quetta" } })
+    expect(within(dialog).getByText("No rule matches.")).toBeTruthy()
+  })
+
+  it("adds one rule per chosen organization and city it has branches in, skipping the ones it holds", async () => {
+    fetchMock.mockImplementation(async () => new Response("{}", { status: 200 }))
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Rules" }))
+    const dialog = screen.getByRole("dialog")
+    choose(dialog, "Organizations", ["Meezan", "UBL"])
+    choose(dialog, "Cities", ["Karachi", "Lahore"])
+
+    // Meezan · Karachi is already this warehouse's; UBL has no Lahore branch; UBL · Karachi moves from LHR-01.
+    expect(within(dialog).getByText(/1 of these is now in LHR-01/)).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add 2 rules" }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(sentBody(0)).toEqual({ organizationId: 1, city: "lahore", assigned: true })
+    expect(sentBody(1)).toEqual({ organizationId: 2, city: "karachi", assigned: true })
+    expect(swr.mutate).toHaveBeenCalled()
+  })
+
+  it("stops at the first refused rule and says how many were saved", async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "Too many requests. Please try again later." }), { status: 429 }))
+    render(<ApricartWarehousesCard />)
+    fireEvent.click(within(rowOf("KHI-01")).getByRole("button", { name: "Rules" }))
+    const dialog = screen.getByRole("dialog")
+    choose(dialog, "Organizations", ["Meezan", "UBL"])
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add 2 rules" }))
+
+    expect(await within(dialog).findByRole("alert")).toHaveProperty(
+      "textContent",
+      "Too many requests. Please try again later. 1 of 2 rules were saved before this; the rest were not.",
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(swr.mutate).toHaveBeenCalled()
   })
 
   it("shows the server's refusal instead of claiming success", async () => {

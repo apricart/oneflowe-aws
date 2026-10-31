@@ -16,12 +16,12 @@ import {
 } from "lucide-react"
 
 import { DeskProductPicker } from "@/components/order-desk/desk-product-picker"
+import { DeskSearchableSelect } from "@/components/order-desk/desk-searchable-select"
 import { CHANNEL_META, StepHeading } from "@/components/order-desk/desk-theme"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { fetcher } from "@/lib/fetcher"
 import { INTAKE_CHANNELS, INTAKE_REFERENCE_MAX_LENGTH } from "@/lib/order-desk-access"
@@ -135,8 +135,8 @@ function CustomerStep({
   organization: Target | null
   branchId: number | null
   disabled: boolean
-  onOrganization: (value: string) => void
-  onBranch: (value: string) => void
+  onOrganization: (organizationId: number) => void
+  onBranch: (branchId: number) => void
 }>) {
   return (
     <Card>
@@ -150,33 +150,36 @@ function CustomerStep({
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="desk-organization">Organization</Label>
-            <Select value={organization ? String(organization.id) : ""} onValueChange={onOrganization}>
-              <SelectTrigger id="desk-organization" className="w-full" disabled={loading || disabled}>
-                <SelectValue placeholder={loading ? "Loading…" : "Select organization"} />
-              </SelectTrigger>
-              <SelectContent>
-                {targets.map((target) => (
-                  <SelectItem key={target.id} value={String(target.id)}>
-                    {target.name}{target.code ? ` (${target.code})` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <DeskSearchableSelect
+              id="desk-organization"
+              value={organization?.id ?? null}
+              options={targets.map((target) => ({
+                id: target.id,
+                label: target.code ? `${target.name} (${target.code})` : target.name,
+              }))}
+              placeholder={loading ? "Loading…" : "Select organization"}
+              searchLabel="Search organizations"
+              emptyLabel="No organization found."
+              disabled={loading || disabled}
+              onValueChange={(value) => { if (value !== null) onOrganization(value) }}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="desk-branch">Branch</Label>
-            <Select value={branchId ? String(branchId) : ""} onValueChange={onBranch}>
-              <SelectTrigger id="desk-branch" className="w-full" disabled={!organization || disabled}>
-                <SelectValue placeholder={organization ? "Select branch" : "Choose an organization first"} />
-              </SelectTrigger>
-              <SelectContent>
-                {(organization?.branches ?? []).map((option) => (
-                  <SelectItem key={option.id} value={String(option.id)}>
-                    {option.name}{option.city ? ` — ${option.city}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <DeskSearchableSelect
+              id="desk-branch"
+              value={branchId}
+              options={(organization?.branches ?? []).map((option) => ({
+                id: option.id,
+                label: option.name,
+                hint: option.city ?? undefined,
+              }))}
+              placeholder={organization ? "Select branch" : "Choose an organization first"}
+              searchLabel="Search branches"
+              emptyLabel="No branch found."
+              disabled={!organization || disabled}
+              onValueChange={(value) => { if (value !== null) onBranch(value) }}
+            />
           </div>
         </div>
       </CardContent>
@@ -634,8 +637,9 @@ export function NewDeskOrder({ onViewOrders }: Readonly<{ onViewOrders: () => vo
           disabled={submitting}
           // A new organization means a new branch and a new catalogue: nothing
           // chosen for the previous one may carry over.
-          onOrganization={(value) => update({ organizationId: Number(value), branchId: null, lines: {} })}
-          onBranch={(value) => update({ branchId: Number(value), lines: {} })}
+          // Choosing the same one again keeps the products already added.
+          onOrganization={(value) => { if (value !== draft.organizationId) update({ organizationId: value, branchId: null, lines: {} }) }}
+          onBranch={(value) => { if (value !== draft.branchId) update({ branchId: value, lines: {} }) }}
         />
         <ProductsStep
           organizationId={draft.organizationId}

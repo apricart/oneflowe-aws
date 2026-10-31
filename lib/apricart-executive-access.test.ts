@@ -142,6 +142,11 @@ describe("the API allowlist", () => {
         expect(source, rule.route).toContain("loadPriceContractAlerts(")
         expect(source, rule.route).not.toMatch(/export async function (POST|PUT|PATCH|DELETE)/)
         expect(rule.methods).toEqual(["GET"])
+      } else if (rule.route.startsWith("app/api/v1/executive/returns/")) {
+        // Customer returns at the warehouses it is an executive member of
+        // (plans/OF-PROCUREMENT-purchasing.md). No tenant role, no Super Admin.
+        expect(source, rule.route).toContain('requireApiRole(["APRICART_EXECUTIVE"])')
+        expect(source, rule.route).toContain("loadExecutiveWarehouseIds(")
       } else {
         // The password-change endpoints every signed-in account must reach.
         expect(rule.route).toMatch(/^app\/api\/v1\/users\/me\//)

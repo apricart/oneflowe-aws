@@ -5,6 +5,7 @@ import { and, count, desc, eq, gt, inArray, isNotNull, isNull, lt, or, sql, type
 import {
   branches,
   globalProducts,
+  groups,
   orders,
   organizationInventory,
   organizations,
@@ -164,6 +165,35 @@ function supportOrderSearchCondition(term: string): SQL {
   return or(...matches)!
 }
 
+/**
+ * The branches a thread is "at", for the queue's branch and group filters: the
+ * raiser's branch, and the branch of the order it cites. A Head Office query
+ * has no branch of its own, so the order is often the only place it names.
+ *
+ * Both halves hold the branch or the order to the thread's own organization,
+ * as `supportBranchReachCondition` does, and both are `EXISTS` for the same
+ * reason: the list's count reads `support_threads` alone. `branchMatch` is a
+ * predicate on `branches`, which both subqueries name.
+ */
+function supportThreadAtBranchCondition(branchMatch: SQL): SQL {
+  return or(
+    sql`exists (
+      select 1 from ${branches}
+      where ${branches.id} = ${supportThreads.branchId}
+      and ${branches.organizationId} = ${supportThreads.organizationId}
+      and ${branchMatch}
+    )`,
+    sql`exists (
+      select 1 from ${orders}
+      inner join ${branches} on ${branches.id} = ${orders.branchId}
+        and ${branches.organizationId} = ${orders.organizationId}
+      where ${orders.id} = ${supportThreads.orderId}
+      and ${orders.organizationId} = ${supportThreads.organizationId}
+      and ${branchMatch}
+    )`,
+  )!
+}
+
 export type SupportThreadListItem = {
   id: number
   reference: string
@@ -199,6 +229,10 @@ export type SupportThreadListFilters = {
   category?: SupportCategory
   /** Apricart may narrow to one tenant; every other role is already narrowed. */
   organizationId?: number
+  /** Threads raised at this branch, or citing an order there. Narrows only. */
+  branchId?: number
+  /** Threads raised at, or citing an order at, a branch in this group. Narrows only. */
+  groupId?: number
   orderId?: number
   /** A reference the person typed, matched against the order the thread cites. */
   orderSearch?: string
@@ -226,9 +260,15 @@ export async function listSupportThreads(
   if (filters.status) conditions.push(eq(supportThreads.status, filters.status))
   if (filters.category) conditions.push(eq(supportThreads.category, filters.category))
   if (filters.organizationId) conditions.push(eq(supportThreads.organizationId, filters.organizationId))
+  // Pushed onto the same array the scope condition opens, so a filter or a
+  // search can only ever narrow what the viewer could already read.
+  if (filters.branchId) {
+    conditions.push(supportThreadAtBranchCondition(sql`${branches.id} = ${filters.branchId}`))
+  }
+  if (filters.groupId) {
+    conditions.push(supportThreadAtBranchCondition(sql`${branches.groupId} = ${filters.groupId}`))
+  }
   if (filters.orderId) conditions.push(eq(supportThreads.orderId, filters.orderId))
-  // Pushed onto the same array the scope condition opens, so a search can only
-  // ever narrow what the viewer could already read.
   if (filters.orderSearch) conditions.push(supportOrderSearchCondition(filters.orderSearch))
   if (filters.threadId) conditions.push(eq(supportThreads.id, filters.threadId))
 
@@ -395,6 +435,82 @@ export async function getSupportThreadStats(viewer: SupportViewer): Promise<Supp
   // The driver hands bigint counts and a numeric average back as strings, so
   // the row goes through the same tolerant reader the client uses.
   return normalizeSupportStats(row)
+}
+
+/** The most choices one filter offers; the queue never names more places than this. */
+export const SUPPORT_FILTER_OPTIONS_MAX = 1000
+
+export type SupportFilterOptions = {
+  organizations: Array<{ id: number; name: string }>
+  branches: Array<{ id: number; name: string; organizationId: number; groupId: number | null }>
+  groups: Array<{ id: number; name: string; organizationId: number }>
+}
+
+/**
+ * The choices behind the queue's organization, branch and group filters.
+ *
+ * Drawn only from the threads this viewer can read, under the same
+ * `supportScopeCondition` the list uses, so a filter never names a tenant, a
+ * branch or a group the viewer has no thread at — Apricart Support sees the
+ * organizations that have raised something, not the platform's tenant list.
+ * A branch is offered where the list's branch filter would find a thread: the
+ * raiser's branch, or the branch of the order it cites, in the thread's own
+ * organization.
+ */
+export async function getSupportFilterOptions(viewer: SupportViewer): Promise<SupportFilterOptions> {
+  const scopeCondition = supportScopeCondition(viewer)
+  if (!scopeCondition) return { organizations: [], branches: [], groups: [] }
+
+  const organizationRows = await db
+    .selectDistinct({ id: organizations.id, name: organizations.name })
+    .from(supportThreads)
+    .innerJoin(organizations, eq(organizations.id, supportThreads.organizationId))
+    .where(scopeCondition)
+    .orderBy(organizations.name, organizations.id)
+    .limit(SUPPORT_FILTER_OPTIONS_MAX)
+
+  const branchRows = await db
+    .selectDistinct({
+      id: branches.id,
+      name: branches.name,
+      organizationId: branches.organizationId,
+      groupId: branches.groupId,
+    })
+    .from(supportThreads)
+    .leftJoin(
+      orders,
+      and(eq(orders.id, supportThreads.orderId), eq(orders.organizationId, supportThreads.organizationId)),
+    )
+    .innerJoin(
+      branches,
+      and(
+        eq(branches.organizationId, supportThreads.organizationId),
+        or(eq(branches.id, supportThreads.branchId), eq(branches.id, orders.branchId)),
+      ),
+    )
+    .where(scopeCondition)
+    .orderBy(branches.name, branches.id)
+    .limit(SUPPORT_FILTER_OPTIONS_MAX)
+
+  // A group is offered through a branch already offered, and held to that
+  // branch's organization, so it is never wider than the branches are.
+  const groupKeys = new Set(
+    branchRows
+      .filter((branch) => branch.groupId !== null)
+      .map((branch) => `${branch.groupId}:${branch.organizationId}`),
+  )
+  const groupIds = Array.from(new Set(branchRows.flatMap((branch) => branch.groupId ?? [])))
+  const groupRows = groupIds.length === 0 ? [] : await db
+    .select({ id: groups.id, name: groups.name, organizationId: groups.organizationId })
+    .from(groups)
+    .where(inArray(groups.id, groupIds))
+    .orderBy(groups.name, groups.id)
+
+  return {
+    organizations: organizationRows,
+    branches: branchRows,
+    groups: groupRows.filter((group) => groupKeys.has(`${group.id}:${group.organizationId}`)),
+  }
 }
 
 async function loadAssigneeNames(threadIds: number[]): Promise<Map<number, string | null>> {

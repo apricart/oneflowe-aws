@@ -77,9 +77,37 @@ describe("UnacknowledgedOrdersTable", () => {
     expect(second.disabled).toBe(true)
   })
 
-  it("shows a token that has already been emailed as sent, and offers no second send", () => {
+  // Every row here is approved and delivered, so a token that has gone on one
+  // means its settlement failed. This used to show a disabled "Token sent",
+  // which is how a customer was left with an unfulfilled order and no way out.
+  it("offers a retry, not a second send, for a delivered order whose token already went", () => {
     const { onSendToken } = renderTable({
       orders: [row(3, { tokenHandoffAt: "2026-09-21T10:00:00.000Z" }), row(4)],
+    })
+    expect(screen.queryByRole("button", { name: "Fulfil order TID-3 by emailing its token" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Token for order TID-3 has already been emailed" })).toBeNull()
+    const retry = screen.getByRole("button", {
+      name: "Retry fulfilment of order TID-3; its token already reached the admin",
+    }) as HTMLButtonElement
+    expect(retry.disabled).toBe(false)
+    expect(retry.textContent).toContain("Retry fulfilment")
+    fireEvent.click(retry)
+    expect(onSendToken).toHaveBeenCalledWith(expect.objectContaining({ id: 3 }))
+    expect(screen.getByRole("button", { name: "Fulfil order TID-4 by emailing its token" })).toBeTruthy()
+  })
+
+  it("disables the retry too while a token is on its way", () => {
+    renderTable({ orders: [row(3, { tokenHandoffAt: "2026-09-21T10:00:00.000Z" })], sendingOrderId: 3 })
+    const retry = screen.getByRole("button", {
+      name: "Retry fulfilment of order TID-3; its token already reached the admin",
+    }) as HTMLButtonElement
+    expect(retry.disabled).toBe(true)
+    expect(retry.textContent).toContain("Retrying...")
+  })
+
+  it("shows a token sent ahead of delivery as sent, and offers no second send", () => {
+    const { onSendToken } = renderTable({
+      orders: [row(3, { fulfillmentStatus: "OUT_FOR_DELIVERY", tokenHandoffAt: "2026-09-21T10:00:00.000Z" }), row(4)],
     })
     expect(screen.queryByRole("button", { name: "Fulfil order TID-3 by emailing its token" })).toBeNull()
     const sent = screen.getByRole("button", { name: "Token for order TID-3 has already been emailed" }) as HTMLButtonElement

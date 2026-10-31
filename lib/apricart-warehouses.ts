@@ -216,6 +216,56 @@ export function suggestedBranchIdsFor(input: {
     .sort((a, b) => a - b)
 }
 
+/** The cities the chosen organizations have branches in, counted across them, by label. */
+export function citiesOfOrganizations(
+  cityOptions: ReadonlyArray<{ organizationId: number; cityKey: string; label: string; branchCount: number }>,
+  organizationIds: readonly number[],
+): Array<{ cityKey: string; label: string; branchCount: number; organizationCount: number }> {
+  const chosen = new Set(organizationIds)
+  const byKey = new Map<string, { cityKey: string; label: string; branchCount: number; organizationCount: number }>()
+  for (const option of cityOptions) {
+    if (!chosen.has(option.organizationId)) continue
+    const city = byKey.get(option.cityKey) ?? { cityKey: option.cityKey, label: option.label, branchCount: 0, organizationCount: 0 }
+    city.branchCount += option.branchCount
+    city.organizationCount += 1
+    byKey.set(option.cityKey, city)
+  }
+  return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label))
+}
+
+export type PlannedWarehouseRule = { organizationId: number; cityKey: string | null; fromWarehouseId: number | null }
+
+/**
+ * The rules "Add" would give this warehouse: one per chosen organization when
+ * no city is chosen (the whole organization), else one per chosen organization
+ * and chosen city it has branches in. A rule this warehouse holds already is
+ * left out; one another warehouse holds names it, because adding it moves its
+ * branches here. Each is still one request, judged by the server.
+ */
+export function plannedRuleAdditions(input: {
+  rules: ReadonlyArray<{ warehouseId: number; organizationId: number; cityKey: string | null }>
+  cityOptions: ReadonlyArray<{ organizationId: number; cityKey: string }>
+  warehouseId: number
+  organizationIds: readonly number[]
+  cityKeys: readonly string[]
+}): PlannedWarehouseRule[] {
+  const organizationIds = [...new Set(input.organizationIds)].sort((a, b) => a - b)
+  const cityKeys = new Set(input.cityKeys)
+  const pairs: Array<{ organizationId: number; cityKey: string | null }> = cityKeys.size === 0
+    ? organizationIds.map((organizationId) => ({ organizationId, cityKey: null }))
+    : organizationIds.flatMap((organizationId) => input.cityOptions
+      .filter((option) => option.organizationId === organizationId && cityKeys.has(option.cityKey))
+      .map((option) => ({ organizationId, cityKey: option.cityKey }))
+      .sort((a, b) => a.cityKey.localeCompare(b.cityKey)))
+  const planned: PlannedWarehouseRule[] = []
+  for (const pair of pairs) {
+    const holder = input.rules.find((rule) => rule.organizationId === pair.organizationId && rule.cityKey === pair.cityKey)
+    if (holder?.warehouseId === input.warehouseId) continue
+    planned.push({ ...pair, fromWarehouseId: holder?.warehouseId ?? null })
+  }
+  return planned
+}
+
 /** Inactive warehouse accounts that still hold branch or city assignments: they serve nothing today. */
 export function inactiveAccountsHoldingReach<T extends { isActive: boolean; branchIds: readonly number[]; cityKeys: readonly string[] }>(
   members: readonly T[],

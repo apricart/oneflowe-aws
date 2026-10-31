@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import captured from "@/tests/fixtures/support-responses.json"
-import { callsTo, installFetch, renderWithApp, resetUi } from "@/tests/support/ui-harness"
+import { callsTo, installDomPolyfills, installFetch, renderWithApp, resetUi } from "@/tests/support/ui-harness"
 
 vi.mock("next-auth/react", async () => (await import("@/tests/support/ui-mocks")).nextAuthMock())
 vi.mock("next/navigation", async () => (await import("@/tests/support/ui-mocks")).navigationMock())
@@ -22,6 +22,7 @@ const thread = captured.thread as any
 const threadId = thread.thread.id as number
 
 beforeEach(() => {
+  installDomPolyfills()
   resetUi({ id: "ho", role: "HEAD_OFFICE", organizationId: 456 })
   toast.mockClear()
   vi.spyOn(console, "error").mockImplementation(() => {})
@@ -36,11 +37,43 @@ describe("support list", () => {
     renderWithApp(<SupportList />)
     expect((await screen.findAllByText("Invoice question S")).length).toBeGreaterThan(0)
 
-    fireEvent.change(screen.getByPlaceholderText("Search by order ID"), { target: { value: "TID-1" } })
+    fireEvent.change(screen.getByPlaceholderText("Search by order or transaction ID"), { target: { value: "TID-1" } })
     await waitFor(() => expect(callsTo("/api/v1/support/threads").some((call) => call.url.includes("TID-1"))).toBe(true), { timeout: 3000 })
 
     fireEvent.click(screen.getByLabelText("Clear the order search"))
-    expect((screen.getByPlaceholderText("Search by order ID") as HTMLInputElement).value).toBe("")
+    expect((screen.getByPlaceholderText("Search by order or transaction ID") as HTMLInputElement).value).toBe("")
+  })
+
+  it("narrows by a searchable branch or group, and offers no organization to a single tenant", async () => {
+    installFetch([
+      ["/api/v1/support/threads", captured.list],
+      ["/api/v1/support/stats", captured.stats],
+      ["/api/v1/support/filters", {
+        organizations: [],
+        branches: [
+          { id: 11, name: "North Branch", organizationId: 456, groupId: 7 },
+          { id: 12, name: "South Branch", organizationId: 456, groupId: null },
+        ],
+        groups: [{ id: 7, name: "Northern Group", organizationId: 456 }],
+      }],
+    ])
+    renderWithApp(<SupportList />)
+    const branch = await screen.findByRole("combobox", { name: "Any branch" })
+    expect(screen.queryByRole("combobox", { name: "Any organization" })).toBeNull()
+
+    fireEvent.click(branch)
+    fireEvent.change(await screen.findByLabelText("Search branches"), { target: { value: "South" } })
+    fireEvent.click(await screen.findByRole("option", { name: /^South Branch/ }))
+    await waitFor(() => expect(callsTo("/api/v1/support/threads").some((call) => call.url.includes("branchId=12"))).toBe(true))
+
+    // A group the chosen branch is not in clears the branch rather than matching nothing.
+    fireEvent.click(screen.getByRole("combobox", { name: "Any group" }))
+    fireEvent.click(await screen.findByRole("option", { name: /^Northern Group/ }))
+    await waitFor(() => {
+      const last = callsTo("/api/v1/support/threads").at(-1)!.url
+      expect(last).toContain("groupId=7")
+      expect(last).not.toContain("branchId=")
+    })
   })
 
   it("renders an empty desk", async () => {

@@ -1,4 +1,5 @@
 import { VIEWER_READ_REFUSED, viewerReadRole } from "@/lib/viewer-access"
+import { productStockDisplaySql } from "@/lib/server/warehouse-stock"
 import { NextResponse, type NextRequest } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth-options"
@@ -176,7 +177,7 @@ export async function GET(req: NextRequest) {
                 unit: globalProducts.unit,
                 status: globalProducts.status,
                 basePrice: globalProducts.basePrice,
-                stockQuantity: globalProducts.stockQuantity,
+                stockQuantity: productStockDisplaySql(),
                 categoryId: globalProducts.categoryId,
                 customPrice: organizationInventory.customPrice,
                 customName: organizationInventory.customName,
