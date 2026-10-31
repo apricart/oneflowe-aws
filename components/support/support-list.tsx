@@ -39,6 +39,10 @@ import {
   useSupportSide,
 } from "@/components/support/support-chrome"
 import { NewThreadDialog } from "@/components/support/new-thread-dialog"
+import {
+  SupportFilterCombobox,
+  type SupportFilterOption,
+} from "@/components/support/support-filter-combobox"
 import { SupportStats } from "@/components/support/support-stats"
 
 type SupportThreadRow = {
@@ -59,6 +63,13 @@ type SupportThreadRow = {
   lastMessageAt: string
   lastMessageSide: string
   unread: boolean
+}
+
+/** The places the caller has threads at, from `GET /api/v1/support/filters`. */
+type SupportFilterOptionsResponse = {
+  organizations: Array<{ id: number; name: string }>
+  branches: Array<{ id: number; name: string; organizationId: number; groupId: number | null }>
+  groups: Array<{ id: number; name: string; organizationId: number }>
 }
 
 type SupportListResponse = {
@@ -86,6 +97,9 @@ export function SupportList() {
 
   const [status, setStatus] = useState<string>("ALL")
   const [category, setCategory] = useState<string>("ALL")
+  const [organizationId, setOrganizationId] = useState<number | null>(null)
+  const [branchId, setBranchId] = useState<number | null>(null)
+  const [groupId, setGroupId] = useState<number | null>(null)
   const [orderSearch, setOrderSearch] = useState("")
   const [debouncedOrderSearch, setDebouncedOrderSearch] = useState("")
   const [page, setPage] = useState(1)
@@ -101,10 +115,17 @@ export function SupportList() {
     const params = new URLSearchParams()
     if (status !== "ALL") params.set("status", status)
     if (category !== "ALL") params.set("category", category)
+    if (organizationId) params.set("organizationId", String(organizationId))
+    if (branchId) params.set("branchId", String(branchId))
+    if (groupId) params.set("groupId", String(groupId))
     if (debouncedOrderSearch) params.set("orderSearch", debouncedOrderSearch)
     params.set("page", String(page))
     return params.toString()
-  }, [status, category, debouncedOrderSearch, page])
+  }, [status, category, organizationId, branchId, groupId, debouncedOrderSearch, page])
+
+  // Only places the caller already has a thread at; the server scopes the list.
+  const { data: filterOptions } = useAPI<SupportFilterOptionsResponse>("/api/v1/support/filters")
+  const places = usePlaceFilterOptions(filterOptions, organizationId, groupId)
 
   const { data, isLoading, mutate } = useAPI<SupportListResponse>(
     `/api/v1/support/threads?${query}`,
@@ -117,7 +138,13 @@ export function SupportList() {
   const total = data?.total ?? 0
   const pageSize = data?.pageSize ?? 20
   const lastPage = Math.max(1, Math.ceil(total / pageSize))
-  const filtered = status !== "ALL" || category !== "ALL" || debouncedOrderSearch !== ""
+  const filtered =
+    status !== "ALL" ||
+    category !== "ALL" ||
+    organizationId !== null ||
+    branchId !== null ||
+    groupId !== null ||
+    debouncedOrderSearch !== ""
 
   return (
     <div className={cn(embedded && "mx-auto max-w-5xl")}>
@@ -197,11 +224,62 @@ export function SupportList() {
             </SelectContent>
           </Select>
 
+          {places.organizations.length > 1 ? (
+            <SupportFilterCombobox
+              value={organizationId}
+              options={places.organizations}
+              allLabel="Any organization"
+              searchLabel="Search organizations"
+              emptyLabel="No organization found."
+              onValueChange={(next) => {
+                setOrganizationId(next)
+                // A branch or group of another organization would match nothing.
+                if (next !== null) {
+                  if (branchId !== null && places.branchOrganization.get(branchId) !== next) setBranchId(null)
+                  if (groupId !== null && places.groupOrganization.get(groupId) !== next) setGroupId(null)
+                }
+                setPage(1)
+              }}
+            />
+          ) : null}
+
+          {places.groups.length > 0 ? (
+            <SupportFilterCombobox
+              value={groupId}
+              options={places.groups}
+              allLabel="Any group"
+              searchLabel="Search groups"
+              emptyLabel="No group found."
+              onValueChange={(next) => {
+                setGroupId(next)
+                if (next !== null && branchId !== null && places.branchGroup.get(branchId) !== next) {
+                  setBranchId(null)
+                }
+                setPage(1)
+              }}
+            />
+          ) : null}
+
+          {places.branches.length > 1 || branchId !== null ? (
+            <SupportFilterCombobox
+              value={branchId}
+              options={places.branches}
+              allLabel="Any branch"
+              searchLabel="Search branches"
+              emptyLabel="No branch found."
+              onValueChange={(next) => {
+                setBranchId(next)
+                setPage(1)
+              }}
+            />
+          ) : null}
+
           {/* Support staff work from the order a customer quotes, so the queue
-              is searchable by that reference rather than only by its own. */}
+              is searchable by that reference — the order ID or its transaction
+              ID — rather than only by its own. */}
           <div className="relative">
             <Label htmlFor={searchId} className="sr-only">
-              Search by order ID
+              Search by order ID or transaction ID
             </Label>
             <Search
               aria-hidden="true"
@@ -211,8 +289,8 @@ export function SupportList() {
               id={searchId}
               value={orderSearch}
               maxLength={SUPPORT_ORDER_SEARCH_MAX_LENGTH}
-              placeholder="Search by order ID"
-              className="w-[220px] pl-8 pr-8"
+              placeholder="Search by order or transaction ID"
+              className="w-[260px] pl-8 pr-8"
               onChange={(event) => {
                 setOrderSearch(event.target.value)
                 setPage(1)
@@ -272,6 +350,46 @@ export function SupportList() {
       </div>
     </div>
   )
+}
+
+/**
+ * The filter choices, narrowed to the organization and group already chosen so
+ * every option on offer can still match something. Each is labelled with its
+ * organization while more than one organization is in view.
+ */
+function usePlaceFilterOptions(
+  data: SupportFilterOptionsResponse | undefined,
+  organizationId: number | null,
+  groupId: number | null,
+) {
+  return useMemo(() => {
+    const organizationNames = new Map((data?.organizations ?? []).map((row) => [row.id, row.name]))
+    const hintFor = (id: number) => (organizationId === null ? organizationNames.get(id) : undefined)
+
+    const allBranches = data?.branches ?? []
+    const allGroups = data?.groups ?? []
+
+    const organizations: SupportFilterOption[] = (data?.organizations ?? []).map((row) => ({
+      id: row.id,
+      label: row.name,
+    }))
+    const groups: SupportFilterOption[] = allGroups
+      .filter((row) => organizationId === null || row.organizationId === organizationId)
+      .map((row) => ({ id: row.id, label: row.name, hint: hintFor(row.organizationId) }))
+    const branches: SupportFilterOption[] = allBranches
+      .filter((row) => organizationId === null || row.organizationId === organizationId)
+      .filter((row) => groupId === null || row.groupId === groupId)
+      .map((row) => ({ id: row.id, label: row.name, hint: hintFor(row.organizationId) }))
+
+    return {
+      organizations,
+      groups,
+      branches,
+      branchOrganization: new Map(allBranches.map((row) => [row.id, row.organizationId])),
+      branchGroup: new Map(allBranches.map((row) => [row.id, row.groupId])),
+      groupOrganization: new Map(allGroups.map((row) => [row.id, row.organizationId])),
+    }
+  }, [data, organizationId, groupId])
 }
 
 function renderBody({

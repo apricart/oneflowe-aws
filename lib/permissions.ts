@@ -748,5 +748,17 @@ export const ROLE_TEMPLATES = {
       Permission.REPORTS_EXPORT,
     ],
   },
+  PROCUREMENT: {
+    name: "Procurement",
+    description: "Apricart procurement: suppliers, purchase orders and supplier invoices for Apricart's warehouses",
+    permissions: [
+      // Descriptive only, like every template here. What confines this role is
+      // `lib/procurement-access.ts` — the /procurement area and an API
+      // allowlist enforced in `proxy.ts` — and each handler's own capability
+      // check. It reads the catalogue to buy from it; it writes no customer
+      // price, order, user or tenant.
+      Permission.INVENTORY_VIEW,
+    ],
+  },
 }
 

@@ -28,6 +28,8 @@ import {
   queueWarehouseOrderNotifications,
 } from "@/lib/server/warehouse-order-notifications"
 import { WAREHOUSE_ROLE } from "@/lib/warehouse-access"
+import { loadTransferStockShortfalls } from "@/lib/server/warehouse-stock"
+import type { StockShortfall } from "@/lib/warehouse-stock"
 
 /**
  * Super Admin moves one order from one Apricart warehouse to another.
@@ -65,7 +67,13 @@ export type OrderWarehousePanel = {
   /** How many accounts serve the branch, for handing the order back to them. */
   branchServingAccountCount: number
   refusal: OrderWarehouseTransferRefusal | null
-  targets: Array<WarehouseSummary & { operatorCount: number }>
+  /**
+   * Counted per warehouse, each line the target could not cover now — a
+   * warning, never a refusal. Empty while stock is counted globally.
+   */
+  targets: Array<WarehouseSummary & { operatorCount: number; stockShortfalls: StockShortfall[] }>
+  /** The same, for handing the order back to its branch's own warehouse. */
+  handBackStockShortfalls: StockShortfall[]
   history: Array<{
     id: number
     from: WarehouseSummary | null
@@ -184,6 +192,17 @@ export async function loadOrderWarehousePanel(orderId: number): Promise<OrderWar
       .where(inArray(users.id, recipients.slice(0, WORKED_BY_LIMIT).map((recipient) => recipient.id)))
       .orderBy(asc(users.fullName))
   const operators = await activeOperatorCounts(db, targetRows.map((target) => target.id))
+  const shortfallsFor = (targetWarehouseId: number | null) => loadTransferStockShortfalls(db, {
+    orderId: row.id,
+    branchId: row.branchId,
+    status: row.status,
+    fulfillmentStatus: row.fulfillmentStatus,
+    targetWarehouseId,
+  })
+  const [targetShortfalls, handBackStockShortfalls] = await Promise.all([
+    Promise.all(targetRows.map((target) => shortfallsFor(target.id))),
+    shortfallsFor(null),
+  ])
 
   return {
     order: {
@@ -203,7 +222,12 @@ export async function loadOrderWarehousePanel(orderId: number): Promise<OrderWar
     workedBy: workedByRows.map((account) => ({ id: account.id, name: accountName(account) })),
     branchServingAccountCount: branchServing.length,
     refusal: orderWarehouseTransferRefusal(row),
-    targets: targetRows.map((target) => ({ ...target, operatorCount: operators.get(target.id) ?? 0 })),
+    targets: targetRows.map((target, index) => ({
+      ...target,
+      operatorCount: operators.get(target.id) ?? 0,
+      stockShortfalls: targetShortfalls[index] ?? [],
+    })),
+    handBackStockShortfalls,
     history: historyRows.map((entry) => ({
       id: entry.id,
       from: entry.fromId !== null && entry.fromCode && entry.fromName
@@ -232,6 +256,8 @@ export type OrderWarehouseTransferOutcome =
   | { kind: "target-inactive" }
   /** Nobody would work the order there: no active operator, or no account serving the branch. */
   | { kind: "no-operator" }
+  /** Counted per warehouse: the target is short for this order and the caller did not acknowledge it. */
+  | { kind: "stock-shortfall"; shortfalls: StockShortfall[] }
 
 /**
  * Move one order to `targetWarehouseId`, or — with null — hand it back to the
@@ -249,10 +275,60 @@ export async function transferOrderWarehouse(input: {
   targetWarehouseId: number | null
   expectedWarehouseId: number | null
   reason: string
+  /** Counted per warehouse: move the order even though the target is short of stock for it. */
+  acknowledgeStockShortfall?: boolean
   actor: Actor
 }): Promise<OrderWarehouseTransferOutcome> {
   let eventKeys: string[] = []
-  const outcome = await db.transaction(async (tx): Promise<OrderWarehouseTransferOutcome> => {
+  let outcome: OrderWarehouseTransferOutcome
+  try {
+    outcome = await transferInTransaction(input, (keys) => { eventKeys = keys })
+  } catch (caught) {
+    if (caught instanceof TransferStockShortfall) return { kind: "stock-shortfall", shortfalls: caught.shortfalls }
+    throw caught
+  }
+
+  await attemptImmediateOrderEmailDelivery(eventKeys)
+  return outcome
+}
+
+/**
+ * Counted per warehouse, the lines the target cannot cover now. A warning, not
+ * a refusal: unacknowledged it stops the move (nothing is written yet), once
+ * acknowledged the order moves and the shortfall is kept in the audit row.
+ */
+async function checkTransferStock(
+  tx: Transaction,
+  order: { id: number; branchId: number; status: string | null; fulfillmentStatus: string | null },
+  input: { targetWarehouseId: number | null; acknowledgeStockShortfall?: boolean },
+): Promise<StockShortfall[]> {
+  const shortfalls = await loadTransferStockShortfalls(tx, {
+    orderId: order.id,
+    branchId: order.branchId,
+    status: order.status,
+    fulfillmentStatus: order.fulfillmentStatus,
+    targetWarehouseId: input.targetWarehouseId,
+  })
+  if (shortfalls.length > 0 && input.acknowledgeStockShortfall !== true) throw new TransferStockShortfall(shortfalls)
+  return shortfalls
+}
+
+class TransferStockShortfall extends Error {
+  constructor(readonly shortfalls: StockShortfall[]) {
+    super("TRANSFER_STOCK_SHORTFALL")
+    this.name = "TransferStockShortfall"
+  }
+}
+
+function shortfallAuditContext(shortfalls: StockShortfall[]): { stockShortfalls?: StockShortfall[] } {
+  return shortfalls.length > 0 ? { stockShortfalls: shortfalls } : {}
+}
+
+function transferInTransaction(
+  input: Parameters<typeof transferOrderWarehouse>[0],
+  setEventKeys: (keys: string[]) => void,
+): Promise<OrderWarehouseTransferOutcome> {
+  return db.transaction(async (tx): Promise<OrderWarehouseTransferOutcome> => {
     const [order] = await tx
       .select({
         id: orders.id,
@@ -298,6 +374,8 @@ export async function transferOrderWarehouse(input: {
         .where(eq(apricartWarehouses.id, order.fulfillmentWarehouseId))
         .limit(1)
 
+    const stockShortfalls = await checkTransferStock(tx, order, input)
+
     const before = await loadWarehouseOrderRecipients(tx, order.id)
 
     await tx
@@ -331,6 +409,7 @@ export async function transferOrderWarehouse(input: {
         reason: input.reason,
         status: order.status,
         fulfillmentStatus: order.fulfillmentStatus,
+        ...shortfallAuditContext(stockShortfalls),
       },
     })
 
@@ -353,7 +432,7 @@ export async function transferOrderWarehouse(input: {
       occurrence: transfer.id,
       recipients: after.filter((recipient) => !beforeIds.has(recipient.id)),
     })
-    eventKeys = [...out.eventKeys, ...into.eventKeys]
+    setEventKeys([...out.eventKeys, ...into.eventKeys])
 
     return {
       kind: "transferred",
@@ -362,7 +441,4 @@ export async function transferOrderWarehouse(input: {
       toWarehouseId: input.targetWarehouseId,
     }
   })
-
-  await attemptImmediateOrderEmailDelivery(eventKeys)
-  return outcome
 }

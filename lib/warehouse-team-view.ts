@@ -166,3 +166,26 @@ export function describeWarehouseReach(
   const empty = reach.cityOrganizationIds.length === 0 ? "no organization chosen" : "no branches yet"
   return `${cityText} · ${branchText === "None" ? empty : branchText}`
 }
+
+/**
+ * One save per organization: the chosen organizations whose ticked branches
+ * differ from what is saved — or every chosen one, with `includeUnchanged` —
+ * each with its ticked branches, ascending. The save routes replace one
+ * organization's branches per request, so a body stays under the WAF's 8 KB.
+ */
+export function organizationSelectionChanges(input: {
+  organizationIds: readonly number[]
+  branches: ReadonlyArray<{ id: number; organizationId: number }>
+  saved: readonly number[]
+  selected: readonly number[]
+  includeUnchanged?: boolean
+}): Array<{ organizationId: number; branchIds: number[] }> {
+  const changes: Array<{ organizationId: number; branchIds: number[] }> = []
+  for (const organizationId of [...new Set(input.organizationIds)].sort((a, b) => a - b)) {
+    const own = new Set(input.branches.filter((branch) => branch.organizationId === organizationId).map((branch) => branch.id))
+    const saved = input.saved.filter((id) => own.has(id)).sort((a, b) => a - b)
+    const branchIds = [...new Set(input.selected.filter((id) => own.has(id)))].sort((a, b) => a - b)
+    if (input.includeUnchanged || saved.join(",") !== branchIds.join(",")) changes.push({ organizationId, branchIds })
+  }
+  return changes
+}

@@ -1,9 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+const routerPush = vi.hoisted(() => vi.fn())
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
-    push: vi.fn(),
+    push: routerPush,
   }),
 }))
 
@@ -140,6 +142,59 @@ describe("OrdersDirectory", () => {
     expect(drawerQueries.getByText("Delivery Date")).toBeTruthy()
     expect(drawerQueries.getByText(/30 Jul 2026/)).toBeTruthy()
     expect(drawerQueries.queryByText("Fulfilled Date")).toBeNull()
+  })
+
+  it("opens the order page, where the fulfilment warehouse card is, from Super Admin's drawer", async () => {
+    routerPush.mockClear()
+    render(
+      <OrdersDirectory
+        orders={[{
+          id: 46,
+          tid: "ORD-0046",
+          status: "APPROVED",
+          fulfillmentStatus: "NOT_STARTED",
+          branchId: 8,
+          branchName: "North Branch",
+          createdAt: "2026-07-28T10:00:00.000Z",
+          totalCents: 125000,
+        }]}
+        userRole="SUPER_ADMIN"
+        isSuperAdmin
+        isBranchAdmin={false}
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByText("ORD-0046"))
+    const drawer = await screen.findByRole("dialog", { name: "Order details" })
+    fireEvent.click(within(drawer).getByRole("button", { name: "Fulfilment warehouse" }))
+    expect(routerPush).toHaveBeenCalledWith("/orders/46")
+  })
+
+  it("offers no fulfilment warehouse link to a role that cannot transfer orders", async () => {
+    render(
+      <OrdersDirectory
+        orders={[{
+          id: 47,
+          tid: "ORD-0047",
+          status: "APPROVED",
+          fulfillmentStatus: "NOT_STARTED",
+          branchId: 8,
+          branchName: "North Branch",
+          createdAt: "2026-07-28T10:00:00.000Z",
+          totalCents: 125000,
+        }]}
+        userRole="HEAD_OFFICE"
+        isSuperAdmin={false}
+        isBranchAdmin={false}
+        isHeadOffice
+        onUpdate={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByText("ORD-0047"))
+    const drawer = await screen.findByRole("dialog", { name: "Order details" })
+    expect(within(drawer).queryByRole("button", { name: "Fulfilment warehouse" })).toBeNull()
   })
 
   it("shows fulfillment and delivery dates for a fulfilled delivered order", async () => {

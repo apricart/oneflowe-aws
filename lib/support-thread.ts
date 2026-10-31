@@ -335,6 +335,18 @@ export function parseSupportOrderSearch(value: unknown): SupportOrderSearch {
 }
 
 /**
+ * Reads one of the queue's place filters — organization, branch or group — from
+ * a query parameter. Anything but a positive whole number reads as "no filter":
+ * a filter only ever narrows the caller's scope, so dropping a malformed one
+ * shows no more than the caller could already read.
+ */
+export function parseSupportPlaceFilterId(value: string | null | undefined): number | undefined {
+  if (typeof value !== "string" || !/^\s*\d{1,9}\s*$/.test(value)) return undefined
+  const id = Number(value)
+  return id > 0 ? id : undefined
+}
+
+/**
  * The internal order id a search term names, when it plainly is one.
  *
  * People quote an order by its reference, but the numeric id is what an

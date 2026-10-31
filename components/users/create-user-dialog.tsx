@@ -5,6 +5,7 @@ import { APRICART_EXECUTIVE_LABEL, APRICART_EXECUTIVE_ROLE } from "@/lib/apricar
 import { WAREHOUSE_LABEL, WAREHOUSE_ROLE } from "@/lib/warehouse-access"
 import { APRICART_SUPPORT_LABEL, APRICART_SUPPORT_ROLE } from "@/lib/apricart-support-access"
 import { FINANCE_LABEL, FINANCE_ROLE } from "@/lib/finance-access"
+import { PROCUREMENT_LABEL, PROCUREMENT_ROLE } from "@/lib/procurement-access"
 import { OrganizationMultiSelect } from "@/components/finance/organization-multi-select"
 import { jsonFetcher } from "@/lib/fetcher"
 import { Button } from "@/components/ui/button"
@@ -88,12 +89,13 @@ function getRoleLabel(role: string) {
   if (role === WAREHOUSE_ROLE) return WAREHOUSE_LABEL
   if (role === APRICART_SUPPORT_ROLE) return APRICART_SUPPORT_LABEL
   if (role === FINANCE_ROLE) return FINANCE_LABEL
+  if (role === PROCUREMENT_ROLE) return PROCUREMENT_LABEL
   return ROLE_DISPLAY_NAMES.ORDER_PORTAL
 }
 
 // Apricart's own cross-tenant staff created from this dialog: no organization,
 // no branch. Their reach is granted elsewhere (or is every tenant).
-const APRICART_STAFF_ROLES = new Set<string>([APRICART_EXECUTIVE_ROLE, WAREHOUSE_ROLE, APRICART_SUPPORT_ROLE, FINANCE_ROLE])
+const APRICART_STAFF_ROLES = new Set<string>([APRICART_EXECUTIVE_ROLE, WAREHOUSE_ROLE, APRICART_SUPPORT_ROLE, FINANCE_ROLE, PROCUREMENT_ROLE])
 
 // Roles pinned to exactly one branch. The group roles are deliberately
 // excluded: their reach comes from the group/branch assignments instead.
@@ -998,6 +1000,11 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                           {FINANCE_LABEL} (assigned organizations, payments only)
                         </SelectItem>
                       )}
+                      {userRole === "SUPER_ADMIN" && (
+                        <SelectItem value={PROCUREMENT_ROLE}>
+                          {PROCUREMENT_LABEL} (suppliers and purchase orders)
+                        </SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                   {errors.role && (
@@ -1025,6 +1032,13 @@ export function CreateUserDialog({ onSuccess }: Readonly<CreateUserDialogProps>)
                     <p className="text-xs text-muted-foreground">
                       Apricart finance. Reads orders and every report of the organizations chosen below,
                       view only, and can mark approved orders paid or unpaid. Nothing else.
+                    </p>
+                  )}
+                  {form.role === PROCUREMENT_ROLE && (
+                    <p className="text-xs text-muted-foreground">
+                      Apricart procurement. Manages suppliers, raises purchase orders for Apricart&apos;s
+                      warehouses (Super Admin approves them) and records supplier invoices. No organization
+                      or branch is assigned.
                     </p>
                   )}
                 </div>

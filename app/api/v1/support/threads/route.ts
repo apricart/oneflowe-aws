@@ -11,6 +11,7 @@ import {
   isSupportCategory,
   isSupportStatus,
   parseSupportOrderSearch,
+  parseSupportPlaceFilterId,
   parseSupportThreadReference,
 } from "@/lib/support-thread"
 import {
@@ -31,7 +32,8 @@ import { resolveSupportAuthor, supportReaderFromSession, withSupportReach } from
  * GET is scoped by `supportScopeCondition`, which derives the tenant predicate
  * from the session's role — there is no `organizationId` a caller can send to
  * widen it. Apricart alone may *narrow* to one tenant, and that is a filter on
- * top of an already-unrestricted scope, never a way into one.
+ * top of an already-unrestricted scope, never a way into one. The branch and
+ * group filters are the same kind of thing for every participant.
  */
 
 export async function GET(req: NextRequest) {
@@ -74,6 +76,10 @@ export async function GET(req: NextRequest) {
         isSupportApricartRole(viewer.role) && Number.isInteger(organizationId) && organizationId > 0
           ? organizationId
           : undefined,
+      // Any participant may narrow to a branch or a group. Both are pushed on
+      // top of the caller's scope, so naming one outside it reads nothing.
+      branchId: parseSupportPlaceFilterId(params.get("branchId")),
+      groupId: parseSupportPlaceFilterId(params.get("groupId")),
       orderId: Number.isInteger(orderId) && orderId > 0 ? orderId : undefined,
       orderSearch: orderSearch.term ?? undefined,
       threadId: reference ?? undefined,

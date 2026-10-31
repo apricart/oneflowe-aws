@@ -293,18 +293,52 @@ describe("Warehouse team", () => {
   })
 
   describe("by branch", () => {
-    it("searches organizations before switching the branch list", () => {
+    it("searches organizations and lists the branches of every one chosen", () => {
       swr.data = team([member()])
       render(<WarehouseTeamCard />)
       const dialog = openDialog()
       showTab(dialog, "By branch")
 
-      fireEvent.click(within(dialog).getByRole("combobox", { name: "Organization" }))
+      fireEvent.click(within(dialog).getByRole("combobox", { name: "Organizations" }))
       fireEvent.change(screen.getByLabelText("Search organizations"), { target: { value: "ubl" } })
       fireEvent.click(screen.getByRole("option", { name: /UBL/ }))
+      fireEvent.keyDown(screen.getByLabelText("Search organizations"), { key: "Escape" })
 
       expect(within(dialog).getByLabelText(/Clifton/)).toBeTruthy()
-      expect(within(dialog).queryByLabelText(/North/)).toBeNull()
+      expect(within(dialog).getByLabelText(/North/)).toBeTruthy()
+      expect(within(dialog).getByText("2 of 4 served in these 2 organizations.")).toBeTruthy()
+
+      // Clear leaves nothing listed, rather than every branch of every organization.
+      fireEvent.click(within(dialog).getByRole("combobox", { name: "Organizations" }))
+      fireEvent.click(screen.getByRole("button", { name: "Clear" }))
+      fireEvent.keyDown(screen.getByLabelText("Search organizations"), { key: "Escape" })
+      expect(within(dialog).getByText("Choose organizations to list their branches.")).toBeTruthy()
+    })
+
+    it("saves ticks in several organizations as one request each, keeping what was saved if one is refused", async () => {
+      swr.data = team([member()])
+      fetchMock
+        .mockResolvedValueOnce(new Response(JSON.stringify({ item: {} }), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ error: "One or more branches do not belong to this organization" }), { status: 400 }))
+      render(<WarehouseTeamCard />)
+      const dialog = openDialog()
+      showTab(dialog, "By branch")
+      fireEvent.click(within(dialog).getByRole("combobox", { name: "Organizations" }))
+      fireEvent.click(screen.getByRole("button", { name: "Select all" }))
+      fireEvent.keyDown(screen.getByLabelText("Search organizations"), { key: "Escape" })
+
+      fireEvent.click(within(dialog).getByLabelText(/South/))
+      fireEvent.click(within(dialog).getByLabelText(/Clifton/))
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+
+      expect(await within(dialog).findByText(
+        "One or more branches do not belong to this organization 1 of 2 organizations were saved before this; the rest were not.",
+      )).toBeTruthy()
+      expect(sentBody(0)).toEqual({ organizationId: 1, branchIds: [11, 12] })
+      expect(sentBody(1)).toEqual({ organizationId: 2, branchIds: [] })
+      // The first organization stays saved; only UBL is still unsaved.
+      expect(swr.mutate).toHaveBeenCalledTimes(1)
+      expect(within(dialog).getByText("Save or reset the ticked branches first.")).toBeTruthy()
     })
 
     it("selects only filtered branches and preserves hidden selections", async () => {

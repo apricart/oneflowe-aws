@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 import useSWR from "swr"
-import { AlertTriangle, Ban, ChevronDown, ChevronRight, Layers, Mail, Pencil, RotateCcw, Send } from "lucide-react"
+import { AlertTriangle, Ban, ChevronDown, ChevronRight, Layers, Mail, Pencil, RotateCcw, RotateCw, Send } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,6 +20,13 @@ import { isCancellableGroupOrderStatus } from "@/lib/group-order-cancel"
 import { ResubmitOrderDialog } from "@/components/orders/order-correction"
 import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
 import { isAwaitingCorrection } from "@/lib/order-correction"
+import {
+  TOKEN_SETTLEMENT_FAILED_TITLE,
+  TOKEN_SETTLEMENT_RETRY_LABEL,
+  isTokenAlreadySent,
+  readTokenSettlementFailure,
+  tokenSettlementNeedsRetry,
+} from "@/lib/order-token-handoff"
 
 import { GroupRefundDialog } from "./group-refund-dialog"
 import { TokenHandoff } from "./token-handoff"
@@ -347,6 +354,11 @@ export function GroupOrderHistory() {
                           <SendAllTokensButton
                             groupOrderId={item.id}
                             count={tokenOrders.length}
+                            // A send carries only unsent tokens, so the button
+                            // becomes a retry only once every token has gone.
+                            retryCount={tokenOrders.every((order) => isTokenAlreadySent(order.tokenHandoffAt))
+                              ? tokenOrders.filter((order) => tokenSettlementNeedsRetry(order)).length
+                              : 0}
                             onFulfilled={() => { void mutate() }}
                           />
                         )}
@@ -358,6 +370,7 @@ export function GroupOrderHistory() {
                           tid={order.tid}
                           token={order.approvalToken as string}
                           branchName={order.branchName}
+                          needsRetry={tokenSettlementNeedsRetry(order)}
                           onFulfilled={() => { void mutate() }}
                         />
                       ))}
@@ -464,16 +477,24 @@ type CorrectableOrder = {
 function SendAllTokensButton({
   groupOrderId,
   count,
+  retryCount = 0,
   onFulfilled,
 }: Readonly<{
   groupOrderId: number
   count: number
+  /**
+   * Branch orders whose token already reached the admin but whose settlement
+   * failed; when every token has gone, the button retries those instead.
+   */
+  retryCount?: number
   /** Called once the hand-off has settled at least one order, so history can refresh. */
   onFulfilled?: () => void
 }>) {
   const { toast } = useToast()
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
+  const [failedCount, setFailedCount] = useState(0)
+  const retryable = Math.max(retryCount, failedCount)
 
   const sendAll = async () => {
     setSending(true)
@@ -483,6 +504,17 @@ function SendAllTokensButton({
         headers: { "Content-Type": "application/json" },
       })
       const payload = await res.json().catch(() => ({}))
+
+      // Tokens reached the admin (or had already), but some orders are still
+      // not fulfilled: say so, and leave the retry on offer.
+      const settlementFailure = readTokenSettlementFailure(payload)
+      if (settlementFailure) {
+        setSent(false)
+        setFailedCount(Math.max(1, Number(payload?.failedCount) || 0))
+        toast({ title: TOKEN_SETTLEMENT_FAILED_TITLE, description: settlementFailure.message, variant: "destructive" })
+        if (payload?.fulfilledCount) onFulfilled?.()
+        return
+      }
 
       if (!res.ok) {
         toast({
@@ -494,6 +526,7 @@ function SendAllTokensButton({
       }
 
       setSent(true)
+      setFailedCount(0)
       toast({
         title: payload?.fulfilledCount ? "Tokens sent — orders fulfilled" : "Tokens sent to admin",
         description: payload?.message || `${count} tokens shared in one email.`,
@@ -516,15 +549,16 @@ function SendAllTokensButton({
     <Button
       type="button"
       size="sm"
-      variant="outline"
+      variant={retryable > 0 && !sent ? "destructive" : "outline"}
       className="h-7 gap-1.5 rounded-lg text-xs"
       onClick={sendAll}
       disabled={sending}
     >
-      <Mail className="h-3.5 w-3.5" />
+      {retryable > 0 && !sent ? <RotateCw className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}
       {(() => {
         if (sending) return "Sending…"
-        return sent ? "All tokens sent" : `Email all ${count} to admin`
+        if (sent) return "All tokens sent"
+        return retryable > 0 ? `${TOKEN_SETTLEMENT_RETRY_LABEL} (${retryable})` : `Email all ${count} to admin`
       })()}
     </Button>
   )

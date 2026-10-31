@@ -29,7 +29,8 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { OrganizationCombobox } from "@/components/warehouse/organization-combobox"
+import { EditApricartAccountDialog } from "@/components/users/edit-apricart-account-dialog"
+import { MultiSelectCombobox } from "@/components/warehouse/multi-select-combobox"
 import { toast } from "@/hooks/use-toast"
 import { fetcher } from "@/lib/fetcher"
 import { WAREHOUSE_CITY_BULK_MAX, WAREHOUSE_CITY_ORGANIZATION_MAX_PER_USER } from "@/lib/warehouse-access"
@@ -41,6 +42,7 @@ import {
   cityLabel,
   describeWarehouseReach,
   inBatches,
+  organizationSelectionChanges,
   toggleAllBranches,
   toggleBranch,
   type CityChoice,
@@ -49,6 +51,9 @@ import {
 type Member = {
   id: string
   fullName: string | null
+  firstName: string | null
+  lastName: string | null
+  phone: string | null
   username: string | null
   email: string
   isActive: boolean
@@ -441,9 +446,10 @@ function BulkButtons({
 
 /**
  * One member's reach. Whole cities are saved one at a time from their tab;
- * single branches are picked one organization at a time, and that save
- * replaces that organization's single branches only. A branch a city already
- * covers is shown ticked and locked, because unticking it would not remove it.
+ * single branches are picked for one or more organizations at a time, and the
+ * save sends one request per organization whose ticks changed, each replacing
+ * that organization's single branches only. A branch a city already covers is
+ * shown ticked and locked, because unticking it would not remove it.
  */
 function BranchesDialog({
   member,
@@ -452,23 +458,25 @@ function BranchesDialog({
   onSaved,
 }: Readonly<{ member: Member; team: WarehouseTeam; onClose: () => void; onSaved: () => void }>) {
   const firstAssigned = team.branches.find((branch) => member.branchIds.includes(branch.id))?.organizationId
-  const [organizationId, setOrganizationId] = useState<number | null>(firstAssigned ?? team.organizations[0]?.id ?? null)
+  const [organizationIds, setOrganizationIds] = useState<number[]>(() => {
+    const first = firstAssigned ?? team.organizations[0]?.id
+    return first === undefined ? [] : [first]
+  })
   const [assigned, setAssigned] = useState<number[]>(member.branchIds)
   const [cityReach, setCityReach] = useState<CityReach>({
     cityKeys: member.cityKeys,
     cityOrganizationIds: member.cityOrganizationIds,
   })
-  const [selected, setSelected] = useState<number[]>(
-    organizationId === null ? [] : branchesInOrganization(member.branchIds, team.branches, organizationId),
-  )
+  const [selected, setSelected] = useState<number[]>(member.branchIds)
   const [filter, setFilter] = useState("")
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
-  const organizationBranches = useMemo(
-    () => team.branches.filter((branch) => branch.organizationId === organizationId),
-    [team.branches, organizationId],
-  )
+  const organizationName = new Map(team.organizations.map((organization) => [organization.id, organization.name]))
+  const organizationBranches = useMemo(() => {
+    const chosen = new Set(organizationIds)
+    return team.branches.filter((branch) => chosen.has(branch.organizationId))
+  }, [team.branches, organizationIds])
   const coveredIds = new Set(
     organizationBranches.filter((branch) => cityCoveringBranch(branch, cityReach)).map((branch) => branch.id),
   )
@@ -479,12 +487,11 @@ function BranchesDialog({
   ))
   const shownUncoveredIds = shown.filter((branch) => !coveredIds.has(branch.id)).map((branch) => branch.id)
   const allShownSelected = shownUncoveredIds.length > 0 && shownUncoveredIds.every((id) => selected.includes(id))
-  const saved = organizationId === null ? [] : branchesInOrganization(assigned, team.branches, organizationId)
-  const dirty = saved.join(",") !== [...selected].sort((a, b) => a - b).join(",")
+  const changes = organizationSelectionChanges({ organizationIds, branches: team.branches, saved: assigned, selected })
+  const dirty = changes.length > 0
 
-  const switchOrganization = (next: number) => {
-    setOrganizationId(next)
-    setSelected(branchesInOrganization(assigned, team.branches, next))
+  const switchOrganizations = (next: number[]) => {
+    setOrganizationIds(next)
     setFilter("")
     setFormError(null)
   }
@@ -498,27 +505,46 @@ function BranchesDialog({
     onSaved()
   }
 
-  const save = async () => {
-    if (saving || organizationId === null) return
-    setSaving(true)
-    setFormError(null)
+  /** The refusal, or null once saved. */
+  const saveOne = async (change: { organizationId: number; branchIds: number[] }): Promise<string | null> => {
     try {
       const response = await fetch(`${WAREHOUSE_TEAM_KEY}/${member.id}/branches`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ organizationId, branchIds: selected }),
+        body: JSON.stringify(change),
       })
-      if (!response.ok) {
-        setFormError(await errorMessage(response, "The branches could not be saved"))
-        return
-      }
-      const others = assigned.filter((id) => !organizationBranches.some((branch) => branch.id === id))
-      setAssigned([...others, ...selected].sort((a, b) => a - b))
-      toast({ title: "Branches saved", description: member.fullName ?? member.email })
-      onSaved()
+      return response.ok ? null : await errorMessage(response, "The branches could not be saved")
     } catch {
-      setFormError("The request could not be sent. Check the connection and try again.")
+      return "The request could not be sent. Check the connection and try again."
+    }
+  }
+
+  // One organization per request, in order; a refusal stops the rest, and what was saved before it stays saved.
+  const save = async () => {
+    if (saving || !dirty) return
+    setSaving(true)
+    setFormError(null)
+    let next = assigned
+    let saved = 0
+    try {
+      for (const change of changes) {
+        const failure = await saveOne(change)
+        if (failure) {
+          setFormError(changes.length > 1
+            ? `${failure} ${saved} of ${changes.length} organizations were saved before this; the rest were not.`
+            : failure)
+          break
+        }
+        const own = new Set(team.branches.filter((branch) => branch.organizationId === change.organizationId).map((branch) => branch.id))
+        next = [...next.filter((id) => !own.has(id)), ...change.branchIds].sort((a, b) => a - b)
+        saved += 1
+      }
     } finally {
+      if (saved > 0) {
+        setAssigned(next)
+        toast({ title: "Branches saved", description: member.fullName ?? member.email })
+        onSaved()
+      }
       setSaving(false)
     }
   }
@@ -549,20 +575,22 @@ function BranchesDialog({
           </TabsContent>
           <TabsContent value="branches" className="space-y-3">
             <div className="space-y-1">
-              <Label htmlFor="warehouse-team-org">Organization</Label>
-              <OrganizationCombobox
+              <Label htmlFor="warehouse-team-org">Organizations</Label>
+              <MultiSelectCombobox
                 id="warehouse-team-org"
-                value={organizationId}
+                value={organizationIds}
                 options={team.organizations.map((organization) => ({
                   id: organization.id,
                   label: organization.name,
-                  keywords: organization.code ?? undefined,
+                  keywords: organization.code,
                   hint: `(${branchesInOrganization(assigned, team.branches, organization.id).length})`,
                 }))}
+                nouns={{ one: "organization", many: "organizations" }}
+                placeholder="Choose organizations"
                 disabled={saving || dirty}
-                onValueChange={switchOrganization}
+                onChange={switchOrganizations}
               />
-              {dirty && <p className="text-xs text-amber-600">Save or reset this organization first.</p>}
+              {dirty && <p className="text-xs text-amber-600">Save or reset the ticked branches first.</p>}
             </div>
             <div className="flex items-center gap-2">
               <Input aria-label="Filter branches" placeholder="Filter branches" value={filter} onChange={(event) => setFilter(event.target.value)} maxLength={100} />
@@ -572,7 +600,8 @@ function BranchesDialog({
             </div>
             <fieldset className="max-h-72 space-y-1 overflow-y-auto rounded-md border p-2" disabled={saving}>
               <legend className="sr-only">Branches</legend>
-              {shown.length === 0 && <p className="p-2 text-sm text-muted-foreground">No branches.</p>}
+              {organizationIds.length === 0 && <p className="p-2 text-sm text-muted-foreground">Choose organizations to list their branches.</p>}
+              {organizationIds.length > 0 && shown.length === 0 && <p className="p-2 text-sm text-muted-foreground">No branches.</p>}
               {shown.map((branch) => {
                 const id = `warehouse-branch-${branch.id}`
                 const viaCity = cityCoveringBranch(branch, cityReach)
@@ -587,6 +616,9 @@ function BranchesDialog({
                     <label htmlFor={id} className="flex flex-1 flex-wrap items-center gap-2 text-sm">
                       {branch.name}
                       {branch.city && <span className="text-xs text-muted-foreground">{branch.city}</span>}
+                      {organizationIds.length > 1 && (
+                        <span className="text-xs text-muted-foreground">· {organizationName.get(branch.organizationId)}</span>
+                      )}
                       {viaCity && <Badge variant="secondary">via {cityLabel(viaCity, team.cities)}</Badge>}
                       {branch.status && branch.status.toLowerCase() !== "active" && <Badge variant="outline">{branch.status}</Badge>}
                     </label>
@@ -595,15 +627,18 @@ function BranchesDialog({
               })}
             </fieldset>
             <p className="text-xs text-muted-foreground">
-              {served} of {organizationBranches.length} served in this organization
+              {served} of {organizationBranches.length} served in {organizationIds.length === 1 ? "this organization" : `these ${organizationIds.length} organizations`}
               {coveredIds.size > 0 && ` (${coveredIds.size} through a city)`}.
             </p>
+            {changes.length > 1 && (
+              <p className="text-xs text-muted-foreground">Saves {changes.length} organizations, one after another.</p>
+            )}
             {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
             <div className="flex justify-end gap-2">
               {dirty && (
-                <Button variant="secondary" onClick={() => setSelected(saved)} disabled={saving}>Reset</Button>
+                <Button variant="secondary" onClick={() => setSelected(assigned)} disabled={saving}>Reset</Button>
               )}
-              <Button onClick={() => { void save() }} disabled={saving || !dirty || organizationId === null}>
+              <Button onClick={() => { void save() }} disabled={saving || !dirty}>
                 {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Save
               </Button>
@@ -625,6 +660,7 @@ function BranchesDialog({
 export function WarehouseTeamCard() {
   const { data, error, isLoading, mutate } = useSWR<WarehouseTeam>(WAREHOUSE_TEAM_KEY, fetcher)
   const [editing, setEditing] = useState<Member | null>(null)
+  const [editingAccount, setEditingAccount] = useState<Member | null>(null)
 
   return (
     <Card>
@@ -667,8 +703,11 @@ export function WarehouseTeamCard() {
                     <td className="py-2 pr-3">
                       <Badge variant={member.isActive ? "default" : "outline"}>{member.isActive ? "Active" : "Inactive"}</Badge>
                     </td>
-                    <td className="py-2 text-right">
-                      <Button size="sm" variant="outline" onClick={() => setEditing(member)}>Branches</Button>
+                    <td className="py-2">
+                      <div className="flex justify-end gap-2">
+                        <Button size="sm" variant="outline" onClick={() => setEditingAccount(member)}>Edit</Button>
+                        <Button size="sm" variant="outline" onClick={() => setEditing(member)}>Branches</Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -677,6 +716,15 @@ export function WarehouseTeamCard() {
           </div>
         )}
       </CardContent>
+      {editingAccount && (
+        <EditApricartAccountDialog
+          key={editingAccount.id}
+          account={editingAccount}
+          noun="warehouse user"
+          onClose={() => setEditingAccount(null)}
+          onSaved={() => { void mutate() }}
+        />
+      )}
       {editing && data && (
         <BranchesDialog
           key={editing.id}

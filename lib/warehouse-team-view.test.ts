@@ -9,6 +9,7 @@ import {
   describeWarehouseReach,
   effectiveWarehouseBranchIds,
   inBatches,
+  organizationSelectionChanges,
   toggleAllBranches,
   toggleBranch,
 } from "@/lib/warehouse-team-view"
@@ -155,5 +156,27 @@ describe("whole cities", () => {
         { key: "gone", label: "gone", branchCount: 0, organizationCount: 0, outside: true },
       ])
     })
+  })
+})
+
+describe("saving several organizations' branches", () => {
+  it("names each chosen organization whose ticks changed, with its ticks, once", () => {
+    expect(organizationSelectionChanges({
+      organizationIds: [2, 1, 2, 3],
+      branches,
+      saved: [11, 21],
+      selected: [12, 11, 21, 41],
+    })).toEqual([{ organizationId: 1, branchIds: [11, 12] }])
+  })
+
+  it("sends an organization emptied of ticks, and never one that was not chosen", () => {
+    expect(organizationSelectionChanges({ organizationIds: [2], branches, saved: [11, 21], selected: [] }))
+      .toEqual([{ organizationId: 2, branchIds: [] }])
+    expect(organizationSelectionChanges({ organizationIds: [], branches, saved: [11], selected: [] })).toEqual([])
+  })
+
+  it("names every chosen organization when asked to include unchanged ones", () => {
+    expect(organizationSelectionChanges({ organizationIds: [1, 3], branches, saved: [11], selected: [11], includeUnchanged: true }))
+      .toEqual([{ organizationId: 1, branchIds: [11] }, { organizationId: 3, branchIds: [] }])
   })
 })

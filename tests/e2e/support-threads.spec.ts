@@ -120,7 +120,7 @@ test.describe.serial("support threads", () => {
     await expect(page.getByRole("heading", { name: "Support queue" })).toBeVisible({ timeout: 150_000 })
     await expect(page.getByRole("region", { name: "Support summary" })).toBeVisible()
 
-    await page.getByPlaceholder("Search by order ID").fill(order.tid)
+    await page.getByPlaceholder("Search by order or transaction ID").fill(order.tid)
     const row = page.getByRole("link").filter({ hasText: SUBJECT })
     await expect(row).toBeVisible({ timeout: 150_000 })
     await row.click()

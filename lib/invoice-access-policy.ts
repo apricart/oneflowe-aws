@@ -132,6 +132,9 @@ const INVOICE_ROLE_RULES: Record<Role, InvoiceRoleRule> = {
   RIDER: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
   // Every invoice of the organizations assigned to it, like its order list.
   FINANCE: { tenant: "assigned-organizations", branches: "all", ownOrdersOnly: false },
+  // Reads no invoice: its area is purchasing alone. No organization, so the
+  // tenant check refuses it, and "none" refuses it again.
+  PROCUREMENT: { tenant: "own-organization", branches: "none", ownOrdersOnly: true },
 }
 
 /** Roles whose tenant reach is the organizations assigned to the account. */

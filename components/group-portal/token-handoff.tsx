@@ -1,11 +1,17 @@
 "use client"
 
 import { useState } from "react"
-import { Copy, Mail, ShieldCheck } from "lucide-react"
+import { Copy, Mail, RotateCw, ShieldCheck } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { useToast } from "@/hooks/use-toast"
-import { TOKEN_SENT_LABEL, readTokenSendRefusal } from "@/lib/order-token-handoff"
+import {
+  TOKEN_SENT_LABEL,
+  TOKEN_SETTLEMENT_FAILED_TITLE,
+  TOKEN_SETTLEMENT_RETRY_LABEL,
+  readTokenSendRefusal,
+  readTokenSettlementFailure,
+} from "@/lib/order-token-handoff"
 
 /**
  * The fulfilment token and its hand-off to admin operations.
@@ -39,18 +45,27 @@ export function TokenHandoff({
   tid,
   token,
   branchName,
+  needsRetry = false,
   onFulfilled,
 }: Readonly<{
   orderId: number
   tid: string
   token: string
   branchName?: string
+  /**
+   * The token already reached the admin but the delivered order could not be
+   * settled (`tokenSettlementNeedsRetry`), so the action is a retry, which the
+   * server answers without emailing the token again.
+   */
+  needsRetry?: boolean
   /** Called once the order has moved on — settled by this hand-off, or found already settled — so the surface can refresh. */
   onFulfilled?: () => void
 }>) {
   const { toast } = useToast()
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
+  const [settlementFailed, setSettlementFailed] = useState(false)
+  const retrying = !sent && (needsRetry || settlementFailed)
 
   const label = branchName ? `${tid} · ${branchName}` : tid
 
@@ -90,6 +105,19 @@ export function TokenHandoff({
         return
       }
 
+      // The token reached the admin (or had already), but the order is still
+      // not fulfilled: say so, and leave the retry on offer.
+      const settlementFailure = readTokenSettlementFailure(payload)
+      if (settlementFailure) {
+        setSettlementFailed(true)
+        toast({
+          title: TOKEN_SETTLEMENT_FAILED_TITLE,
+          description: `${label} — ${settlementFailure.message}`,
+          variant: "destructive",
+        })
+        return
+      }
+
       if (!res.ok) {
         toast({
           title: "Token email not sent",
@@ -100,9 +128,10 @@ export function TokenHandoff({
       }
 
       setSent(true)
+      setSettlementFailed(false)
       toast({
         title: payload?.fulfilled ? "Token sent — order fulfilled" : "Token sent to admin",
-        description: `${label} — ${handoffOutcome(payload)}`,
+        description: payload?.retried ? `${label} — ${payload.message}` : `${label} — ${handoffOutcome(payload)}`,
       })
       if (payload?.fulfilled) onFulfilled?.()
     } catch {
@@ -127,6 +156,11 @@ export function TokenHandoff({
           <p className="truncate font-mono text-sm font-semibold text-slate-900 dark:text-slate-100">
             {token}
           </p>
+          {retrying && (
+            <p role="alert" className="mt-0.5 text-xs font-medium text-rose-600 dark:text-rose-400">
+              The token reached the admin, but the order could not be marked fulfilled. Retry — it will not be emailed twice.
+            </p>
+          )}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -144,16 +178,19 @@ export function TokenHandoff({
         <Button
           type="button"
           size="sm"
-          variant="outline"
+          variant={retrying ? "destructive" : "outline"}
           className="h-8 gap-1 rounded-lg"
           onClick={sendToken}
           disabled={sending || sent}
-          aria-label={`Email fulfilment token for ${label} to admin operations`}
+          aria-label={retrying
+            ? `Retry fulfilment for ${label}; its token already reached the admin`
+            : `Email fulfilment token for ${label} to admin operations`}
         >
-          <Mail className="h-3.5 w-3.5" />
+          {retrying ? <RotateCw className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}
           {(() => {
-            if (sending) return "Sending…"
-            return sent ? "Sent to admin" : "Email to admin"
+            if (sending) return retrying ? "Retrying…" : "Sending…"
+            if (sent) return "Sent to admin"
+            return retrying ? TOKEN_SETTLEMENT_RETRY_LABEL : "Email to admin"
           })()}
         </Button>
       </div>

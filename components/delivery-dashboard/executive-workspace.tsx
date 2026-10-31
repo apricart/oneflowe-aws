@@ -8,6 +8,7 @@ import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-m
 import { DeliveryDashboard } from "@/components/delivery-dashboard/delivery-dashboard"
 import { EXECUTIVE_APPROVALS_KEY_PREFIX, ExecutiveApprovals } from "@/components/executive-approvals/executive-approvals"
 import { PriceContractAlerts } from "@/components/price-contracts/price-contract-alerts"
+import { CustomerReturnList } from "@/components/procurement/customer-returns"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { APRICART_EXECUTIVE_LABEL } from "@/lib/apricart-executive-access"
 import type { ExecutiveApprovalCounts } from "@/lib/executive-approval-query"
@@ -62,12 +63,22 @@ export function ExecutiveWorkspace() {
                 </span>
               )}
             </TabsTrigger>
+            <TabsTrigger value="returns">Customer returns</TabsTrigger>
           </TabsList>
           <TabsContent value="delivery">
             <DeliveryDashboard />
           </TabsContent>
           <TabsContent value="approvals">
             <ExecutiveApprovals />
+          </TabsContent>
+          {/* Returns at the warehouses it is an executive member of
+              (plans/OF-PROCUREMENT-purchasing.md). */}
+          <TabsContent value="returns">
+            <CustomerReturnList
+              listEndpoint="/api/v1/executive/returns"
+              decideEndpoint={(id) => `/api/v1/executive/returns/${id}`}
+              emptyText="No customer returns at your warehouses."
+            />
           </TabsContent>
         </Tabs>
       </main>

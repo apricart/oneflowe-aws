@@ -3013,6 +3013,427 @@ export const orderWarehouseTransfers = pgTable(
   ],
 )
 
+/**
+ * What each Apricart warehouse holds of each product: the **on hand** figure.
+ * Read only while `STOCK_LEDGER_MODE` is "warehouse" (`lib/stock-ledger-policy.ts`).
+ * What open orders have promised is never stored — it is worked out from the
+ * orders, live (`lib/warehouse-stock.ts`). Written only by
+ * `lib/server/warehouse-stock.ts` and the opening script, each with a
+ * `stock_movements` row in the same transaction.
+ * See plans/OF-STOCK-per-warehouse-stock.md.
+ */
+export const warehouseStock = pgTable(
+  "warehouse_stock",
+  {
+    id: serial("id").primaryKey(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id)
+      .notNull(),
+    onHandQuantity: numeric("on_hand_quantity", { precision: 12, scale: 3, mode: "number" }).notNull().default(0),
+    updatedByUserId: uuid("updated_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("warehouse_stock_warehouse_product_uq").on(t.warehouseId, t.globalProductId),
+    index("warehouse_stock_product_idx").on(t.globalProductId),
+    check("warehouse_stock_on_hand_ck", sql`${t.onHandQuantity} >= 0`),
+  ],
+)
+
+/**
+ * Every change to a warehouse's on-hand figure, append-only (a trigger refuses
+ * UPDATE, and DELETE outside the opening script's own rollback and test
+ * cleanup). `order_id` and `actor_user_id` deliberately carry no foreign key:
+ * the history outlives a deleted order or account, as `audit_logs` does.
+ */
+export const stockMovements = pgTable(
+  "stock_movements",
+  {
+    id: serial("id").primaryKey(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id)
+      .notNull(),
+    movementType: varchar("movement_type", { length: 32 }).notNull(),
+    quantityDelta: numeric("quantity_delta", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    balanceAfter: numeric("balance_after", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    orderId: integer("order_id"),
+    // The purchase receipt or customer return a movement came from
+    // (plans/OF-PROCUREMENT-purchasing.md); no foreign key, like order_id.
+    goodsReceiptId: integer("goods_receipt_id"),
+    customerReturnId: integer("customer_return_id"),
+    reason: varchar("reason", { length: 500 }),
+    batchId: varchar("batch_id", { length: 64 }),
+    actorUserId: uuid("actor_user_id"),
+    actorRole: varchar("actor_role", { length: 64 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("stock_movements_warehouse_product_idx").on(t.warehouseId, t.globalProductId, t.id),
+    index("stock_movements_order_idx").on(t.orderId).where(sql`${t.orderId} IS NOT NULL`),
+    // One issue per order and product: a retried In Process step finds it and stops.
+    uniqueIndex("stock_movements_order_issue_uq")
+      .on(t.orderId, t.globalProductId)
+      .where(sql`${t.movementType} = 'ORDER_ISSUE'`),
+    uniqueIndex("stock_movements_receipt_uq")
+      .on(t.goodsReceiptId, t.globalProductId)
+      .where(sql`${t.movementType} = 'PURCHASE_RECEIPT'`),
+    uniqueIndex("stock_movements_return_uq")
+      .on(t.customerReturnId, t.globalProductId)
+      .where(sql`${t.movementType} = 'CUSTOMER_RETURN'`),
+    check(
+      "stock_movements_type_ck",
+      sql`${t.movementType} IN ('OPENING', 'ADJUSTMENT', 'ORDER_ISSUE', 'PURCHASE_RECEIPT', 'CUSTOMER_RETURN')`,
+    ),
+    check("stock_movements_delta_ck", sql`${t.quantityDelta} <> 0`),
+    check("stock_movements_balance_ck", sql`${t.balanceAfter} >= 0`),
+    check(
+      "stock_movements_order_ck",
+      sql`(${t.movementType} = 'ORDER_ISSUE') = (${t.orderId} IS NOT NULL)`,
+    ),
+    check(
+      "stock_movements_receipt_ck",
+      sql`(${t.movementType} = 'PURCHASE_RECEIPT') = (${t.goodsReceiptId} IS NOT NULL)`,
+    ),
+    check(
+      "stock_movements_return_ck",
+      sql`(${t.movementType} = 'CUSTOMER_RETURN') = (${t.customerReturnId} IS NOT NULL)`,
+    ),
+  ],
+)
+
+// ========================================
+// PROCUREMENT (plans/OF-PROCUREMENT-purchasing.md)
+// ========================================
+
+/** One row (id 1): the over-delivery tolerance. Absent reads the default, 20%. */
+export const procurementSettings = pgTable(
+  "procurement_settings",
+  {
+    id: integer("id").primaryKey(),
+    overDeliveryToleranceBps: integer("over_delivery_tolerance_bps").notNull(),
+    updatedByUserId: uuid("updated_by_user_id"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    check("procurement_settings_single_row_ck", sql`${t.id} = 1`),
+    check("procurement_settings_tolerance_ck", sql`${t.overDeliveryToleranceBps} BETWEEN 0 AND 10000`),
+  ],
+)
+
+/** Apricart's own suppliers — platform-wide, unlike the legacy org-scoped `suppliers`. */
+export const procurementSuppliers = pgTable(
+  "procurement_suppliers",
+  {
+    id: serial("id").primaryKey(),
+    name: varchar("name", { length: 200 }).notNull(),
+    contactName: varchar("contact_name", { length: 200 }),
+    phone: varchar("phone", { length: 32 }),
+    email: varchar("email", { length: 255 }),
+    address: varchar("address", { length: 500 }),
+    ntn: varchar("ntn", { length: 64 }),
+    status: varchar("status", { length: 16 }).notNull().default("ACTIVE"),
+    createdByUserId: uuid("created_by_user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("procurement_suppliers_name_uq").on(sql`lower(${t.name})`),
+    check("procurement_suppliers_status_ck", sql`${t.status} IN ('ACTIVE', 'INACTIVE')`),
+  ],
+)
+
+export const purchaseRequisitions = pgTable(
+  "purchase_requisitions",
+  {
+    id: serial("id").primaryKey(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("SUBMITTED"),
+    note: varchar("note", { length: 1000 }),
+    requestedByUserId: uuid("requested_by_user_id"),
+    requestedByRole: varchar("requested_by_role", { length: 64 }),
+    decidedByUserId: uuid("decided_by_user_id"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionReason: varchar("decision_reason", { length: 500 }),
+    purchaseOrderId: integer("purchase_order_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("purchase_requisitions_warehouse_idx").on(t.warehouseId, t.status),
+    check("purchase_requisitions_status_ck", sql`${t.status} IN ('SUBMITTED', 'CONVERTED', 'REJECTED', 'CANCELLED')`),
+    check(
+      "purchase_requisitions_converted_ck",
+      sql`(${t.status} = 'CONVERTED') = (${t.purchaseOrderId} IS NOT NULL)`,
+    ),
+  ],
+)
+
+export const purchaseRequisitionLines = pgTable(
+  "purchase_requisition_lines",
+  {
+    id: serial("id").primaryKey(),
+    requisitionId: integer("requisition_id")
+      .references(() => purchaseRequisitions.id, { onDelete: "cascade" })
+      .notNull(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id)
+      .notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    note: varchar("note", { length: 500 }),
+  },
+  (t) => [
+    uniqueIndex("purchase_requisition_lines_product_uq").on(t.requisitionId, t.globalProductId),
+    check("purchase_requisition_lines_quantity_ck", sql`${t.quantity} > 0`),
+  ],
+)
+
+export const purchaseOrders = pgTable(
+  "purchase_orders",
+  {
+    id: serial("id").primaryKey(),
+    supplierId: integer("supplier_id")
+      .references(() => procurementSuppliers.id)
+      .notNull(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    requisitionId: integer("requisition_id").references(() => purchaseRequisitions.id),
+    status: varchar("status", { length: 24 }).notNull().default("DRAFT"),
+    expectedDeliveryDate: date("expected_delivery_date"),
+    notes: varchar("notes", { length: 1000 }),
+    // Snapshot of the setting when Super Admin approved it; null before.
+    overDeliveryToleranceBps: integer("over_delivery_tolerance_bps"),
+    subtotalCents: bigint("subtotal_cents", { mode: "number" }).notNull().default(0),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull().default(0),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
+    createdByUserId: uuid("created_by_user_id"),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+    approvedByUserId: uuid("approved_by_user_id"),
+    approvedAt: timestamp("approved_at", { withTimezone: true }),
+    decidedByUserId: uuid("decided_by_user_id"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionReason: varchar("decision_reason", { length: 500 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("purchase_orders_status_idx").on(t.status, t.id),
+    index("purchase_orders_warehouse_idx").on(t.warehouseId, t.status),
+    index("purchase_orders_supplier_idx").on(t.supplierId),
+    uniqueIndex("purchase_orders_requisition_uq").on(t.requisitionId).where(sql`${t.requisitionId} IS NOT NULL`),
+    check(
+      "purchase_orders_status_ck",
+      sql`${t.status} IN ('DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CLOSED', 'REJECTED', 'CANCELLED')`,
+    ),
+    check(
+      "purchase_orders_tolerance_ck",
+      sql`${t.overDeliveryToleranceBps} IS NULL OR ${t.overDeliveryToleranceBps} BETWEEN 0 AND 10000`,
+    ),
+    check(
+      "purchase_orders_approved_ck",
+      sql`${t.status} NOT IN ('APPROVED', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CLOSED') OR (${t.approvedAt} IS NOT NULL AND ${t.overDeliveryToleranceBps} IS NOT NULL)`,
+    ),
+    check(
+      "purchase_orders_totals_ck",
+      sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} = ${t.subtotalCents} + ${t.taxCents}`,
+    ),
+  ],
+)
+
+export const purchaseOrderLines = pgTable(
+  "purchase_order_lines",
+  {
+    id: serial("id").primaryKey(),
+    purchaseOrderId: integer("purchase_order_id")
+      .references(() => purchaseOrders.id, { onDelete: "cascade" })
+      .notNull(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id)
+      .notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    unitCostCents: bigint("unit_cost_cents", { mode: "number" }).notNull(),
+    taxRateBps: integer("tax_rate_bps").notNull().default(0),
+    lineNetCents: bigint("line_net_cents", { mode: "number" }).notNull(),
+    lineTaxCents: bigint("line_tax_cents", { mode: "number" }).notNull(),
+    lineTotalCents: bigint("line_total_cents", { mode: "number" }).notNull(),
+    // Kept by the goods receipts, under the purchase order's row lock.
+    receivedQuantity: numeric("received_quantity", { precision: 12, scale: 3, mode: "number" }).notNull().default(0),
+  },
+  (t) => [
+    uniqueIndex("purchase_order_lines_product_uq").on(t.purchaseOrderId, t.globalProductId),
+    check("purchase_order_lines_quantity_ck", sql`${t.quantity} > 0`),
+    check(
+      "purchase_order_lines_cost_ck",
+      sql`${t.unitCostCents} >= 0 AND ${t.lineNetCents} >= 0 AND ${t.lineTaxCents} >= 0 AND ${t.lineTotalCents} = ${t.lineNetCents} + ${t.lineTaxCents}`,
+    ),
+    check("purchase_order_lines_tax_rate_ck", sql`${t.taxRateBps} BETWEEN 0 AND 10000`),
+    check("purchase_order_lines_received_ck", sql`${t.receivedQuantity} >= 0`),
+  ],
+)
+
+/** Append-only (trigger): what arrived against a purchase order. */
+export const goodsReceipts = pgTable(
+  "goods_receipts",
+  {
+    id: serial("id").primaryKey(),
+    purchaseOrderId: integer("purchase_order_id")
+      .references(() => purchaseOrders.id)
+      .notNull(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    supplierDeliveryNote: varchar("supplier_delivery_note", { length: 120 }),
+    notes: varchar("notes", { length: 1000 }),
+    receivedByUserId: uuid("received_by_user_id"),
+    receivedByRole: varchar("received_by_role", { length: 64 }),
+    receivedAt: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [index("goods_receipts_po_idx").on(t.purchaseOrderId)],
+)
+
+export const goodsReceiptLines = pgTable(
+  "goods_receipt_lines",
+  {
+    id: serial("id").primaryKey(),
+    goodsReceiptId: integer("goods_receipt_id")
+      .references(() => goodsReceipts.id)
+      .notNull(),
+    purchaseOrderLineId: integer("purchase_order_line_id")
+      .references(() => purchaseOrderLines.id)
+      .notNull(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id)
+      .notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("goods_receipt_lines_po_line_uq").on(t.goodsReceiptId, t.purchaseOrderLineId),
+    check("goods_receipt_lines_quantity_ck", sql`${t.quantity} > 0`),
+  ],
+)
+
+export const supplierInvoices = pgTable(
+  "supplier_invoices",
+  {
+    id: serial("id").primaryKey(),
+    supplierId: integer("supplier_id")
+      .references(() => procurementSuppliers.id)
+      .notNull(),
+    purchaseOrderId: integer("purchase_order_id")
+      .references(() => purchaseOrders.id)
+      .notNull(),
+    invoiceNumber: varchar("invoice_number", { length: 64 }).notNull(),
+    invoiceDate: date("invoice_date").notNull(),
+    subtotalCents: bigint("subtotal_cents", { mode: "number" }).notNull(),
+    taxCents: bigint("tax_cents", { mode: "number" }).notNull(),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull(),
+    matchStatus: varchar("match_status", { length: 16 }).notNull(),
+    status: varchar("status", { length: 16 }).notNull().default("RECORDED"),
+    recordedByUserId: uuid("recorded_by_user_id"),
+    recordedByRole: varchar("recorded_by_role", { length: 64 }),
+    decidedByUserId: uuid("decided_by_user_id"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionReason: varchar("decision_reason", { length: 500 }),
+    paidByUserId: uuid("paid_by_user_id"),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+    paymentReference: varchar("payment_reference", { length: 120 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("supplier_invoices_number_uq").on(t.supplierId, sql`lower(${t.invoiceNumber})`),
+    index("supplier_invoices_po_idx").on(t.purchaseOrderId),
+    index("supplier_invoices_status_idx").on(t.status, t.id),
+    check("supplier_invoices_match_ck", sql`${t.matchStatus} IN ('MATCHED', 'EXCEPTION')`),
+    check("supplier_invoices_status_ck", sql`${t.status} IN ('RECORDED', 'APPROVED', 'REJECTED', 'PAID')`),
+    check(
+      "supplier_invoices_totals_ck",
+      sql`${t.subtotalCents} >= 0 AND ${t.taxCents} >= 0 AND ${t.totalCents} = ${t.subtotalCents} + ${t.taxCents}`,
+    ),
+    check("supplier_invoices_paid_ck", sql`(${t.status} = 'PAID') = (${t.paidAt} IS NOT NULL)`),
+  ],
+)
+
+export const supplierInvoiceLines = pgTable(
+  "supplier_invoice_lines",
+  {
+    id: serial("id").primaryKey(),
+    supplierInvoiceId: integer("supplier_invoice_id")
+      .references(() => supplierInvoices.id, { onDelete: "cascade" })
+      .notNull(),
+    purchaseOrderLineId: integer("purchase_order_line_id")
+      .references(() => purchaseOrderLines.id)
+      .notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    unitCostCents: bigint("unit_cost_cents", { mode: "number" }).notNull(),
+    lineNetCents: bigint("line_net_cents", { mode: "number" }).notNull(),
+    lineTaxCents: bigint("line_tax_cents", { mode: "number" }).notNull(),
+    lineTotalCents: bigint("line_total_cents", { mode: "number" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("supplier_invoice_lines_po_line_uq").on(t.supplierInvoiceId, t.purchaseOrderLineId),
+    check("supplier_invoice_lines_quantity_ck", sql`${t.quantity} > 0`),
+    check(
+      "supplier_invoice_lines_cost_ck",
+      sql`${t.unitCostCents} >= 0 AND ${t.lineNetCents} >= 0 AND ${t.lineTaxCents} >= 0 AND ${t.lineTotalCents} = ${t.lineNetCents} + ${t.lineTaxCents}`,
+    ),
+  ],
+)
+
+export const customerReturns = pgTable(
+  "customer_returns",
+  {
+    id: serial("id").primaryKey(),
+    warehouseId: integer("warehouse_id")
+      .references(() => apricartWarehouses.id)
+      .notNull(),
+    orderId: integer("order_id").references(() => orders.id, { onDelete: "set null" }),
+    status: varchar("status", { length: 16 }).notNull().default("PENDING"),
+    reason: varchar("reason", { length: 1000 }).notNull(),
+    recordedByUserId: uuid("recorded_by_user_id"),
+    recordedByRole: varchar("recorded_by_role", { length: 64 }),
+    decidedByUserId: uuid("decided_by_user_id"),
+    decidedByRole: varchar("decided_by_role", { length: 64 }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionReason: varchar("decision_reason", { length: 500 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index("customer_returns_warehouse_idx").on(t.warehouseId, t.status),
+    check("customer_returns_status_ck", sql`${t.status} IN ('PENDING', 'APPROVED', 'REJECTED')`),
+  ],
+)
+
+export const customerReturnLines = pgTable(
+  "customer_return_lines",
+  {
+    id: serial("id").primaryKey(),
+    customerReturnId: integer("customer_return_id")
+      .references(() => customerReturns.id, { onDelete: "cascade" })
+      .notNull(),
+    globalProductId: integer("global_product_id")
+      .references(() => globalProducts.id)
+      .notNull(),
+    quantity: numeric("quantity", { precision: 12, scale: 3, mode: "number" }).notNull(),
+    condition: varchar("condition", { length: 16 }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("customer_return_lines_product_uq").on(t.customerReturnId, t.globalProductId, t.condition),
+    check("customer_return_lines_quantity_ck", sql`${t.quantity} > 0`),
+    check("customer_return_lines_condition_ck", sql`${t.condition} IN ('RESALEABLE', 'DAMAGED')`),
+  ],
+)
+
 // ========================================
 // GROUP ORDERS (multi-branch submissions)
 // ========================================

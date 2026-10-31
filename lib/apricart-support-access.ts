@@ -73,6 +73,7 @@ export const APRICART_SUPPORT_API_RULES: readonly ApricartSupportApiRule[] = [
     pattern: /^\/api\/v1\/support\/threads\/\d+\/messages$/,
   },
   { route: `${SUPPORT_ROUTE}/stats/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/support\/stats$/ },
+  { route: `${SUPPORT_ROUTE}/filters/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/support\/filters$/ },
   { route: `${SUPPORT_ROUTE}/attachments/route.ts`, methods: ["POST"], pattern: /^\/api\/v1\/support\/attachments$/ },
   {
     route: `${SUPPORT_ROUTE}/attachments/[id]/route.ts`,

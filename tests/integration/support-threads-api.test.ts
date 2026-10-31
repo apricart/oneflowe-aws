@@ -7,12 +7,13 @@ import sharp from "sharp"
 
 import * as attachmentRoute from "@/app/api/v1/support/attachments/[id]/route"
 import * as attachmentsRoute from "@/app/api/v1/support/attachments/route"
+import * as filtersRoute from "@/app/api/v1/support/filters/route"
 import * as productsRoute from "@/app/api/v1/support/products/route"
 import * as statsRoute from "@/app/api/v1/support/stats/route"
 import * as messagesRoute from "@/app/api/v1/support/threads/[id]/messages/route"
 import * as threadRoute from "@/app/api/v1/support/threads/[id]/route"
 import * as threadsRoute from "@/app/api/v1/support/threads/route"
-import { emailOutbox, notifications, supportAttachments, supportThreads } from "@/db/schema"
+import { branches, emailOutbox, groups, notifications, supportAttachments, supportThreads } from "@/db/schema"
 import { closePool, db } from "@/lib/db"
 import {
   buildSupportAttachmentKey,
@@ -116,6 +117,7 @@ const patchThread = (id: string | number, body: unknown) =>
 const postMessage = (id: string | number, body: unknown) =>
   messagesRoute.POST(jsonRequest(`/api/v1/support/threads/${id}/messages`, "POST", body), params(id)).then(read)
 const getStats = () => statsRoute.GET().then(read)
+const getFilterOptions = () => filtersRoute.GET().then(read)
 const searchProducts = (q?: string) =>
   productsRoute.GET(query("/api/v1/support/products", { q })).then(read)
 const readAttachment = (id: string | number) =>
@@ -266,6 +268,7 @@ describe.skipIf(!hasTestDatabase)("Support threads — routes against a real dat
       ["PATCH thread", () => patchThread(seeded.ahmed, { status: "RESOLVED" })],
       ["POST message", () => postMessage(seeded.ahmed, { message: "hello" })],
       ["GET stats", () => getStats()],
+      ["GET filters", () => getFilterOptions()],
       ["GET products", () => searchProducts()],
       ["GET attachment", () => readAttachment(1)],
     ] as const
@@ -1237,6 +1240,115 @@ describe.skipIf(!hasTestDatabase)("Support threads — routes against a real dat
       // A client user is still not an assignee.
       expect((await patchThread(threadId, { assignedToUserId: f.headOfficeId })).status).toBe(200)
       expect((await threadRow(threadId)).assignedToUserId).toBeNull()
+    })
+  })
+
+  // ── Narrowing by place ─────────────────────────────────────────────────
+
+  describe("narrowing the queue by organization, branch and group", () => {
+    let northGroupId: number
+    /** A Head Office query, so raised at no branch, citing an order at South. */
+    let headOfficeCitesSouth: number
+
+    beforeAll(async () => {
+      const [group] = await db
+        .insert(groups)
+        .values({ organizationId: f.organizationId, name: `Northern ${f.suffix}`, createdByUserId: f.headOfficeId })
+        .returning({ id: groups.id })
+      northGroupId = group.id
+      await db.update(branches).set({ groupId: northGroupId }).where(eq(branches.id, f.northBranchId))
+      headOfficeCitesSouth = await raise(headOfficeA, "Head Office asks about Sana's order", { orderId: f.sanaOrderId })
+    })
+
+    afterAll(async () => {
+      await db.update(branches).set({ groupId: null }).where(eq(branches.id, f.northBranchId))
+      if (northGroupId) await db.delete(groups).where(eq(groups.id, northGroupId))
+    })
+
+    const northThreads = () => [seeded.ahmed, seeded.bilal, seeded.baNorth]
+
+    it("finds a branch's threads by where they were raised and by the order they cite", async () => {
+      signIn(apricart)
+      const north = ids((await listThreads({ branchId: f.northBranchId, pageSize: 50 })).body)
+      for (const id of northThreads()) expect(north).toContain(id)
+      for (const id of [seeded.sana, seeded.group, seeded.ho, seeded.foreign, headOfficeCitesSouth]) {
+        expect(north).not.toContain(id)
+      }
+
+      const south = ids((await listThreads({ branchId: f.southBranchId, pageSize: 50 })).body)
+      expect(south).toContain(seeded.sana)
+      expect(south, "a branchless thread is found through the order it cites").toContain(headOfficeCitesSouth)
+      expect(south).not.toContain(seeded.ahmed)
+    })
+
+    it("finds a group's threads through its branches", async () => {
+      signIn(headOfficeA)
+      const { status, body } = await listThreads({ groupId: northGroupId, pageSize: 50 })
+      expect(status).toBe(200)
+      for (const id of northThreads()) expect(ids(body)).toContain(id)
+      for (const id of [seeded.sana, seeded.group, seeded.ho, headOfficeCitesSouth]) expect(ids(body)).not.toContain(id)
+    })
+
+    it("combines the filters, and ignores a malformed one rather than matching nothing", async () => {
+      signIn(apricart)
+      const both = await listThreads({ organizationId: f.organizationId, groupId: northGroupId, branchId: f.northBranchId, pageSize: 50 })
+      expect(sorted(ids(both.body)).filter((id) => Object.values(seeded).includes(id))).toEqual(sorted(northThreads()))
+
+      signIn(headOfficeA)
+      const ignored = await listThreads({ branchId: "north", groupId: "-1" })
+      expect(ignored.status).toBe(200)
+      expect(ignored.body.total).toBe((await listThreads()).body.total)
+    })
+
+    it("never widens a caller past its own scope", async () => {
+      // Another tenant's branch or group, or a branch outside the caller's own.
+      const narrowed: Array<[Actor, Record<string, number>]> = [
+        [headOfficeB, { branchId: f.northBranchId }],
+        [headOfficeB, { groupId: northGroupId }],
+        [headOfficeA, { branchId: f.foreignBranchId }],
+        [branchAdminSouth, { branchId: f.northBranchId }],
+        [ahmed, { branchId: f.southBranchId }],
+      ]
+      for (const [actor, filter] of narrowed) {
+        signIn(actor)
+        const { status, body } = await listThreads(filter)
+        expect(status).toBe(200)
+        expect(body.items, `${actor.role} ${JSON.stringify(filter)}`).toEqual([])
+        expect(body.total).toBe(0)
+      }
+    })
+
+    it("offers only the places the caller has a thread at, and tenants only to Apricart", async () => {
+      signIn(apricart)
+      const all = await getFilterOptions()
+      expect(all.status).toBe(200)
+      expect(all.headers.get("cache-control")).toContain("private")
+      const orgIds = all.body.organizations.map((row: any) => row.id)
+      expect(orgIds).toEqual(expect.arrayContaining([f.organizationId, f.neighbourOrganizationId]))
+      const branchIds = all.body.branches.map((row: any) => row.id)
+      expect(branchIds).toEqual(expect.arrayContaining([f.northBranchId, f.southBranchId, f.foreignBranchId]))
+      expect(all.body.branches.find((row: any) => row.id === f.northBranchId)).toMatchObject({
+        organizationId: f.organizationId,
+        groupId: northGroupId,
+      })
+      expect(all.body.groups.map((row: any) => row.id)).toContain(northGroupId)
+
+      signIn(headOfficeA)
+      const tenantA = (await getFilterOptions()).body
+      expect(tenantA.organizations).toEqual([])
+      expect(sorted(tenantA.branches.map((row: any) => row.id))).toEqual(sorted([f.northBranchId, f.southBranchId]))
+      expect(tenantA.groups.map((row: any) => row.id)).toEqual([northGroupId])
+
+      signIn(headOfficeB)
+      const tenantB = (await getFilterOptions()).body
+      expect(tenantB.branches.map((row: any) => row.id)).toEqual([f.foreignBranchId])
+      expect(tenantB.groups).toEqual([])
+
+      // A requester reads only what it raised, so only its own branch is offered.
+      signIn(sana)
+      const own = (await getFilterOptions()).body
+      expect(own.branches.map((row: any) => row.id)).toEqual([f.southBranchId])
+      expect(own.groups).toEqual([])
     })
   })
 })

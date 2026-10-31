@@ -18,6 +18,7 @@ import { isWarehouseRole, warehouseUserShapeError } from "@/lib/warehouse-access
 import { apricartSupportUserShapeError, isApricartSupportRole } from "@/lib/apricart-support-access"
 import { isRiderRole, riderUserShapeError } from "@/lib/rider-access"
 import { financeOrganizationsError, financeUserShapeError, isFinanceRole } from "@/lib/finance-access"
+import { isProcurementRole, procurementUserShapeError } from "@/lib/procurement-access"
 import {
   FinanceOrganizationsInvalidError,
   loadFinanceOrganizationsForUsers,
@@ -68,6 +69,7 @@ function apricartStaffShapeError(
   else if (isApricartSupportRole(role)) shapeError = apricartSupportUserShapeError(organizationId, branchId)
   else if (isRiderRole(role)) shapeError = riderUserShapeError(organizationId, branchId)
   else if (isFinanceRole(role)) shapeError = financeUserShapeError(organizationId, branchId)
+  else if (isProcurementRole(role)) shapeError = procurementUserShapeError(organizationId, branchId)
   else return undefined
   return shapeError ? { message: shapeError, status: 400 } : null
 }

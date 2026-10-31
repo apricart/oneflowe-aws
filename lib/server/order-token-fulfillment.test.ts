@@ -5,12 +5,17 @@ import { describe, expect, it } from "vitest"
 import {
   TOKEN_ALREADY_SENT_CODE,
   TOKEN_ORDER_NOT_APPROVED_CODE,
+  TOKEN_SETTLEMENT_FAILED_CODE,
+  TOKEN_SETTLEMENT_RETRY_FAILED_MESSAGE,
   isTokenAlreadySent,
   isTokenHandoffEligible,
   readTokenSendRefusal,
+  readTokenSettlementFailure,
   tokenHandoffMessage,
   tokenHandoffSettlesNow,
   tokenOrderNotApprovedMessage,
+  tokenSettlementNeedsRetry,
+  tokenSettlementRetryMessage,
 } from "@/lib/order-token-handoff"
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8")
@@ -91,6 +96,90 @@ describe("token hand-off wording", () => {
       .toBe("Sent 4 fulfilment tokens to the admin — 1 of 4 orders are now marked fulfilled; 3 will be marked fulfilled once delivered")
     expect(tokenHandoffMessage({ sentCount: 4, fulfilledCount: 0, awaitingDeliveryCount: 2 }))
       .toBe("Sent 4 fulfilment tokens to the admin — 2 of 4 orders will be marked fulfilled once they are delivered")
+  })
+})
+
+describe("a settlement that failed after the token had gone", () => {
+  const handedOver = "2026-10-26T04:39:56.000Z"
+
+  it("is recognised only on a handed-over, delivered order that is still approved", () => {
+    expect(tokenSettlementNeedsRetry({ status: "APPROVED", fulfillmentStatus: "DELIVERED", tokenHandoffAt: handedOver })).toBe(true)
+    expect(tokenSettlementNeedsRetry({ status: " approved ", fulfillmentStatus: "delivered", tokenHandoffAt: new Date(handedOver) })).toBe(true)
+  })
+
+  it("is not offered before the token has gone, before delivery, or once the order moved on", () => {
+    expect(tokenSettlementNeedsRetry({ status: "APPROVED", fulfillmentStatus: "DELIVERED", tokenHandoffAt: null })).toBe(false)
+    for (const delivery of ["NOT_STARTED", "IN_PROCESS", "OUT_FOR_DELIVERY", null]) {
+      expect(tokenSettlementNeedsRetry({ status: "APPROVED", fulfillmentStatus: delivery, tokenHandoffAt: handedOver })).toBe(false)
+    }
+    for (const status of ["FULFILLED", "REFUNDED", "CANCELLED", "PENDING"]) {
+      expect(tokenSettlementNeedsRetry({ status, fulfillmentStatus: "DELIVERED", tokenHandoffAt: handedOver })).toBe(false)
+    }
+    expect(tokenSettlementNeedsRetry(null)).toBe(false)
+    expect(tokenSettlementNeedsRetry(undefined)).toBe(false)
+  })
+
+  it("tells the sender the token went but the order is not fulfilled, and that retrying emails nothing", () => {
+    expect(tokenHandoffMessage({ sentCount: 1, fulfilledCount: 0, failedCount: 1 })).toBe(
+      'Sent 1 fulfilment token to the admin. However, the order could not be marked fulfilled. Its token has reached the admin, so press "Retry fulfilment" to try again — nothing will be emailed twice.',
+    )
+    expect(tokenHandoffMessage({ sentCount: 3, fulfilledCount: 1, failedCount: 2 })).toBe(
+      'Sent 3 fulfilment tokens to the admin — 1 of 3 orders are now marked fulfilled. However, 2 of 3 orders could not be marked fulfilled. Their tokens have reached the admin, so press "Retry fulfilment" to try again — nothing will be emailed twice.',
+    )
+  })
+
+  it("words a retry by what it settled", () => {
+    expect(tokenSettlementRetryMessage({ fulfilledCount: 1, failedCount: 0 }))
+      .toBe("The order is now marked fulfilled. Its token had already reached the admin, so it was not emailed again.")
+    expect(tokenSettlementRetryMessage({ fulfilledCount: 3, failedCount: 0 }))
+      .toContain("All 3 orders are now marked fulfilled")
+    expect(tokenSettlementRetryMessage({ fulfilledCount: 0, failedCount: 1 })).toBe(TOKEN_SETTLEMENT_RETRY_FAILED_MESSAGE)
+    expect(tokenSettlementRetryMessage({ fulfilledCount: 1, failedCount: 2 }))
+      .toBe("1 order is now marked fulfilled, but 2 still could not be. Please try again in a few minutes; if it keeps failing, contact support.")
+  })
+
+  it("reads the failure from either answer — the first send's 200 or a retry's 503 — and nothing else", () => {
+    expect(readTokenSettlementFailure({ code: TOKEN_SETTLEMENT_FAILED_CODE, message: "from the send" }))
+      .toEqual({ message: "from the send" })
+    expect(readTokenSettlementFailure({ code: TOKEN_SETTLEMENT_FAILED_CODE, error: "from the retry" }))
+      .toEqual({ message: "from the retry" })
+    expect(readTokenSettlementFailure({ code: TOKEN_SETTLEMENT_FAILED_CODE }))
+      .toEqual({ message: TOKEN_SETTLEMENT_RETRY_FAILED_MESSAGE })
+    expect(readTokenSettlementFailure({ code: TOKEN_ALREADY_SENT_CODE, error: "x" })).toBeNull()
+    expect(readTokenSettlementFailure({ fulfilled: true } as never)).toBeNull()
+    expect(readTokenSettlementFailure(null)).toBeNull()
+  })
+
+  it("retries, on both send routes, only where the token has already gone — and never emails from the retry", () => {
+    for (const path of [
+      "app/api/v1/orders/[id]/send-token-email/route.ts",
+      "app/api/v1/group-portal/orders/[groupOrderId]/tokens/route.ts",
+    ]) {
+      const route = source(path)
+      const alreadySent = route.slice(route.indexOf('sendOutcome.outcome === "already-sent"'))
+      // The retry is asked before the 409, so an order that is not waiting on
+      // one is refused exactly as before.
+      expect(alreadySent.indexOf("return (await retry")).toBeGreaterThan(-1)
+      expect(alreadySent.indexOf("return (await retry")).toBeLessThan(alreadySent.indexOf("code: TOKEN_ALREADY_SENT_CODE"))
+      expect(route).toContain("await retryTokenHandoffSettlements(")
+      expect(route).toContain("settlementFailed")
+      const fromHelper = route.slice(route.lastIndexOf("async function retry"))
+      const retryHelper = fromHelper.slice(0, fromHelper.search(/\r?\n\}\r?\n/))
+      expect(retryHelper.length).toBeGreaterThan(0)
+      expect(retryHelper).not.toMatch(/send\w*Email\(/)
+      expect(retryHelper).toContain("{ status: 503 }")
+    }
+  })
+
+  it("settles a retry only for an order the live row says is waiting, crediting whoever handed it over", () => {
+    const service = source("lib/server/order-fulfillment.ts")
+    const retry = service.slice(service.indexOf("export async function retryTokenHandoffSettlements("))
+
+    expect(retry).toContain("if (!tokenSettlementNeedsRetry(await loadTokenSettlementState(target))) continue")
+    expect(retry).toContain("await settleDeliveredOrderAfterTokenHandoff(target)")
+    // A failure is reported only while the order is still waiting; a lost race is not one.
+    expect(service).toContain("if (await isStillAwaitingSettlement(candidate)) settlement.failedOrderIds.add(candidate.orderId)")
+    expect(retry).toContain("if (await isStillAwaitingSettlement(target)) settlement.failedOrderIds.add(target.orderId)")
   })
 })
 

@@ -43,6 +43,7 @@ import {
   isWarehouseApiRequestAllowed,
   isWarehouseRole,
 } from "@/lib/warehouse-access"
+import { WAREHOUSE_STOCK_AREA, WAREHOUSE_STOCK_MANAGER_ROLES } from "@/lib/warehouse-stock-access"
 import {
   RIDER_AREAS,
   RIDER_HOME,
@@ -62,6 +63,13 @@ import {
 } from "@/lib/branch-head-count-access"
 import { ORDERING_BLOCKS_AREA, ORDERING_BLOCKS_PAGE_ROLES } from "@/lib/ordering-blocks-access"
 import { FINANCE_HOME, FINANCE_KPI_ROLES, isFinanceApiRequestAllowed, isFinanceAreaAllowed, isFinanceRole } from "@/lib/finance-access"
+import {
+  PROCUREMENT_AREAS,
+  PROCUREMENT_HOME,
+  PROCUREMENT_READ_ROLES,
+  isProcurementApiRequestAllowed,
+  isProcurementRole,
+} from "@/lib/procurement-access"
 
 const protectedPrefixes = [
   // The activity log was gated in ROLE_GATED_AREAS but missing here, so the
@@ -84,6 +92,9 @@ const protectedPrefixes = [
   "/executive",
   // Finance's payment KPIs; the page admits Finance and Super Admin only.
   FINANCE_HOME,
+  // Purchasing: Procurement, Super Admin and (read-only) Finance; gated in
+  // ROLE_GATED_AREAS below.
+  PROCUREMENT_HOME,
   "/group-portal",
   "/groups",
   // Branch head count requests: raised by Branch Admin / Group User, decided by
@@ -106,6 +117,8 @@ const protectedPrefixes = [
   "/support",
   "/warehouse",
   "/warehouse-team",
+  // Per-warehouse stock; Super Admin only, gated in ROLE_GATED_AREAS below.
+  WAREHOUSE_STOCK_AREA,
   "/users",
 ]
 const SESSION_COOKIE_NAMES = [
@@ -341,6 +354,16 @@ async function handleApiRequest(req: NextRequest, pathname: string, response: Ne
       pathname,
     )
   }
+  // And for Apricart procurement, which also has no organization of its own:
+  // the purchasing calls and its own password. Each handler checks the
+  // capability itself (lib/procurement-access.ts).
+  if (isProcurementRole((token as any)?.role) && !isProcurementApiRequestAllowed(req.method, pathname)) {
+    logger("middleware", { reason: "procurement_api_not_allowed", path: pathname })
+    return withSecurityHeaders(
+      NextResponse.json({ error: "Forbidden" }, { status: 403 }),
+      pathname,
+    )
+  }
   return withSecurityHeaders(response, pathname)
 }
 
@@ -459,6 +482,8 @@ function adminPortalRedirect(pathname: string): string | null {
  *     and read-only order directory. Each handler re-checks the read scope.
  *   * FINANCE — Apricart finance: its payment KPIs, orders, invoices and
  *     reports, for its assigned organizations (`lib/finance-access.ts`).
+ *   * PROCUREMENT — Apricart's buyers: purchasing alone
+ *     (`lib/procurement-access.ts`).
  */
 type TenantClaims = { organizationId: unknown; branchId: unknown }
 
@@ -478,6 +503,7 @@ const SINGLE_AREA_ROLES: ReadonlyArray<{
   { matches: isApricartSupportRole, allows: withinAreas(APRICART_SUPPORT_AREAS), home: APRICART_SUPPORT_HOME },
   { matches: isRiderRole, allows: withinAreas(RIDER_AREAS), home: RIDER_HOME },
   { matches: isFinanceRole, allows: isFinanceAreaAllowed, home: FINANCE_HOME },
+  { matches: isProcurementRole, allows: withinAreas(PROCUREMENT_AREAS), home: PROCUREMENT_HOME },
 ]
 
 /**
@@ -581,12 +607,17 @@ const ROLE_GATED_AREAS: ReadonlyArray<{ prefix: string; roles: readonly string[]
   { prefix: WAREHOUSE_HOME, roles: ["WAREHOUSE"], home: "/dashboard" },
   // Assigning warehouse accounts their branches is Super Admin's alone.
   { prefix: WAREHOUSE_TEAM_AREA, roles: WAREHOUSE_MANAGER_ROLES, home: "/dashboard" },
+  // Each warehouse's stock figures are Super Admin's alone to change.
+  { prefix: WAREHOUSE_STOCK_AREA, roles: WAREHOUSE_STOCK_MANAGER_ROLES, home: "/dashboard" },
   // Inside /reports, which Branch Admin and Group User also reach; the report
   // is Super Admin's and Head Office's, and both its endpoints re-check.
   { prefix: CONSOLIDATED_INVOICE_REPORT_AREA, roles: [...CONSOLIDATED_INVOICE_REPORT_ROLES, "VIEWER"], home: "/reports" },
   // The payment KPIs: Finance's landing page, and Super Admin's too. The
   // endpoint behind it re-checks the role and fences Finance.
   { prefix: FINANCE_HOME, roles: FINANCE_KPI_ROLES, home: "/dashboard" },
+  // Purchasing: Procurement, Super Admin, and Finance read-only. Every
+  // endpoint behind it checks the capability itself.
+  { prefix: PROCUREMENT_HOME, roles: PROCUREMENT_READ_ROLES, home: "/dashboard" },
 ]
 
 /** Where to send a caller whose role does not hold the area, or null. */

@@ -19,6 +19,7 @@ import { APRICART_EXECUTIVE_HOME, isApricartExecutiveRole } from "@/lib/apricart
 import { WAREHOUSE_HOME, isWarehouseRole } from "@/lib/warehouse-access"
 import { APRICART_SUPPORT_HOME, isApricartSupportRole } from "@/lib/apricart-support-access"
 import { FINANCE_HOME, isFinanceRole } from "@/lib/finance-access"
+import { PROCUREMENT_HOME, isProcurementRole } from "@/lib/procurement-access"
 import { markRoleRenameNoticeDue } from "@/lib/role-rename-notice"
 
 /**
@@ -141,6 +142,8 @@ function roleLandingPath(role: unknown): string | null {
   if (isApricartSupportRole(role)) return APRICART_SUPPORT_HOME
   // Apricart finance lands on its payment KPIs.
   if (isFinanceRole(role)) return FINANCE_HOME
+  // Apricart procurement lands on its purchasing workspace.
+  if (isProcurementRole(role)) return PROCUREMENT_HOME
   return null
 }
 

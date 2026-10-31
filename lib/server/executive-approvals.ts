@@ -18,6 +18,7 @@ import { ORDER_DESK_ROLE, type IntakeChannel } from "@/lib/order-desk-access"
 import { deskApprovalReachIsEmpty, type DeskApprovalReach } from "@/lib/order-desk-approval"
 import { escapeLikePattern } from "@/lib/utils"
 import { deskApprovalOrderCondition, loadDeskApprovalReach } from "@/lib/server/apricart-executive-scope"
+import { orderLineMatchesSql } from "@/lib/server/order-line-search-sql"
 
 /**
  * An Apricart Executive's approval list: the Order Desk orders in the
@@ -140,7 +141,11 @@ export async function listExecutiveApprovals(
   if (query.search) {
     // A parameter, with the LIKE wildcards in what was typed escaped.
     const pattern = `%${escapeLikePattern(query.search)}%`
-    conditions.push(or(ilike(orders.tid, pattern), ilike(orders.intakeReference, pattern)) as SQL)
+    conditions.push(or(
+      ilike(orders.tid, pattern),
+      ilike(orders.intakeReference, pattern),
+      orderLineMatchesSql(pattern),
+    ) as SQL)
   }
   const scopeWhere = and(...conditions)
   const tab = tabCondition(query.tab)

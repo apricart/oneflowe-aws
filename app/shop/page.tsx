@@ -64,7 +64,15 @@ import {
   UNACKNOWLEDGED_ORDERS_TAB_LABEL,
   selectUnacknowledgedOrders,
 } from "@/lib/unacknowledged-orders"
-import { TOKEN_SENT_LABEL, isTokenAlreadySent, readTokenSendRefusal } from "@/lib/order-token-handoff"
+import {
+  TOKEN_SENT_LABEL,
+  TOKEN_SETTLEMENT_FAILED_TITLE,
+  TOKEN_SETTLEMENT_RETRY_LABEL,
+  isTokenAlreadySent,
+  readTokenSendRefusal,
+  readTokenSettlementFailure,
+  tokenSettlementNeedsRetry,
+} from "@/lib/order-token-handoff"
 import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
 import {
   parseUnacknowledgedDeliveriesResponse,
@@ -515,8 +523,12 @@ export default function OrderPortalPage() {
     void mutateUnacknowledgedSource()
   }
 
-  const sendFulfillmentToken = async (order: Pick<Order, "id" | "approvalToken" | "tokenHandoffAt"> | null) => {
-    if (!order?.approvalToken || isTokenAlreadySent(order.tokenHandoffAt) || sendingTokenOrderId !== null) return
+  const sendFulfillmentToken = async (
+    order: Pick<Order, "id" | "approvalToken" | "tokenHandoffAt" | "status" | "fulfillmentStatus"> | null,
+  ) => {
+    if (!order?.approvalToken || sendingTokenOrderId !== null) return
+    // A sent token is offered again only as a retry of a settlement that failed.
+    if (isTokenAlreadySent(order.tokenHandoffAt) && !tokenSettlementNeedsRetry(order)) return
 
     setSendingTokenOrderId(order.id)
     try {
@@ -551,6 +563,15 @@ export default function OrderPortalPage() {
         void mutateOrders()
         void mutateUnacknowledgedSource()
         toast({ title: "Order already updated", description: refusal.message })
+        return
+      }
+
+      // The token reached the admin (or had already), but the order is still
+      // not fulfilled: say so, and leave the retry on offer.
+      const settlementFailure = readTokenSettlementFailure(data)
+      if (settlementFailure) {
+        markTokenSent(order.id)
+        toast({ title: TOKEN_SETTLEMENT_FAILED_TITLE, description: settlementFailure.message, variant: "destructive" })
         return
       }
 
@@ -2932,19 +2953,29 @@ export default function OrderPortalPage() {
                     <Button
                       type="button"
                       variant="outline"
-                      disabled={sendingTokenOrderId !== null || isTokenAlreadySent(selectedOrder.tokenHandoffAt)}
+                      disabled={
+                        sendingTokenOrderId !== null
+                        || (isTokenAlreadySent(selectedOrder.tokenHandoffAt) && !tokenSettlementNeedsRetry(selectedOrder))
+                      }
                       onClick={() => { void sendFulfillmentToken(selectedOrder) }}
                       className="h-11 w-full rounded-xl border-indigo-200 bg-white font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800 dark:bg-slate-950 dark:text-indigo-300 dark:hover:bg-indigo-950/50"
                     >
                       <Send className={cn("mr-2 h-4 w-4", sendingTokenOrderId === selectedOrder.id && "animate-pulse")} />
                       {(() => {
                         if (sendingTokenOrderId === selectedOrder.id) return "Sending Token..."
+                        if (tokenSettlementNeedsRetry(selectedOrder)) return TOKEN_SETTLEMENT_RETRY_LABEL
                         return isTokenAlreadySent(selectedOrder.tokenHandoffAt) ? TOKEN_SENT_LABEL : "Send Token to Admin"
                       })()}
                     </Button>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      Sending this token to the admin marks your order fulfilled. Copy it if you need to hand it over another way.
-                    </p>
+                    {tokenSettlementNeedsRetry(selectedOrder) ? (
+                      <p role="alert" className="text-xs font-medium leading-relaxed text-rose-600 dark:text-rose-400">
+                        Your token reached the admin, but the order could not be marked fulfilled. Press &ldquo;{TOKEN_SETTLEMENT_RETRY_LABEL}&rdquo; to try again — the token will not be emailed twice.
+                      </p>
+                    ) : (
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        Sending this token to the admin marks your order fulfilled. Copy it if you need to hand it over another way.
+                      </p>
+                    )}
                   </div>
                 </section>
               )}

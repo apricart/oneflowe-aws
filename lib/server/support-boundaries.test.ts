@@ -24,6 +24,7 @@ function repositoryFile(path: string): string {
 const SUPPORT_ROUTES = [
   "app/api/v1/support/threads/route.ts",
   "app/api/v1/support/stats/route.ts",
+  "app/api/v1/support/filters/route.ts",
   "app/api/v1/support/products/route.ts",
   "app/api/v1/support/threads/[id]/route.ts",
   "app/api/v1/support/threads/[id]/messages/route.ts",
@@ -218,6 +219,44 @@ describe("the thread rule is stated in exactly one place", () => {
     expect(route, "and be answerable with a 400").toMatch(
       /orderSearch\.ok[\s\S]{0,120}\{ status: 400 \}/,
     )
+  })
+
+  it("lets the branch and group filters only narrow, inside the thread's own organization", () => {
+    const route = repositoryFile("app/api/v1/support/threads/route.ts")
+    expect(route).toContain('branchId: parseSupportPlaceFilterId(params.get("branchId"))')
+    expect(route).toContain('groupId: parseSupportPlaceFilterId(params.get("groupId"))')
+
+    const service = repositoryFile("lib/server/support-threads.ts")
+    // Pushed onto the array the scope condition opens, never in place of it.
+    expect(service).toContain(
+      "conditions.push(supportThreadAtBranchCondition(sql`${branches.id} = ${filters.branchId}`))",
+    )
+    expect(service).toContain(
+      "conditions.push(supportThreadAtBranchCondition(sql`${branches.groupId} = ${filters.groupId}`))",
+    )
+
+    // A branch or a cited order counts only when it is the thread's own
+    // tenant's, so a mismatched row cannot be found through another's branch.
+    const start = service.indexOf("function supportThreadAtBranchCondition")
+    const condition = service.slice(start, service.indexOf("export type SupportThreadListItem"))
+    expect(condition).toContain("${branches.organizationId} = ${supportThreads.organizationId}")
+    expect(condition).toContain("${orders.organizationId} = ${supportThreads.organizationId}")
+  })
+
+  it("offers filter choices only from the threads the viewer can read", () => {
+    const service = repositoryFile("lib/server/support-threads.ts")
+    const start = service.indexOf("export async function getSupportFilterOptions")
+    expect(start, "getSupportFilterOptions must exist").toBeGreaterThan(-1)
+    const body = service.slice(start, service.indexOf("async function loadAssigneeNames"))
+
+    expect(body).toContain("supportScopeCondition(viewer)")
+    expect(body).toContain("if (!scopeCondition) return")
+    expect(body.match(/\.where\(scopeCondition\)/g), "both place queries are scoped").toHaveLength(2)
+    expect(body.match(/\.limit\(SUPPORT_FILTER_OPTIONS_MAX\)/g), "both place queries are bounded").toHaveLength(2)
+
+    // Tenants are offered only where the list lets the caller narrow by one.
+    const route = repositoryFile("app/api/v1/support/filters/route.ts")
+    expect(route).toContain("organizations: isSupportApricartRole(viewer.role) ? options.organizations : []")
   })
 
   it("keeps triage rights with Apricart alone", () => {

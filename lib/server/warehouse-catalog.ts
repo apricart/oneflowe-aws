@@ -7,6 +7,7 @@ import { categories, globalProducts } from "@/db/schema"
 import { db } from "@/lib/db"
 import { IMAGE_PATH_PREFIX, isStoredImagePath } from "@/lib/server/image-storage"
 import { escapeLikePattern } from "@/lib/utils"
+import { productStockDisplaySql } from "@/lib/server/warehouse-stock"
 import {
   WAREHOUSE_TAXONOMY_ROW_MAX,
   type WarehouseTaxonomyQuery,
@@ -83,7 +84,7 @@ export async function listWarehouseCatalog(query: WarehouseCatalogQuery): Promis
         unit: globalProducts.unit,
         status: globalProducts.status,
         basePriceCents: globalProducts.basePrice,
-        stockQuantity: globalProducts.stockQuantity,
+        stockQuantity: productStockDisplaySql(),
         imageUrl: storedImageSql,
         categoryName: direct.name,
         categoryParentId: direct.parentId,

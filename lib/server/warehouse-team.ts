@@ -38,6 +38,10 @@ import { branchCityKeySql, branchCityLabelSql } from "@/lib/server/branch-city-k
 export type WarehouseTeamMember = {
   id: string
   fullName: string | null
+  /** The parts Super Admin edits on the team page (`EditApricartAccountDialog`). */
+  firstName: string | null
+  lastName: string | null
+  phone: string | null
   username: string | null
   email: string
   isActive: boolean
@@ -93,6 +97,9 @@ export async function loadWarehouseTeam(): Promise<WarehouseTeam> {
     .select({
       id: users.id,
       fullName: users.fullName,
+      firstName: users.firstName,
+      lastName: users.lastName,
+      phone: users.phone,
       username: users.username,
       email: users.email,
       isActive: users.isActive,

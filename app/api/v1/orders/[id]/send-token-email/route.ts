@@ -16,11 +16,14 @@ import {
   TOKEN_ORDER_NOT_APPROVED_CODE,
   TOKEN_SEND_IN_PROGRESS_CODE,
   TOKEN_SEND_IN_PROGRESS_MESSAGE,
+  TOKEN_SETTLEMENT_FAILED_CODE,
+  TOKEN_SETTLEMENT_RETRY_FAILED_MESSAGE,
   isTokenHandoffEligible,
   tokenHandoffMessage,
   tokenOrderNotApprovedMessage,
+  tokenSettlementRetryMessage,
 } from "@/lib/order-token-handoff"
-import { settleOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
+import { retryTokenHandoffSettlements, settleOrdersAfterTokenHandoff } from "@/lib/server/order-fulfillment"
 import { sendTokenEmailOncePerOrder } from "@/lib/server/order-token-handoff-store"
 import { canUseScopedBranch, usesMultiBranchScope } from "@/lib/server/multi-branch-scope"
 
@@ -77,18 +80,72 @@ function hasOrderVisibilityForTokenEmail(
  */
 function tokenHandoffResponse(
   orderStatus: string,
-  { fulfilled, awaitingDelivery }: { fulfilled: boolean; awaitingDelivery: boolean },
+  { fulfilled, awaitingDelivery, settlementFailed }: {
+    fulfilled: boolean
+    awaitingDelivery: boolean
+    settlementFailed: boolean
+  },
 ) {
   return ok({
     message: tokenHandoffMessage({
       sentCount: 1,
       fulfilledCount: fulfilled ? 1 : 0,
       awaitingDeliveryCount: awaitingDelivery ? 1 : 0,
+      failedCount: settlementFailed ? 1 : 0,
     }),
     recipient: TOKEN_EMAIL_RECIPIENT,
     fulfilled,
     awaitingDelivery,
+    // The email did leave, so this stays a 200; the flag is what tells the
+    // caller the order still is not fulfilled and the send should be retried.
+    settlementFailed,
+    ...(settlementFailed ? { code: TOKEN_SETTLEMENT_FAILED_CODE } : {}),
     status: fulfilled ? "FULFILLED" : orderStatus,
+  })
+}
+
+/**
+ * Settle again an order whose token already reached the admin but whose
+ * settlement failed. Null when the order is not waiting on one, so the caller
+ * answers "already sent" exactly as before. No email is sent; the attempt is
+ * audited whatever its outcome.
+ */
+async function retryTokenSettlement(
+  order: { id: number; tid: string; organizationId: number | null; branchId: number },
+  userId: string,
+) {
+  const settlement = await retryTokenHandoffSettlements([
+    { orderId: order.id, organizationId: order.organizationId, branchId: order.branchId },
+  ])
+  const fulfilled = settlement.fulfilledOrderIds.has(order.id)
+  const failed = settlement.failedOrderIds.has(order.id)
+  if (!fulfilled && !failed) return null
+
+  await db.insert(auditLogs).values({
+    userId,
+    organizationId: order.organizationId,
+    branchId: order.branchId,
+    action: "RETRY_ORDER_TOKEN_FULFILMENT",
+    entity: "ORDER",
+    entityId: String(order.id),
+    metadata: { tid: order.tid, fulfilled },
+  })
+
+  if (failed) {
+    return NextResponse.json({
+      error: TOKEN_SETTLEMENT_RETRY_FAILED_MESSAGE,
+      code: TOKEN_SETTLEMENT_FAILED_CODE,
+      retried: true,
+    }, { status: 503 })
+  }
+  return ok({
+    message: tokenSettlementRetryMessage({ fulfilledCount: 1, failedCount: 0 }),
+    recipient: TOKEN_EMAIL_RECIPIENT,
+    fulfilled: true,
+    awaitingDelivery: false,
+    settlementFailed: false,
+    retried: true,
+    status: "FULFILLED",
   })
 }
 
@@ -229,7 +286,10 @@ export async function POST(
   )
 
   if (sendOutcome.outcome === "already-sent") {
-    return NextResponse.json({ error: TOKEN_ALREADY_SENT_MESSAGE, code: TOKEN_ALREADY_SENT_CODE }, { status: 409 })
+    // The token is never emailed twice, but a delivered order whose settlement
+    // failed is still waiting on it: settle it again instead of refusing.
+    return (await retryTokenSettlement(order, user.id))
+      ?? NextResponse.json({ error: TOKEN_ALREADY_SENT_MESSAGE, code: TOKEN_ALREADY_SENT_CODE }, { status: 409 })
   }
   if (sendOutcome.outcome === "in-progress") {
     return NextResponse.json({ error: TOKEN_SEND_IN_PROGRESS_MESSAGE, code: TOKEN_SEND_IN_PROGRESS_CODE }, { status: 409 })
@@ -251,6 +311,7 @@ export async function POST(
   }])
   const fulfilled = settlement.fulfilledOrderIds.has(order.id)
   const awaitingDelivery = settlement.awaitingDeliveryOrderIds.has(order.id)
+  const settlementFailed = settlement.failedOrderIds.has(order.id)
 
   await db.insert(auditLogs).values({
     userId: user.id,
@@ -264,8 +325,9 @@ export async function POST(
       recipient: TOKEN_EMAIL_RECIPIENT,
       fulfilled,
       awaitingDelivery,
+      settlementFailed,
     },
   })
 
-  return tokenHandoffResponse(order.status, { fulfilled, awaitingDelivery })
+  return tokenHandoffResponse(order.status, { fulfilled, awaitingDelivery, settlementFailed })
 }

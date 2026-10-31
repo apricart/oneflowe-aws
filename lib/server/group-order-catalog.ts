@@ -18,6 +18,7 @@ import {
   groupPriceTier,
 } from "@/lib/server/effective-price"
 import { escapeLikePattern } from "@/lib/utils"
+import { loadLeastAvailableStock } from "@/lib/server/warehouse-stock"
 
 /**
  * The catalogue a Group Order Portal user may order from for a chosen set of
@@ -355,7 +356,7 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
     })
     .from(coverage)
 
-  const [minimumRemaining, categoryFacets] = await Promise.all([
+  const [minimumRemaining, categoryFacets, leastAvailableStock] = await Promise.all([
     loadMinimumRemainingQuantities(
       organizationId,
       quantityBudgetBranchIds,
@@ -363,6 +364,10 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
       rows.map((row) => row.organizationInventoryId),
     ),
     loadCategoryFacets(and(...scopeConditions), branchCount),
+    // Counted per warehouse, each branch orders against its own warehouse, so
+    // the figure is the least any selected branch can order. Null while stock
+    // is counted globally: the global figure stands.
+    loadLeastAvailableStock(db, branchIds, rows.map((row) => row.globalProductId)),
   ])
 
   return {
@@ -375,7 +380,7 @@ export async function loadGroupCatalog(query: CatalogQuery): Promise<GroupCatalo
       imageUrl: row.imageUrl,
       unit: row.unit,
       priceCents: row.priceCents,
-      stockQuantity: row.stockQuantity,
+      stockQuantity: leastAvailableStock ? leastAvailableStock.get(row.globalProductId) ?? 0 : row.stockQuantity,
       allowDecimalQuantity: Boolean(row.allowDecimalQuantity),
       quantityStep: row.quantityStep ?? null,
       categoryName: row.categoryName,

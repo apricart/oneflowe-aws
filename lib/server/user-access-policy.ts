@@ -27,6 +27,8 @@ const ROLE_LEVEL: Record<SystemRole, number> = {
   RIDER: 7,
   // And Apricart finance staff (`lib/finance-access.ts`).
   FINANCE: 7,
+  // And Apricart's buyers (`lib/procurement-access.ts`).
+  PROCUREMENT: 7,
   SUPER_ADMIN: 8,
 }
 

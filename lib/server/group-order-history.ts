@@ -53,6 +53,11 @@ export type GroupOrderChild = {
    * the order — never for a pending, rejected, or another user's order.
    */
   approvalToken: string | null
+  /**
+   * When the token reached the admin, so the history can offer a retry for a
+   * delivered order whose settlement failed (`tokenSettlementNeedsRetry`).
+   */
+  tokenHandoffAt: Date | null
 }
 
 export type GroupOrderHistoryItem = {
@@ -158,6 +163,7 @@ export async function listGroupOrders({
       returnedForCorrectionAt: orders.returnedForCorrectionAt,
       correctionRequestNote: orders.correctionRequestNote,
       approvalToken: orders.approvalToken,
+      tokenHandoffAt: orders.tokenHandoffAt,
       createdByUserId: orders.createdByUserId,
       itemCount: sql<number>`(
         SELECT COUNT(*)::int FROM ${orderItems} WHERE ${orderItems.orderId} = ${orders.id}
@@ -208,6 +214,7 @@ export async function listGroupOrders({
       })
         ? row.approvalToken
         : null,
+      tokenHandoffAt: row.tokenHandoffAt,
     })
     childrenByEnvelope.set(row.groupOrderId, bucket)
   }

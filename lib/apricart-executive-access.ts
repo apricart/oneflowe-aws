@@ -24,6 +24,8 @@
  * plans/OF-EXEC-APPROVAL-executive-approves-desk-orders.md.
  */
 
+import { EXECUTIVE_RETURN_API_RULES } from "@/lib/procurement-access"
+
 export const APRICART_EXECUTIVE_ROLE = "APRICART_EXECUTIVE" as const
 export const APRICART_EXECUTIVE_LABEL = "Apricart Executive"
 
@@ -105,6 +107,9 @@ export const APRICART_EXECUTIVE_API_RULES: readonly ApricartExecutiveApiRule[] =
     methods: ["POST"],
     pattern: /^\/api\/v1\/users\/me\/email-verification\/verify$/,
   },
+  // Customer returns at the warehouses it is an executive member of
+  // (plans/OF-PROCUREMENT-purchasing.md).
+  ...EXECUTIVE_RETURN_API_RULES,
 ]
 
 /** Exact match after trailing-slash normalisation — never a prefix. */

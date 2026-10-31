@@ -22,6 +22,10 @@ export const ORDER_DESK_ASSIGNMENT_AUDIT_ACTION = "UPDATE_ORDER_DESK_ASSIGNMENTS
 export type DeskTeamMember = {
   id: string
   fullName: string | null
+  /** The parts Super Admin edits on the team page (`EditApricartAccountDialog`). */
+  firstName: string | null
+  lastName: string | null
+  phone: string | null
   username: string | null
   email: string
   isActive: boolean
@@ -51,6 +55,9 @@ export async function loadDeskTeam(): Promise<DeskTeam> {
     .select({
       id: users.id,
       fullName: users.fullName,
+      firstName: users.firstName,
+      lastName: users.lastName,
+      phone: users.phone,
       username: users.username,
       email: users.email,
       isActive: users.isActive,

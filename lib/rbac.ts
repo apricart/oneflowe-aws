@@ -1,4 +1,4 @@
-export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL" | "VIEWER" | "ORDER_DESK" | "APRICART_EXECUTIVE" | "WAREHOUSE" | "APRICART_SUPPORT" | "RIDER" | "FINANCE"
+export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN" | "GROUP_ORDER_PORTAL" | "ORDER_PORTAL" | "VIEWER" | "ORDER_DESK" | "APRICART_EXECUTIVE" | "WAREHOUSE" | "APRICART_SUPPORT" | "RIDER" | "FINANCE" | "PROCUREMENT"
 
 /**
  * Validate if a string is a valid role
@@ -9,7 +9,7 @@ export type Role = "SUPER_ADMIN" | "HEAD_OFFICE" | "GROUP_USER" | "BRANCH_ADMIN"
  */
 export function isValidRole(role: unknown): role is Role {
   if (typeof role !== 'string') return false
-  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER', 'ORDER_DESK', 'APRICART_EXECUTIVE', 'WAREHOUSE', 'APRICART_SUPPORT', 'RIDER', 'FINANCE']
+  const validRoles: Role[] = ['SUPER_ADMIN', 'HEAD_OFFICE', 'GROUP_USER', 'BRANCH_ADMIN', 'GROUP_ORDER_PORTAL', 'ORDER_PORTAL', 'VIEWER', 'ORDER_DESK', 'APRICART_EXECUTIVE', 'WAREHOUSE', 'APRICART_SUPPORT', 'RIDER', 'FINANCE', 'PROCUREMENT']
   return validRoles.includes(role as Role)
 }
 
@@ -98,6 +98,9 @@ export function hasRole(current: Role | undefined | null, allowed: Role[]): bool
 //
 // FINANCE as well: Apricart finance staff, confined to the orders and reports
 // of the organizations Super Admin assigns (`lib/finance-access.ts`).
+//
+// PROCUREMENT as well: Apricart's buyers, confined to purchasing
+// (`lib/procurement-access.ts`).
 const ROLE_HIERARCHY: Record<Role, number> = {
   'VIEWER': 1,
   'ORDER_PORTAL': 2,
@@ -111,6 +114,7 @@ const ROLE_HIERARCHY: Record<Role, number> = {
   'APRICART_SUPPORT': 7,
   'RIDER': 7,
   'FINANCE': 7,
+  'PROCUREMENT': 7,
   'SUPER_ADMIN': 8
 }
 

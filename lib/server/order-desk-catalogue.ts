@@ -12,6 +12,7 @@ import {
   resolveEffectivePriceCents,
 } from "@/lib/server/effective-price"
 import { escapeLikePattern } from "@/lib/utils"
+import { loadBranchAvailableStock } from "@/lib/server/warehouse-stock"
 
 /**
  * What an Order Desk user may order for one branch: every active Apricart
@@ -133,10 +134,13 @@ export async function loadOrderDeskCatalogue(
       .offset((query.page - 1) * query.limit),
   ])
 
-  const lineage = await loadDeskBranchLineage(db, {
-    ...scope,
-    globalProductIds: rows.map((row) => row.globalProductId),
-  })
+  const productIds = rows.map((row) => row.globalProductId)
+  const [lineage, availableStock] = await Promise.all([
+    loadDeskBranchLineage(db, { ...scope, globalProductIds: productIds }),
+    // Counted per warehouse, what this branch can order now; null while stock
+    // is counted globally, leaving the global figure.
+    loadBranchAvailableStock(db, scope.branchId, productIds),
+  ])
 
   return {
     items: rows.map((row) => {
@@ -149,7 +153,7 @@ export async function loadOrderDeskCatalogue(
         unit: row.unit,
         allowDecimalQuantity: row.allowDecimalQuantity,
         quantityStep: Number(row.quantityStep),
-        stockQuantity: Number(row.stockQuantity),
+        stockQuantity: availableStock ? availableStock.get(row.globalProductId) ?? 0 : Number(row.stockQuantity),
         assignedToBranch: Boolean(carried),
         cataloguePriceCents: carried?.cataloguePriceCents ?? null,
       }

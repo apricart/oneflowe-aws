@@ -799,6 +799,20 @@
       "when": 1791129600000,
       "tag": "20261104120000_warehouse_route_rules",
       "breakpoints": true
+    },
+    {
+      "idx": 114,
+      "version": "7",
+      "when": 1791133200000,
+      "tag": "20261105120000_warehouse_stock",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1791136800000,
+      "tag": "20261106120000_procurement",
+      "breakpoints": true
     }
   ]
 }

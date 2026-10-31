@@ -86,13 +86,14 @@ async function createFixtures() {
     foreignOrderPortalId: await person("foreign-op", "ORDER_PORTAL", foreign.id),
     orphanBranchAdminId: await person("orphan", "BRANCH_ADMIN", null),
     deskId: await person("desk", "ORDER_DESK", null),
+    warehouseId: await person("warehouse", "WAREHOUSE", null),
   }
 }
 
 function allUserIds(f: Fixtures): string[] {
   return [
     f.superAdminId, f.headOfficeId, f.peerHeadOfficeId, f.orderPortalId, f.branchAdminId,
-    f.foreignOrderPortalId, f.orphanBranchAdminId, f.deskId,
+    f.foreignOrderPortalId, f.orphanBranchAdminId, f.deskId, f.warehouseId,
   ]
 }
 
@@ -201,6 +202,32 @@ describe.skipIf(!hasTestDatabase)("PATCH/DELETE /api/v1/users/[id]", () => {
       expect((await patch(f.foreignOrderPortalId, { lastName: "Edited" })).status).toBe(200)
       expect((await patch(f.orphanBranchAdminId, { lastName: "Edited" })).status).toBe(200)
       expect((await patch(f.superAdminId, { lastName: "Edited" })).status).toBe(403)
+    })
+
+    // The Order Desk Team and Warehouse Team pages edit these accounts and set
+    // their passwords through this route.
+    it("lets Super Admin edit an Order Desk or warehouse account and set its password; Head Office may not", async () => {
+      signIn(headOffice())
+      expect((await patch(f.warehouseId, { firstName: "X" })).status).toBe(403)
+      expect((await patch(f.warehouseId, { password: NEW_PASSWORD })).status).toBe(403)
+
+      signIn(superAdmin())
+      // Phone numbers are unique across accounts, so each gets its own.
+      for (const [id, phone] of [[f.deskId, "0300 1234561"], [f.warehouseId, "0300 1234562"]] as const) {
+        await db.insert(sessions).values({
+          userId: id,
+          refreshTokenHash: `it-users-${f.suffix}-${randomUUID()}`,
+          expiresAt: new Date(Date.now() + 60_000),
+        })
+        const before = await readUser(id)
+        expect((await patch(id, { lastName: "Edited", phone, password: NEW_PASSWORD })).status).toBe(200)
+        const row = await readUser(id)
+        expect(row).toMatchObject({ lastName: "Edited", phone, sessionVersion: before.sessionVersion + 1 })
+        expect(row.fullName).toBe(`${before.firstName} Edited`)
+        expect(await verifyPassword(NEW_PASSWORD, row.passwordHash)).toBe(true)
+        expect(await db.select().from(sessions).where(eq(sessions.userId, id))).toHaveLength(0)
+        expect(row.organizationId).toBeNull()
+      }
     })
 
     it("answers 404 for an unknown user", async () => {
