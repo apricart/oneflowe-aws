@@ -1703,5 +1703,23 @@ describe.skipIf(!hasTestDatabase)("the Order Desk through its real API and datab
       signIn(actor("desk2"))
       expect((await listDeskOrders(`status=all&q=${reference}`)).body.items).toEqual([])
     })
+
+    it("finds orders by a line's product name or code, and only orders carrying it", async () => {
+      signIn(actor("desk"))
+      const orderId = (await createOrder(deskOrderBody())).body.order.id
+      for (const term of [`itd product ${f.suffix}`, `ITD-P-${f.suffix}`]) {
+        const { status, body } = await listDeskOrders(`status=all&limit=50&q=${encodeURIComponent(term)}`)
+        expect(status, term).toBe(200)
+        expect(body.items.map((item: any) => item.id), term).toContain(orderId)
+        for (const item of body.items) {
+          expect(item.items.some((line: any) => line.productCode === `ITD-P-${f.suffix}`), term).toBe(true)
+        }
+      }
+      expect((await listDeskOrders(`status=all&q=${encodeURIComponent(`ITD-X-${f.suffix}`)}`)).body.items).toEqual([])
+      // desk2 does not reach A1: the product search never widens its reach.
+      signIn(actor("desk2"))
+      const other = await listDeskOrders(`status=all&limit=50&q=${encodeURIComponent(`ITD-P-${f.suffix}`)}`)
+      expect(other.body.items.map((item: any) => item.id)).not.toContain(orderId)
+    })
   })
 })

@@ -36,6 +36,8 @@
  * plans/OF-WAREHOUSE-support-queue.md.
  */
 
+import { WAREHOUSE_PROCUREMENT_API_RULES } from "@/lib/procurement-access"
+
 export const WAREHOUSE_ROLE = "WAREHOUSE" as const
 export const WAREHOUSE_LABEL = "Warehouse (Apricart)"
 
@@ -231,6 +233,7 @@ export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
     pattern: /^\/api\/v1\/support\/threads\/\d+\/messages$/,
   },
   { route: `${SUPPORT_ROUTE}/stats/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/support\/stats$/ },
+  { route: `${SUPPORT_ROUTE}/filters/route.ts`, methods: ["GET"], pattern: /^\/api\/v1\/support\/filters$/ },
   { route: `${SUPPORT_ROUTE}/attachments/route.ts`, methods: ["POST"], pattern: /^\/api\/v1\/support\/attachments$/ },
   {
     route: `${SUPPORT_ROUTE}/attachments/[id]/route.ts`,
@@ -250,6 +253,10 @@ export const WAREHOUSE_API_RULES: readonly WarehouseApiRule[] = [
     methods: ["POST"],
     pattern: /^\/api\/v1\/users\/me\/email-verification\/verify$/,
   },
+  // Purchasing: requisitions, receiving against approved purchase orders and
+  // customer returns, for its own warehouses only, never a cost
+  // (plans/OF-PROCUREMENT-purchasing.md).
+  ...WAREHOUSE_PROCUREMENT_API_RULES,
 ]
 
 /** Exact match after trailing-slash normalisation — never a prefix. */

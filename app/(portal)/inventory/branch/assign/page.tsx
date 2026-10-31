@@ -3,6 +3,7 @@
 import { useState,useMemo,useEffect } from "react"
 import useSWR from "swr"
 import { Card,CardContent,CardHeader,CardTitle } from "@/components/ui/card"
+import { OrganizationSearchSelect } from "@/components/inventory/organization-search-select"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -241,18 +242,12 @@ export default function AssignToBranchPage() {
                         <CardTitle className="text-lg">Select Organization</CardTitle>
                     </CardHeader>
                     <CardContent>
-                        <Select value={localOrgId} onValueChange={setLocalOrgId}>
-                            <SelectTrigger className="w-full max-w-md">
-                                <SelectValue placeholder="Select organization" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {orgsData?.items.map((org) => (
-                                    <SelectItem key={org.id} value={org.id.toString()}>
-                                        {org.name}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                        <OrganizationSearchSelect
+                            value={localOrgId}
+                            organizations={orgsData?.items ?? []}
+                            placeholder="Select organization"
+                            onValueChange={setLocalOrgId}
+                        />
                     </CardContent>
                 </Card>
             )}

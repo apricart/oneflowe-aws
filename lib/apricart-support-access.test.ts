@@ -100,6 +100,7 @@ describe("the API allowlist", () => {
     ["PATCH", "/api/v1/support/threads/42"],
     ["POST", "/api/v1/support/threads/42/messages"],
     ["GET", "/api/v1/support/stats"],
+    ["GET", "/api/v1/support/filters"],
     ["POST", "/api/v1/support/attachments"],
     ["GET", "/api/v1/support/attachments/7"],
     ["POST", "/api/v1/users/me/change-password"],

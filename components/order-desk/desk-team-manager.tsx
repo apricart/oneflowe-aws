@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ExecutiveApproversCard } from "@/components/order-desk/executive-approvers-card"
+import { EditApricartAccountDialog } from "@/components/users/edit-apricart-account-dialog"
 import { toast } from "@/hooks/use-toast"
 import type { ExecutiveApprovalCounts } from "@/lib/executive-approval-query"
 import { fetcher } from "@/lib/fetcher"
@@ -38,6 +39,9 @@ import {
 type Member = {
   id: string
   fullName: string | null
+  firstName: string | null
+  lastName: string | null
+  phone: string | null
   username: string | null
   email: string
   isActive: boolean
@@ -363,6 +367,7 @@ export function DeskTeamManager() {
   const waiting = approvals?.counts?.awaiting_approval ?? 0
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Member | null>(null)
+  const [editingAccount, setEditingAccount] = useState<Member | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const organizations = data?.managedOrganizations ?? []
 
@@ -460,6 +465,7 @@ export function DeskTeamManager() {
                           </td>
                           <td className="py-2">
                             <div className="flex justify-end gap-2">
+                              <Button size="sm" variant="outline" onClick={() => setEditingAccount(member)}>Edit</Button>
                               <Button size="sm" variant="outline" onClick={() => setEditing(member)}>Access</Button>
                               <Button
                                 size="sm"
@@ -489,6 +495,15 @@ export function DeskTeamManager() {
         </TabsContent>
       </Tabs>
 
+      {editingAccount && (
+        <EditApricartAccountDialog
+          key={editingAccount.id}
+          account={editingAccount}
+          noun="desk user"
+          onClose={() => setEditingAccount(null)}
+          onSaved={() => { void mutate() }}
+        />
+      )}
       <AddDeskUserDialog open={adding} onOpenChange={setAdding} organizations={organizations} onSaved={() => { void mutate() }} />
       {editing && (
         <AccessDialog

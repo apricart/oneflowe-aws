@@ -163,6 +163,9 @@ export const systemRoleSchema = z.enum([
   // Apricart finance: reads orders and reports for the organizations Super
   // Admin assigns, and marks orders Paid or Unpaid (`lib/finance-access.ts`).
   "FINANCE",
+  // Apricart procurement: suppliers, purchase orders and supplier invoices for
+  // Apricart's warehouses (`lib/procurement-access.ts`).
+  "PROCUREMENT",
 ])
 
 export type SystemRole = z.infer<typeof systemRoleSchema>

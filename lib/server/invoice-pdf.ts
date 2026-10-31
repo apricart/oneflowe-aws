@@ -288,8 +288,8 @@ function drawPartyGrid(doc: any, receiptData: any, itemQuantity: number, x: numb
         )
     }
     // Fulfilment happens after a tax invoice is issued, so a frozen document
-    // cannot name a fulfiller; the order and its challan record it.
-    if (!receiptData.frozen) {
+    // names a fulfiller only once the order has one.
+    if (!receiptData.frozen || receiptData.fulfilledByName) {
         deliverTo.push({ label: "Fulfiller:", value: toDisplayNameCase(receiptData.fulfilledByName || "N/A") })
     }
 

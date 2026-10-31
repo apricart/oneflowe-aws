@@ -19,7 +19,6 @@ import { Button } from "@/components/ui/button"
 import { PaymentStatusBadge } from "@/components/orders/payment-status-badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useDebounce } from "@/hooks/use-debounce"
 import { toast } from "@/hooks/use-toast"
 import {
@@ -29,6 +28,7 @@ import {
   ResubmitDeskOrderDialog,
   type DeskOrder,
 } from "@/components/order-desk/desk-order-dialogs"
+import { DeskSearchableSelect } from "@/components/order-desk/desk-searchable-select"
 import { CHANNEL_META, STAGE_META, StagePill, TAB_LABELS } from "@/components/order-desk/desk-theme"
 import { fetcher } from "@/lib/fetcher"
 import { FULFILLMENT_STATUSES, FULFILLMENT_STATUS_LABELS, normalizeFulfillmentStatus } from "@/lib/fulfillment-status"
@@ -50,9 +50,7 @@ type DeskOrderPage = {
   pagination: { page: number; limit: number; total: number; totalPages: number }
 }
 
-type Target = { id: number; name: string; branches: { id: number; name: string }[] }
-
-const ALL = "all"
+type Target = { id: number; name: string; code: string | null; branches: { id: number; name: string; city: string | null }[] }
 
 const EMPTY_MESSAGES: Record<DeskOrderStatusFilter, string> = {
   awaiting_approval: "No orders are waiting for approval.",
@@ -274,8 +272,8 @@ function OrderCard({
 export function DeskOrdersTable({ initialTab = "awaiting_approval" }: Readonly<{ initialTab?: DeskOrderStatusFilter }>) {
   const [tab, setTab] = useState<DeskOrderStatusFilter>(initialTab)
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
-  const [organizationId, setOrganizationId] = useState(ALL)
-  const [branchId, setBranchId] = useState(ALL)
+  const [organizationId, setOrganizationId] = useState<number | null>(null)
+  const [branchId, setBranchId] = useState<number | null>(null)
   const [searchInput, setSearchInput] = useState("")
   // Search as the desk user types, without a request per keystroke.
   const search = useDebounce(searchInput.trim(), 300)
@@ -285,11 +283,11 @@ export function DeskOrdersTable({ initialTab = "awaiting_approval" }: Readonly<{
 
   const { data: targetData } = useSWR<{ items: Target[] }>("/api/v1/order-desk/targets", fetcher)
   const targets = targetData?.items ?? []
-  const branchOptions = targets.find((target) => String(target.id) === organizationId)?.branches ?? []
+  const branchOptions = targets.find((target) => target.id === organizationId)?.branches ?? []
 
   const params = new URLSearchParams({ status: tab, page: String(page) })
-  if (organizationId !== ALL) params.set("organizationId", organizationId)
-  if (branchId !== ALL) params.set("branchId", branchId)
+  if (organizationId !== null) params.set("organizationId", String(organizationId))
+  if (branchId !== null) params.set("branchId", String(branchId))
   if (tab === "fulfilled" && paymentStatus) params.set("paymentStatus", paymentStatus)
   if (search) params.set("q", search)
   const { data, error, isLoading, mutate } = useSWR<DeskOrderPage>(`${DESK_ORDERS_KEY_PREFIX}?${params.toString()}`, fetcher, {
@@ -403,31 +401,39 @@ export function DeskOrdersTable({ initialTab = "awaiting_approval" }: Readonly<{
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
             <Input
               aria-label="Search orders"
-              placeholder="Search by order number or customer reference"
+              placeholder="Search by order number, customer reference or product"
               value={searchInput}
               maxLength={100}
               onChange={(event) => { setSearchInput(event.target.value); setPage(1) }}
               className="pl-9"
             />
           </div>
-          <Select value={organizationId} onValueChange={(value) => { setOrganizationId(value); setBranchId(ALL); setPage(1) }}>
-            <SelectTrigger aria-label="Organization" className="w-full"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>All organizations</SelectItem>
-              {targets.map((target) => (
-                <SelectItem key={target.id} value={String(target.id)}>{target.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={branchId} onValueChange={(value) => { setBranchId(value); setPage(1) }}>
-            <SelectTrigger aria-label="Branch" className="w-full" disabled={organizationId === ALL}><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>All branches</SelectItem>
-              {branchOptions.map((branch) => (
-                <SelectItem key={branch.id} value={String(branch.id)}>{branch.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <DeskSearchableSelect
+            ariaLabel="Organization"
+            value={organizationId}
+            options={targets.map((target) => ({ id: target.id, label: target.name, keywords: target.code ?? undefined }))}
+            placeholder="All organizations"
+            allLabel="All organizations"
+            searchLabel="Search organizations"
+            emptyLabel="No organization found."
+            onValueChange={(value) => {
+              if (value === organizationId) return
+              setOrganizationId(value)
+              setBranchId(null)
+              setPage(1)
+            }}
+          />
+          <DeskSearchableSelect
+            ariaLabel="Branch"
+            value={branchId}
+            options={branchOptions.map((branch) => ({ id: branch.id, label: branch.name, hint: branch.city ?? undefined }))}
+            placeholder="All branches"
+            allLabel="All branches"
+            searchLabel="Search branches"
+            emptyLabel="No branch found."
+            disabled={organizationId === null}
+            onValueChange={(value) => { setBranchId(value); setPage(1) }}
+          />
         </CardContent>
       </Card>
 

@@ -17,6 +17,7 @@ import {
   Send,
   Truck,
   Banknote,
+  Warehouse,
 } from "lucide-react"
 import { format } from "date-fns"
 import { toast } from "@/hooks/use-toast"
@@ -71,6 +72,7 @@ import {
 } from "@/lib/order-status-display"
 import { isUnacknowledgedDelivery } from "@/lib/unacknowledged-delivery-block"
 import { isAwaitingCorrection } from "@/lib/order-correction"
+import { canTransferOrderWarehouse } from "@/lib/order-warehouse-transfer"
 import { OrderCorrectionNotice, ReturnForCorrectionDialog } from "@/components/orders/order-correction"
 import { DeliveryChallanUploadDialog } from "@/components/orders/delivery-challan"
 import { InvoiceStatusBadge } from "@/components/orders/invoice-status-badge"
@@ -1142,6 +1144,19 @@ export function OrdersDirectory({
                   >
                     <TrendingDown className="h-4 w-4" />
                     View Refund Details
+                  </Button>
+                )}
+
+                {/* The fulfilment warehouse card lives on the order page; this is its way in. */}
+                {canTransferOrderWarehouse(userRole) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => router.push(`/orders/${viewingOrder.id}`)}
+                    className="w-full h-12 rounded-2xl font-bold gap-2"
+                  >
+                    <Warehouse className="h-4 w-4" />
+                    Fulfilment warehouse
                   </Button>
                 )}
 

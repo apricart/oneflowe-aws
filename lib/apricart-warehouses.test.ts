@@ -3,11 +3,13 @@ import { describe, expect, it } from "vitest"
 import {
   APRICART_WAREHOUSE_CODE_PATTERN,
   BRANCH_ROUTE_MAX_PER_ORGANIZATION,
+  citiesOfOrganizations,
   classifyBranchCoverage,
   executiveCoverageGaps,
   inactiveAccountsHoldingReach,
   normalizeWarehouseCode,
   parseWarehouseId,
+  plannedRuleAdditions,
   responsibilityForRole,
   routedBranchIdsInOrganization,
   suggestedBranchIdsFor,
@@ -195,5 +197,44 @@ describe("the page's views", () => {
       { id: "d", isActive: true, branchIds: [1], cityKeys: [] },
     ]
     expect(inactiveAccountsHoldingReach(members).map((member) => member.id)).toEqual(["a", "b"])
+  })
+})
+
+describe("adding rules for several organizations and cities", () => {
+  const cityOptions = [
+    { organizationId: 1, cityKey: "karachi", label: "Karachi", branchCount: 3 },
+    { organizationId: 1, cityKey: "lahore", label: "Lahore", branchCount: 1 },
+    { organizationId: 2, cityKey: "karachi", label: "Karachi", branchCount: 2 },
+    { organizationId: 3, cityKey: "quetta", label: "Quetta", branchCount: 1 },
+  ]
+  const rules = [
+    { warehouseId: 1, organizationId: 1, cityKey: "karachi" },
+    { warehouseId: 2, organizationId: 2, cityKey: "karachi" },
+    { warehouseId: 2, organizationId: 2, cityKey: null },
+  ]
+
+  it("offers the chosen organizations' cities, counted across them", () => {
+    expect(citiesOfOrganizations(cityOptions, [1, 2])).toEqual([
+      { cityKey: "karachi", label: "Karachi", branchCount: 5, organizationCount: 2 },
+      { cityKey: "lahore", label: "Lahore", branchCount: 1, organizationCount: 1 },
+    ])
+    expect(citiesOfOrganizations(cityOptions, [])).toEqual([])
+  })
+
+  it("plans one whole-organization rule per organization when no city is chosen", () => {
+    expect(plannedRuleAdditions({ rules, cityOptions, warehouseId: 1, organizationIds: [3, 2, 1, 2], cityKeys: [] })).toEqual([
+      { organizationId: 1, cityKey: null, fromWarehouseId: null },
+      { organizationId: 2, cityKey: null, fromWarehouseId: 2 },
+      { organizationId: 3, cityKey: null, fromWarehouseId: null },
+    ])
+  })
+
+  it("plans only cities an organization has branches in, skipping rules this warehouse holds", () => {
+    expect(plannedRuleAdditions({ rules, cityOptions, warehouseId: 1, organizationIds: [1, 2, 3], cityKeys: ["lahore", "karachi"] })).toEqual([
+      { organizationId: 1, cityKey: "lahore", fromWarehouseId: null },
+      { organizationId: 2, cityKey: "karachi", fromWarehouseId: 2 },
+    ])
+    expect(plannedRuleAdditions({ rules, cityOptions, warehouseId: 1, organizationIds: [1], cityKeys: ["karachi"] })).toEqual([])
+    expect(plannedRuleAdditions({ rules, cityOptions, warehouseId: 1, organizationIds: [], cityKeys: ["karachi"] })).toEqual([])
   })
 })

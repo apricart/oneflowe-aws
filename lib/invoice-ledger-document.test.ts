@@ -92,6 +92,25 @@ describe("creditNoteDocument", () => {
   })
 })
 
+describe("frozenInvoiceDocument fulfiller", () => {
+  const base = {
+    invoice,
+    lines,
+    order: { id: 1782, tid: "TID-1782", paymentStatus: "UNPAID" },
+    creditNotes: [],
+  }
+
+  it("names the fulfiller once the order has one", () => {
+    expect(frozenInvoiceDocument({ ...base, fulfilledByName: "Sana Iqbal" }))
+      .toMatchObject({ frozen: true, fulfilledByName: "Sana Iqbal", invoiceNumber: "UBL-APR-000036" })
+  })
+
+  it("names no fulfiller before fulfilment", () => {
+    expect(frozenInvoiceDocument({ ...base, fulfilledByName: null })).not.toHaveProperty("fulfilledByName")
+    expect(frozenInvoiceDocument({ ...base, fulfilledByName: "  " })).not.toHaveProperty("fulfilledByName")
+  })
+})
+
 describe("displayedInvoiceNumber", () => {
   it("shows a tax invoice's number", () => {
     expect(displayedInvoiceNumber({ invoiceNumber: "UBL-APR-000036", invoiceStatus: "ISSUED" })).toBe("UBL-APR-000036")

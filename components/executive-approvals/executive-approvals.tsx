@@ -516,7 +516,7 @@ export function ExecutiveApprovals({ audience = "executive" }: Readonly<{ audien
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
             <Input
               aria-label="Search orders"
-              placeholder="Search by order number or customer reference"
+              placeholder="Search by order number, customer reference or product"
               value={searchInput}
               maxLength={EXECUTIVE_APPROVAL_SEARCH_MAX_LENGTH}
               onChange={(event) => { setSearchInput(event.target.value); setPage(1) }}

@@ -22,6 +22,7 @@ import { orderTakesBudget } from "@/lib/organization-budget-policy"
 import { recordAuditEvent, type AuditActor } from "@/lib/server/activity-audit"
 import { closeOpenCorrectionRequest } from "@/lib/server/order-correction"
 import { loadOrderDeskReach, orderDeskOrderCondition } from "@/lib/server/order-desk-scope"
+import { orderLineMatchesSql } from "@/lib/server/order-line-search-sql"
 import { fulfillApprovedOrder, type OrderFulfillmentOutcome } from "@/lib/server/order-fulfillment"
 import { queueWarehouseOrderNotifications } from "@/lib/server/warehouse-order-notifications"
 import { releaseHeldQuantityBudgetForOrder } from "@/lib/server/product-quantity-budget-ledger"
@@ -132,7 +133,11 @@ export async function listDeskOrders(userId: string, query: DeskOrderListQuery):
   if (query.search) {
     // A parameter, with the LIKE wildcards in what was typed escaped.
     const pattern = `%${escapeLikePattern(query.search)}%`
-    conditions.push(or(ilike(orders.tid, pattern), ilike(orders.intakeReference, pattern)) as SQL)
+    conditions.push(or(
+      ilike(orders.tid, pattern),
+      ilike(orders.intakeReference, pattern),
+      orderLineMatchesSql(pattern),
+    ) as SQL)
   }
   const scopeWhere = and(...conditions)
   const tab = tabCondition(query.status)

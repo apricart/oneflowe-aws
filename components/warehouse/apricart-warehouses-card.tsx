@@ -33,18 +33,20 @@ import {
   WAREHOUSE_MEMBER_SCOPE_LABELS,
   WAREHOUSE_RESPONSIBILITIES,
   WAREHOUSE_RESPONSIBILITY_LABELS,
+  citiesOfOrganizations,
   inactiveAccountsHoldingReach,
-  routedBranchIdsInOrganization,
+  plannedRuleAdditions,
   suggestedBranchIdsFor,
   type ApricartWarehouseStatus,
   type BranchCoverageKind,
   type WarehouseMemberScope,
   type WarehouseResponsibility,
 } from "@/lib/apricart-warehouses"
+import { filterOptions } from "@/lib/multi-select"
 import { readsWarehouseMembership, type WarehouseOrderOwnershipMode } from "@/lib/warehouse-ownership-policy"
-import { toggleAllBranches, toggleBranch } from "@/lib/warehouse-team-view"
+import { organizationSelectionChanges, toggleAllBranches, toggleBranch } from "@/lib/warehouse-team-view"
 import { WAREHOUSE_TEAM_KEY } from "@/components/warehouse/warehouse-team-card"
-import { OrganizationCombobox } from "@/components/warehouse/organization-combobox"
+import { MultiSelectCombobox } from "@/components/warehouse/multi-select-combobox"
 
 type Member = {
   userId: string
@@ -149,6 +151,28 @@ async function send(url: string, method: string, body: unknown, fallback: string
     return "The request could not be sent. Check the connection and try again."
   }
 }
+
+/**
+ * One request per item, in order, stopping at the first refusal. The save
+ * routes take one organization (or one rule) per request, under the WAF's 8 KB.
+ */
+async function sendEach<T>(items: readonly T[], request: (item: T) => Promise<string | null>): Promise<{ saved: T[]; failure: string | null }> {
+  const saved: T[] = []
+  for (const item of items) {
+    const failure = await request(item)
+    if (failure) return { saved, failure }
+    saved.push(item)
+  }
+  return { saved, failure: null }
+}
+
+/** The refusal, and — when several were sent — how many were saved before it. */
+function partialFailure(failure: string, saved: number, total: number, noun: string): string {
+  return total > 1 ? `${failure} ${saved} of ${total} ${noun} saved before this; the rest were not.` : failure
+}
+
+const ORGANIZATION_NOUNS = { one: "organization", many: "organizations" }
+const CITY_NOUNS = { one: "city", many: "cities" }
 
 const accountName = (account: { fullName: string | null; email: string }) => account.fullName ?? account.email
 
@@ -364,9 +388,9 @@ function MembersDialog({
 }
 
 /**
- * The branches whose new orders will default to this warehouse, one
- * organization at a time. The coverage report's suggestion is shown, and
- * applied only when ticked.
+ * The branches put in this warehouse by hand, for one or more organizations at
+ * a time. Save sends one request per organization whose ticks changed. The
+ * coverage report's suggestion is shown, and applied only when ticked.
  */
 function RoutesDialog({
   warehouse,
@@ -379,63 +403,67 @@ function RoutesDialog({
     () => new Map(team.branches.map((branch) => [branch.id, branch.organizationId])),
     [team.branches],
   )
+  const organizationName = new Map(team.organizations.map((organization) => [organization.id, organization.name]))
   const [routes, setRoutes] = useState(configuration.routes)
-  const routedHere = (organizationId: number) => routedBranchIdsInOrganization({
-    routes, branchOrganization, warehouseId: warehouse.id, organizationId,
+  const routedHere = routes
+    .filter((route) => route.warehouseId === warehouse.id)
+    .map((route) => route.branchId)
+    .sort((a, b) => a - b)
+  const routedCount = new Map<number, number>()
+  for (const branchId of routedHere) {
+    const organizationId = branchOrganization.get(branchId)
+    if (organizationId !== undefined) routedCount.set(organizationId, (routedCount.get(organizationId) ?? 0) + 1)
+  }
+  const firstRouted = routedHere.length > 0 ? branchOrganization.get(routedHere[0]) : undefined
+  const [organizationIds, setOrganizationIds] = useState<number[]>(() => {
+    const first = firstRouted ?? team.organizations[0]?.id
+    return first === undefined ? [] : [first]
   })
-  const firstRouted = routes.find((route) => route.warehouseId === warehouse.id)
-  const [organizationId, setOrganizationId] = useState<number | null>(
-    (firstRouted && branchOrganization.get(firstRouted.branchId)) ?? team.organizations[0]?.id ?? null,
-  )
-  const [selected, setSelected] = useState<number[]>(organizationId === null ? [] : routedHere(organizationId))
+  const [selected, setSelected] = useState<number[]>(routedHere)
   const [filter, setFilter] = useState("")
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
+  const chosen = new Set(organizationIds)
   const warehouseCode = new Map(configuration.warehouses.map((entry) => [entry.id, entry.code]))
   const routeOf = new Map(routes.map((route) => [route.branchId, route.warehouseId]))
-  const organizationBranches = team.branches.filter((branch) => branch.organizationId === organizationId)
+  const organizationBranches = team.branches.filter((branch) => chosen.has(branch.organizationId))
   const branchNeedle = filter.trim().toLowerCase()
   const shown = organizationBranches.filter((branch) => (
     `${branch.name} ${branch.city ?? ""}`.toLowerCase().includes(branchNeedle)
   ))
   const shownIds = shown.map((branch) => branch.id)
   const allShownSelected = shownIds.length > 0 && shownIds.every((id) => selected.includes(id))
-  const saved = organizationId === null ? [] : routedHere(organizationId)
-  const sortedSelected = [...selected].sort((a, b) => a - b)
-  const dirty = saved.join(",") !== sortedSelected.join(",")
-  const suggested = organizationId === null
-    ? []
-    : suggestedBranchIdsFor({ coverage: configuration.coverage.branches, warehouseId: warehouse.id, organizationId })
-  const movingIn = sortedSelected.filter((id) => routeOf.has(id) && routeOf.get(id) !== warehouse.id)
-
-  const switchOrganization = (next: number) => {
-    setOrganizationId(next)
-    setSelected(routedHere(next))
-    setFilter("")
-    setFormError(null)
-  }
+  const changes = organizationSelectionChanges({ organizationIds, branches: team.branches, saved: routedHere, selected })
+  const dirty = changes.length > 0
+  const suggested = organizationIds.flatMap((organizationId) => (
+    suggestedBranchIdsFor({ coverage: configuration.coverage.branches, warehouseId: warehouse.id, organizationId })
+  ))
+  const movingIn = selected.filter((id) => chosen.has(branchOrganization.get(id) ?? 0) && routeOf.has(id) && routeOf.get(id) !== warehouse.id)
 
   const save = async () => {
-    if (saving || organizationId === null) return
+    if (saving || !dirty) return
     setSaving(true)
     setFormError(null)
     try {
-      const failure = await send(
+      const { saved, failure } = await sendEach(changes, (change) => send(
         `${APRICART_WAREHOUSES_KEY}/${warehouse.id}/branches`,
         "PUT",
-        { organizationId, branchIds: sortedSelected },
+        change,
         "The branches could not be saved",
-      )
-      if (failure) {
-        setFormError(failure)
-        return
+      ))
+      if (failure) setFormError(partialFailure(failure, saved.length, changes.length, "organizations were"))
+      if (saved.length === 0) return
+      let next = routes
+      for (const change of saved) {
+        const ticked = new Set(change.branchIds)
+        next = [
+          ...next.filter((route) => branchOrganization.get(route.branchId) !== change.organizationId
+            || (route.warehouseId !== warehouse.id && !ticked.has(route.branchId))),
+          ...change.branchIds.map((branchId) => ({ branchId, warehouseId: warehouse.id })),
+        ]
       }
-      const organizationIds = new Set(organizationBranches.map((branch) => branch.id))
-      setRoutes([
-        ...routes.filter((route) => !organizationIds.has(route.branchId) || (route.warehouseId !== warehouse.id && !selected.includes(route.branchId))),
-        ...sortedSelected.map((branchId) => ({ branchId, warehouseId: warehouse.id })),
-      ])
+      setRoutes(next)
       toast({ title: "Routes saved", description: warehouse.name })
       onSaved()
     } finally {
@@ -455,19 +483,21 @@ function RoutesDialog({
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1">
-            <Label htmlFor="apricart-routes-org">Organization</Label>
-            <OrganizationCombobox
+            <Label htmlFor="apricart-routes-org">Organizations</Label>
+            <MultiSelectCombobox
               id="apricart-routes-org"
-              value={organizationId}
+              value={organizationIds}
               options={team.organizations.map((organization) => ({
                 id: organization.id,
                 label: organization.name,
-                hint: `(${routedHere(organization.id).length})`,
+                hint: `(${routedCount.get(organization.id) ?? 0})`,
               }))}
+              nouns={ORGANIZATION_NOUNS}
+              placeholder="Choose organizations"
               disabled={saving || dirty}
-              onValueChange={switchOrganization}
+              onChange={(next) => { setOrganizationIds(next); setFilter(""); setFormError(null) }}
             />
-            {dirty && <p className="text-xs text-amber-600">Save or reset this organization first.</p>}
+            {dirty && <p className="text-xs text-amber-600">Save or reset the ticked branches first.</p>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Input placeholder="Filter branches" aria-label="Filter branches" value={filter} onChange={(event) => setFilter(event.target.value)} maxLength={100} className="flex-1" />
@@ -475,7 +505,7 @@ function RoutesDialog({
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => setSelected((current) => [...new Set([...current, ...suggested])])}
+              onClick={() => setSelected((current) => [...new Set([...current, ...suggested])].sort((a, b) => a - b))}
               disabled={saving || warehouse.status !== "ACTIVE" || suggested.every((id) => selected.includes(id))}
             >
               Tick suggested ({suggested.length})
@@ -492,7 +522,8 @@ function RoutesDialog({
           </div>
           <fieldset className="max-h-72 space-y-1 overflow-y-auto rounded-md border p-2" disabled={saving}>
             <legend className="sr-only">Branches</legend>
-            {shown.length === 0 && <p className="p-2 text-sm text-muted-foreground">No branches.</p>}
+            {organizationIds.length === 0 && <p className="p-2 text-sm text-muted-foreground">Choose organizations to list their branches.</p>}
+            {organizationIds.length > 0 && shown.length === 0 && <p className="p-2 text-sm text-muted-foreground">No branches.</p>}
             {shown.map((branch) => {
               const id = `apricart-route-${warehouse.id}-${branch.id}`
               const elsewhere = routeOf.get(branch.id)
@@ -509,6 +540,9 @@ function RoutesDialog({
                   <label htmlFor={id} className="flex flex-1 flex-wrap items-center gap-2 text-sm">
                     {branch.name}
                     {branch.city && <span className="text-xs text-muted-foreground">{branch.city}</span>}
+                    {organizationIds.length > 1 && (
+                      <span className="text-xs text-muted-foreground">· {organizationName.get(branch.organizationId)}</span>
+                    )}
                     {suggested.includes(branch.id) && <Badge variant="secondary">Suggested</Badge>}
                     {elsewhere !== undefined && elsewhere !== warehouse.id && (
                       <Badge variant="outline">routed to {warehouseCode.get(elsewhere) ?? "another warehouse"}</Badge>
@@ -524,10 +558,13 @@ function RoutesDialog({
               {movingIn.length} ticked {movingIn.length === 1 ? "branch is" : "branches are"} routed to another warehouse and will move here.
             </p>
           )}
+          {changes.length > 1 && (
+            <p className="text-xs text-muted-foreground">Saves {changes.length} organizations, one after another.</p>
+          )}
           {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
           <div className="flex justify-end gap-2">
-            {dirty && <Button variant="secondary" onClick={() => setSelected(saved)} disabled={saving}>Reset</Button>}
-            <Button onClick={() => { void save() }} disabled={saving || !dirty || organizationId === null}>
+            {dirty && <Button variant="secondary" onClick={() => setSelected(routedHere)} disabled={saving}>Reset</Button>}
+            <Button onClick={() => { void save() }} disabled={saving || !dirty}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save
             </Button>
@@ -541,13 +578,10 @@ function RoutesDialog({
   )
 }
 
-/** The Select value that stands for "every city of the organization" (an organization rule). */
-const ALL_CITIES = "__all__"
-
 /**
- * Whole organizations, or an organization in one city, in this warehouse. A
+ * Whole organizations, or organizations in chosen cities, in this warehouse. A
  * rule is read whenever a branch's warehouse is, so branches opened or
- * re-citied later follow it. Each change saves at once.
+ * re-citied later follow it. Each rule is its own request, saved at once.
  */
 function RulesDialog({
   warehouse,
@@ -558,38 +592,72 @@ function RulesDialog({
 }: Readonly<{ warehouse: Warehouse; configuration: Configuration; team: Team; onClose: () => void; onSaved: () => void }>) {
   const organizationName = new Map(team.organizations.map((organization) => [organization.id, organization.name]))
   const warehouseCode = new Map(configuration.warehouses.map((entry) => [entry.id, entry.code]))
-  const [organizationId, setOrganizationId] = useState<number | null>(team.organizations[0]?.id ?? null)
-  const [city, setCity] = useState<string>(ALL_CITIES)
+  const [ruleQuery, setRuleQuery] = useState("")
+  const [organizationIds, setOrganizationIds] = useState<number[]>([])
+  const [cityKeys, setCityKeys] = useState<string[]>([])
   const [pending, setPending] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
-  const rulesHere = configuration.rules.filter((rule) => rule.warehouseId === warehouse.id)
-  const cities = configuration.cityOptions.filter((option) => option.organizationId === organizationId)
-  const cityKey = city === ALL_CITIES ? null : city
-  const holder = organizationId === null
-    ? undefined
-    : configuration.rules.find((rule) => rule.organizationId === organizationId && rule.cityKey === cityKey)
-  const canAdd = organizationId !== null && warehouse.status === "ACTIVE" && holder?.warehouseId !== warehouse.id
+  const describeRule = (rule: Rule) => `${organizationName.get(rule.organizationId) ?? `Organization ${rule.organizationId}`} · ${
+    rule.cityKey === null ? "all cities" : rule.cityLabel ?? rule.cityKey}`
 
-  const change = async (body: { organizationId: number; city: string | null; assigned: boolean }) => {
-    if (pending) return
+  const rulesHere = configuration.rules.filter((rule) => rule.warehouseId === warehouse.id)
+  const shownRules = filterOptions(rulesHere.map((rule) => ({ rule, label: describeRule(rule) })), ruleQuery)
+  const cities = citiesOfOrganizations(configuration.cityOptions, organizationIds)
+  const planned = plannedRuleAdditions({
+    rules: configuration.rules,
+    cityOptions: configuration.cityOptions,
+    warehouseId: warehouse.id,
+    organizationIds,
+    cityKeys,
+  })
+  const moving = planned.filter((rule) => rule.fromWarehouseId !== null)
+  const movingFrom = [...new Set(moving.map((rule) => warehouseCode.get(rule.fromWarehouseId ?? 0) ?? "another warehouse"))]
+  const canAdd = warehouse.status === "ACTIVE" && planned.length > 0
+
+  const changeOrganizations = (next: number[]) => {
+    setOrganizationIds(next)
+    // A city none of the chosen organizations has is dropped, never sent.
+    const offered = new Set(citiesOfOrganizations(configuration.cityOptions, next).map((city) => city.cityKey))
+    setCityKeys((current) => current.filter((key) => offered.has(key)))
+    setFormError(null)
+  }
+
+  const putRule = (body: { organizationId: number; city: string | null; assigned: boolean }) => (
+    send(`${APRICART_WAREHOUSES_KEY}/${warehouse.id}/rules`, "PUT", body, "The rule could not be saved")
+  )
+
+  const add = async () => {
+    if (pending || !canAdd) return
     setPending(true)
     setFormError(null)
     try {
-      const failure = await send(`${APRICART_WAREHOUSES_KEY}/${warehouse.id}/rules`, "PUT", body, "The rule could not be saved")
-      if (failure) {
-        setFormError(failure)
-        return
-      }
-      toast({ title: body.assigned ? "Rule added" : "Rule removed", description: warehouse.name })
+      const { saved, failure } = await sendEach(planned, (rule) => putRule({ organizationId: rule.organizationId, city: rule.cityKey, assigned: true }))
+      if (failure) setFormError(partialFailure(failure, saved.length, planned.length, "rules were"))
+      if (saved.length === 0) return
+      toast({ title: saved.length === 1 ? "Rule added" : `${saved.length} rules added`, description: warehouse.name })
       onSaved()
     } finally {
       setPending(false)
     }
   }
 
-  const describeRule = (rule: Rule) => `${organizationName.get(rule.organizationId) ?? `Organization ${rule.organizationId}`} · ${
-    rule.cityKey === null ? "all cities" : rule.cityLabel ?? rule.cityKey}`
+  const remove = async (rule: Rule) => {
+    if (pending) return
+    setPending(true)
+    setFormError(null)
+    try {
+      const failure = await putRule({ organizationId: rule.organizationId, city: rule.cityKey, assigned: false })
+      if (failure) {
+        setFormError(failure)
+        return
+      }
+      toast({ title: "Rule removed", description: warehouse.name })
+      onSaved()
+    } finally {
+      setPending(false)
+    }
+  }
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !pending) onClose() }}>
@@ -602,13 +670,25 @@ function RulesDialog({
           </DialogDescription>
         </DialogHeader>
         <section aria-labelledby={`apricart-rules-${warehouse.id}`} className="space-y-2">
-          <h3 id={`apricart-rules-${warehouse.id}`} className="text-sm font-medium">Rules ({rulesHere.length})</h3>
+          <h3 id={`apricart-rules-${warehouse.id}`} className="text-sm font-medium">
+            Rules ({ruleQuery.trim() ? `${shownRules.length} of ${rulesHere.length}` : rulesHere.length})
+          </h3>
           {rulesHere.length === 0 && <p className="text-sm text-muted-foreground">No rules yet.</p>}
+          {rulesHere.length > 0 && (
+            <Input
+              placeholder="Search rules by organization or city"
+              aria-label="Search rules"
+              value={ruleQuery}
+              onChange={(event) => setRuleQuery(event.target.value)}
+              maxLength={100}
+            />
+          )}
+          {rulesHere.length > 0 && shownRules.length === 0 && <p className="text-sm text-muted-foreground">No rule matches.</p>}
           <ul className="max-h-56 space-y-1 overflow-y-auto">
-            {rulesHere.map((rule) => (
+            {shownRules.map(({ rule, label }) => (
               <li key={rule.id} className="flex items-center justify-between gap-2 rounded px-2 py-1 text-sm hover:bg-muted/50">
                 <span>
-                  {describeRule(rule)}
+                  {label}
                   <span className="text-xs text-muted-foreground"> · {rule.branchCount} active branch{rule.branchCount === 1 ? "" : "es"}</span>
                 </span>
                 <Button
@@ -616,7 +696,8 @@ function RulesDialog({
                   size="sm"
                   variant="ghost"
                   disabled={pending}
-                  onClick={() => { void change({ organizationId: rule.organizationId, city: rule.cityKey, assigned: false }) }}
+                  aria-label={`Remove ${label}`}
+                  onClick={() => { void remove(rule) }}
                 >
                   Remove
                 </Button>
@@ -625,45 +706,53 @@ function RulesDialog({
           </ul>
         </section>
         <section aria-labelledby={`apricart-rule-add-${warehouse.id}`} className="space-y-3 rounded-md border p-3">
-          <h3 id={`apricart-rule-add-${warehouse.id}`} className="text-sm font-medium">Add a rule</h3>
+          <h3 id={`apricart-rule-add-${warehouse.id}`} className="text-sm font-medium">Add rules</h3>
           <div className="space-y-1">
-            <Label htmlFor={`apricart-rule-org-${warehouse.id}`}>Organization</Label>
-            <OrganizationCombobox
+            <Label htmlFor={`apricart-rule-org-${warehouse.id}`}>Organizations</Label>
+            <MultiSelectCombobox
               id={`apricart-rule-org-${warehouse.id}`}
-              value={organizationId}
+              value={organizationIds}
               options={team.organizations.map((organization) => ({ id: organization.id, label: organization.name }))}
+              nouns={ORGANIZATION_NOUNS}
+              placeholder="Choose organizations"
               disabled={pending}
-              onValueChange={(next) => { setOrganizationId(next); setCity(ALL_CITIES); setFormError(null) }}
+              onChange={changeOrganizations}
             />
           </div>
           <div className="space-y-1">
-            <Label htmlFor={`apricart-rule-city-${warehouse.id}`}>City</Label>
-            <Select value={city} onValueChange={setCity} disabled={pending || organizationId === null}>
-              <SelectTrigger id={`apricart-rule-city-${warehouse.id}`}><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_CITIES}>All cities of this organization</SelectItem>
-                {cities.map((option) => (
-                  <SelectItem key={option.cityKey} value={option.cityKey}>
-                    {option.label} ({option.branchCount})
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor={`apricart-rule-city-${warehouse.id}`}>Cities</Label>
+            <MultiSelectCombobox
+              id={`apricart-rule-city-${warehouse.id}`}
+              value={cityKeys}
+              options={cities.map((city) => ({
+                id: city.cityKey,
+                label: city.label,
+                hint: `${city.branchCount} branch${city.branchCount === 1 ? "" : "es"}`,
+              }))}
+              nouns={CITY_NOUNS}
+              placeholder="All cities of these organizations"
+              disabled={pending || organizationIds.length === 0}
+              onChange={(next) => { setCityKeys(next); setFormError(null) }}
+            />
+            <p className="text-xs text-muted-foreground">
+              {cityKeys.length === 0
+                ? "No city chosen: one rule per organization, covering every city it has branches in, now and later."
+                : "One rule per organization and chosen city it has branches in."}
+            </p>
           </div>
-          {holder && holder.warehouseId !== warehouse.id && (
+          {moving.length > 0 && (
             <p className="text-xs text-amber-600">
-              Now in {warehouseCode.get(holder.warehouseId) ?? "another warehouse"} — adding it moves its branches here.
+              {moving.length} of these {moving.length === 1 ? "is" : "are"} now in {movingFrom.join(", ")} — adding moves {moving.length === 1 ? "its" : "their"} branches here.
             </p>
           )}
-          {holder?.warehouseId === warehouse.id && <p className="text-xs text-muted-foreground">Already a rule of this warehouse.</p>}
+          {organizationIds.length > 0 && planned.length === 0 && (
+            <p className="text-xs text-muted-foreground">Already {organizationIds.length === 1 && cityKeys.length <= 1 ? "a rule" : "rules"} of this warehouse.</p>
+          )}
           {warehouse.status !== "ACTIVE" && <p className="text-xs text-muted-foreground">An inactive warehouse takes no new rules.</p>}
           <div className="flex justify-end">
-            <Button
-              onClick={() => { if (organizationId !== null) void change({ organizationId, city: cityKey, assigned: true }) }}
-              disabled={pending || !canAdd}
-            >
+            <Button onClick={() => { void add() }} disabled={pending || !canAdd}>
               {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Add rule
+              {planned.length > 1 ? `Add ${planned.length} rules` : "Add rule"}
             </Button>
           </div>
         </section>
@@ -678,7 +767,8 @@ function RulesDialog({
 
 /**
  * Which of this warehouse's branches one operator works: all of them, or a
- * selection made one organization at a time from the branches in the warehouse now.
+ * selection made from the branches in the warehouse now, for one or more
+ * organizations at a time — one request per organization.
  */
 function MemberScopeDialog({
   warehouse,
@@ -702,31 +792,38 @@ function MemberScopeDialog({
     .map((entry) => entry.branchId))
   const warehouseBranches = team.branches.filter((branch) => inWarehouse.has(branch.id))
   const organizations = team.organizations.filter((organization) => warehouseBranches.some((branch) => branch.organizationId === organization.id))
-  const [organizationId, setOrganizationId] = useState<number | null>(organizations[0]?.id ?? null)
-  const organizationBranches = warehouseBranches.filter((branch) => branch.organizationId === organizationId)
-  const savedHere = member.selectedBranchIds.filter((id) => organizationBranches.some((branch) => branch.id === id))
-  const [selected, setSelected] = useState<number[]>(savedHere)
+  const organizationName = new Map(organizations.map((organization) => [organization.id, organization.name]))
+  const [organizationIds, setOrganizationIds] = useState<number[]>(organizations[0] ? [organizations[0].id] : [])
+  const [selected, setSelected] = useState<number[]>(member.selectedBranchIds)
+  const [filter, setFilter] = useState("")
   const [pending, setPending] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
-  const shownIds = organizationBranches.map((branch) => branch.id)
-  const sortedSelected = [...selected].sort((a, b) => a - b)
-  const dirty = member.branchScope !== "SELECTED" || savedHere.join(",") !== sortedSelected.join(",")
 
-  const save = async (body: { scope: "ALL" } | { scope: "SELECTED"; organizationId: number; branchIds: number[] }) => {
+  const chosen = new Set(organizationIds)
+  const organizationBranches = warehouseBranches.filter((branch) => chosen.has(branch.organizationId))
+  const branchNeedle = filter.trim().toLowerCase()
+  const shown = organizationBranches.filter((branch) => (
+    `${branch.name} ${branch.city ?? ""}`.toLowerCase().includes(branchNeedle)
+  ))
+  const shownIds = shown.map((branch) => branch.id)
+  const selection = { organizationIds, branches: warehouseBranches, saved: member.selectedBranchIds, selected }
+  const edited = organizationSelectionChanges(selection).length > 0
+  // Moving from "all branches" to a selection sends every chosen organization, even one left as it was.
+  const changes = organizationSelectionChanges({ ...selection, includeUnchanged: member.branchScope !== "SELECTED" })
+
+  const save = async (body: { scope: "ALL" } | { scope: "SELECTED" }) => {
     if (pending) return
     setPending(true)
     setFormError(null)
     try {
-      const failure = await send(
-        `${APRICART_WAREHOUSES_KEY}/${warehouse.id}/member-scope`,
-        "PUT",
-        { userId: member.userId, ...body },
-        "The scope could not be saved",
-      )
-      if (failure) {
-        setFormError(failure)
-        return
-      }
+      const url = `${APRICART_WAREHOUSES_KEY}/${warehouse.id}/member-scope`
+      const requests: Array<{ scope: "ALL" } | { scope: "SELECTED"; organizationId: number; branchIds: number[] }> = body.scope === "ALL"
+        ? [{ scope: "ALL" }]
+        : changes.map((change) => ({ scope: "SELECTED", ...change }))
+      const { saved, failure } = await sendEach(requests, (request) => send(url, "PUT", { userId: member.userId, ...request }, "The scope could not be saved"))
+      if (failure) setFormError(partialFailure(failure, saved.length, requests.length, "organizations were"))
+      if (saved.length === 0) return
+      if (body.scope === "ALL") setSelected([])
       toast({ title: "Scope saved", description: account ? accountName(account) : undefined })
       onSaved()
     } finally {
@@ -757,20 +854,20 @@ function MemberScopeDialog({
         </div>
         <div className="space-y-3">
           <div className="space-y-1">
-            <Label htmlFor={`apricart-scope-org-${member.userId}`}>Organization</Label>
-            <OrganizationCombobox
+            <Label htmlFor={`apricart-scope-org-${member.userId}`}>Organizations</Label>
+            <MultiSelectCombobox
               id={`apricart-scope-org-${member.userId}`}
-              value={organizationId}
+              value={organizationIds}
               options={organizations.map((organization) => ({ id: organization.id, label: organization.name }))}
-              disabled={pending}
-              onValueChange={(next) => {
-                setOrganizationId(next)
-                setSelected(member.selectedBranchIds.filter((id) => warehouseBranches.some((branch) => branch.id === id && branch.organizationId === next)))
-                setFormError(null)
-              }}
+              nouns={ORGANIZATION_NOUNS}
+              placeholder="Choose organizations"
+              disabled={pending || edited}
+              onChange={(next) => { setOrganizationIds(next); setFilter(""); setFormError(null) }}
             />
+            {edited && <p className="text-xs text-amber-600">Save or reset the ticked branches first.</p>}
           </div>
-          <div className="flex justify-end">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input placeholder="Filter branches" aria-label="Filter branches" value={filter} onChange={(event) => setFilter(event.target.value)} maxLength={100} className="flex-1" />
             <Button
               type="button"
               variant="outline"
@@ -778,13 +875,14 @@ function MemberScopeDialog({
               onClick={() => setSelected((current) => toggleAllBranches(current, shownIds))}
               disabled={pending || shownIds.length === 0}
             >
-              {shownIds.length > 0 && shownIds.every((id) => selected.includes(id)) ? "Unselect" : "Select"} all
+              {shownIds.length > 0 && shownIds.every((id) => selected.includes(id)) ? "Unselect" : "Select"} all{branchNeedle ? " shown" : ""}
             </Button>
           </div>
           <fieldset className="max-h-72 space-y-1 overflow-y-auto rounded-md border p-2" disabled={pending}>
             <legend className="sr-only">Branches</legend>
-            {organizationBranches.length === 0 && <p className="p-2 text-sm text-muted-foreground">No branches of this warehouse here.</p>}
-            {organizationBranches.map((branch) => {
+            {organizationIds.length === 0 && <p className="p-2 text-sm text-muted-foreground">Choose organizations to list their branches.</p>}
+            {organizationIds.length > 0 && shown.length === 0 && <p className="p-2 text-sm text-muted-foreground">No branches of this warehouse here.</p>}
+            {shown.map((branch) => {
               const id = `apricart-scope-${member.userId}-${branch.id}`
               return (
                 <div key={branch.id} className="flex items-center gap-3 rounded px-2 py-1.5 hover:bg-muted/50">
@@ -792,17 +890,18 @@ function MemberScopeDialog({
                   <label htmlFor={id} className="flex flex-1 flex-wrap items-center gap-2 text-sm">
                     {branch.name}
                     {branch.city && <span className="text-xs text-muted-foreground">{branch.city}</span>}
+                    {organizationIds.length > 1 && (
+                      <span className="text-xs text-muted-foreground">· {organizationName.get(branch.organizationId)}</span>
+                    )}
                   </label>
                 </div>
               )
             })}
           </fieldset>
           {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
-          <div className="flex justify-end">
-            <Button
-              onClick={() => { if (organizationId !== null) void save({ scope: "SELECTED", organizationId, branchIds: sortedSelected }) }}
-              disabled={pending || organizationId === null || !dirty}
-            >
+          <div className="flex justify-end gap-2">
+            {edited && <Button variant="secondary" onClick={() => setSelected(member.selectedBranchIds)} disabled={pending}>Reset</Button>}
+            <Button onClick={() => { void save({ scope: "SELECTED" }) }} disabled={pending || changes.length === 0}>
               {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Work only the ticked branches
             </Button>

@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname, useSearchParams } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge,Warehouse,UsersRound,ShieldAlert,Banknote } from "lucide-react"
+import { Home,Building2,Users,Package,Boxes,Wallet,BarChart3,Settings,FolderTree,ChevronDown,ClipboardCheck,DoorOpen,Headset,LifeBuoy,MapPinned,PanelLeftClose,PanelLeftOpen,ScrollText,Gauge,Warehouse,UsersRound,ShieldAlert,Banknote,ShoppingCart } from "lucide-react"
 import Image from "next/image"
 import { useCallback,useEffect,useState,type ReactNode } from "react"
 import { Tooltip,TooltipContent,TooltipTrigger } from "@/components/ui/tooltip"
@@ -15,6 +15,7 @@ import { isOrganizationViewer, isViewerRole } from "@/lib/viewer-access"
 import { ROLE_DISPLAY_NAMES } from "@/lib/role-display-names"
 import { ORDERING_BLOCK_BRANCHES_URL, ORDERING_BLOCKS_AREA, canUseOrderingBlocksPage } from "@/lib/ordering-blocks-access"
 import { FINANCE_HOME, FINANCE_LABEL, isFinanceRole } from "@/lib/finance-access"
+import { PROCUREMENT_HOME, PROCUREMENT_LABEL, isProcurementRole } from "@/lib/procurement-access"
 
 const COLLAPSED_STORAGE_KEY = "oneflowe.sidebar.collapsed"
 
@@ -154,6 +155,9 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       { href: "/warehouse-team", label: "Warehouse Team", icon: Warehouse },
       // Each warehouse's stock figures — Super Admin's alone (lib/warehouse-stock-access.ts).
       { href: "/warehouse-stock", label: "Warehouse Stock", icon: Boxes },
+      // Buying for the warehouses: suppliers, purchase orders it approves,
+      // receipts and supplier invoices (lib/procurement-access.ts).
+      { href: PROCUREMENT_HOME, label: "Procurement", icon: ShoppingCart },
       { href: "/refunds", label: "Refunds", icon: Wallet },
       {
         href: "/inventory",
@@ -317,7 +321,14 @@ const navigationByRole = (role: string, budgetAllocationEnabled: boolean) => {
       { href: FINANCE_HOME, label: "Payments", icon: Banknote },
       { href: "/orders", label: "Orders", icon: Package },
       { href: "/reports", label: "Reports", icon: BarChart3, subItems: platformReportItems },
+      // Purchase orders read-only, and the supplier invoices it matches and pays.
+      { href: PROCUREMENT_HOME, label: "Procurement", icon: ShoppingCart },
     ]
+  }
+
+  // Apricart procurement: purchasing alone. No dashboard: it has none.
+  if (isProcurementRole(role)) {
+    return [{ href: PROCUREMENT_HOME, label: "Procurement", icon: ShoppingCart }]
   }
 
   // The read-only account pinned to a branch has its dashboard alone (an
@@ -349,6 +360,9 @@ const describeRole = (role: string) => {
   }
   if (isFinanceRole(role)) {
     return FINANCE_LABEL
+  }
+  if (isProcurementRole(role)) {
+    return PROCUREMENT_LABEL
   }
   return ""
 }

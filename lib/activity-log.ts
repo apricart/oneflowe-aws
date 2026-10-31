@@ -104,6 +104,7 @@ export const ACTIVITY_ACTOR_ROLES = [
   "WAREHOUSE",
   "APRICART_SUPPORT",
   "FINANCE",
+  "PROCUREMENT",
 ] as const satisfies readonly Role[]
 
 export type ActivityActorRole = (typeof ACTIVITY_ACTOR_ROLES)[number]

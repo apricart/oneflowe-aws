@@ -24,6 +24,7 @@ import { apricartExecutiveAccessChangeError, isApricartExecutiveRole } from "@/l
 import { isWarehouseRole, warehouseAccessChangeError } from "@/lib/warehouse-access"
 import { apricartSupportAccessChangeError, isApricartSupportRole } from "@/lib/apricart-support-access"
 import { financeAccessChangeError, isFinanceRole } from "@/lib/finance-access"
+import { isProcurementRole, procurementAccessChangeError } from "@/lib/procurement-access"
 import { roleChangeRequiresSettledOrders } from "@/lib/role-change-preconditions"
 import { loadRoleChangeReadiness } from "@/lib/server/role-change-readiness"
 import {
@@ -128,6 +129,9 @@ async function getAccessShapeError({
   const financeError = financeAccessChangeError(targetRole, input)
   if (financeError) return financeError
   if (isFinanceRole(nextRole)) return null
+  const procurementError = procurementAccessChangeError(targetRole, input)
+  if (procurementError) return procurementError
+  if (isProcurementRole(nextRole)) return null
   return getAssignmentError({ scope, nextRole, nextOrganizationId, nextBranchId })
 }
 

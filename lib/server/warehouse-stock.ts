@@ -215,6 +215,70 @@ export async function issueOrderStock(
   return { kind: "issued", warehouseId: scope.warehouseId }
 }
 
+/** Where goods put back on a shelf came from. See plans/OF-PROCUREMENT-purchasing.md. */
+export type StockReceiptSource =
+  | { kind: "goods-receipt"; goodsReceiptId: number }
+  | { kind: "customer-return"; customerReturnId: number }
+
+/**
+ * Put goods on one warehouse's shelf — a purchase receipt or an approved
+ * customer return — inside the caller's transaction. Rows are taken FOR UPDATE
+ * in product order, like every other stock write; one movement per product per
+ * document (`stock_movements_receipt_uq` / `stock_movements_return_uq`).
+ */
+export async function addToWarehouseStock(
+  tx: Tx,
+  input: {
+    warehouseId: number
+    lines: ReadonlyArray<{ globalProductId: number; quantity: number }>
+    source: StockReceiptSource
+    reason?: string | null
+    actor: { id: string; role: string }
+  },
+): Promise<Array<{ globalProductId: number; onHandAfter: number }>> {
+  const lines = [...input.lines].filter((line) => line.quantity > 0).sort((a, b) => a.globalProductId - b.globalProductId)
+  if (lines.length === 0) return []
+  const productIds = lines.map((line) => line.globalProductId)
+
+  await tx
+    .insert(warehouseStock)
+    .values(productIds.map((globalProductId) => ({ warehouseId: input.warehouseId, globalProductId, onHandQuantity: 0 })))
+    .onConflictDoNothing({ target: [warehouseStock.warehouseId, warehouseStock.globalProductId] })
+  const rows = await tx
+    .select({ globalProductId: warehouseStock.globalProductId, onHand: warehouseStock.onHandQuantity })
+    .from(warehouseStock)
+    .where(and(eq(warehouseStock.warehouseId, input.warehouseId), inArray(warehouseStock.globalProductId, productIds)))
+    .orderBy(asc(warehouseStock.globalProductId))
+    .for("update")
+  const onHand = new Map(rows.map((row) => [row.globalProductId, Number(row.onHand)]))
+
+  const now = new Date()
+  const movementType = input.source.kind === "goods-receipt" ? "PURCHASE_RECEIPT" : "CUSTOMER_RETURN"
+  const results: Array<{ globalProductId: number; onHandAfter: number }> = []
+  for (const line of lines) {
+    const onHandAfter = Math.round(((onHand.get(line.globalProductId) ?? 0) + line.quantity) * 1000) / 1000
+    await tx
+      .update(warehouseStock)
+      .set({ onHandQuantity: onHandAfter, updatedAt: now, updatedByUserId: input.actor.id })
+      .where(and(eq(warehouseStock.warehouseId, input.warehouseId), eq(warehouseStock.globalProductId, line.globalProductId)))
+    await tx.insert(stockMovements).values({
+      warehouseId: input.warehouseId,
+      globalProductId: line.globalProductId,
+      movementType,
+      quantityDelta: line.quantity,
+      balanceAfter: onHandAfter,
+      goodsReceiptId: input.source.kind === "goods-receipt" ? input.source.goodsReceiptId : null,
+      customerReturnId: input.source.kind === "customer-return" ? input.source.customerReturnId : null,
+      reason: input.reason ?? null,
+      actorUserId: input.actor.id,
+      actorRole: input.actor.role,
+      createdAt: now,
+    })
+    results.push({ globalProductId: line.globalProductId, onHandAfter })
+  }
+  return results
+}
+
 export type StockAdjustmentOutcome =
   | { kind: "adjusted"; onHandBefore: number; onHandAfter: number; movementId: number }
   | { kind: "warehouse-not-found" }

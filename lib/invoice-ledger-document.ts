@@ -6,8 +6,8 @@
  * A tax invoice issued at supply is printed from its own rows and nothing
  * else: no live branch address, NTN, order status or refund reaches it, so
  * every reprint is the document that was issued. The only things that move are
- * outside its body — the PAID stamp, its invoice status, and the list of credit
- * notes issued against it.
+ * outside its body — the PAID stamp, its invoice status, the list of credit
+ * notes issued against it, and the fulfiller once the order is fulfilled.
  */
 import {
   INVOICE_STATUS_LABELS,
@@ -112,17 +112,21 @@ function buyerFields(buyer: Record<string, unknown>) {
 }
 
 /**
- * A tax invoice issued at supply, as the template prints it. `paymentStatus`
- * and `creditNotes` are the live parts; everything else is the issued record.
+ * A tax invoice issued at supply, as the template prints it. `paymentStatus`,
+ * `creditNotes` and `fulfilledByName` are the live parts; everything else is
+ * the issued record. Fulfilment comes after issue, so the fulfiller is named
+ * only once the order has one, and never written into the ledger.
  */
 export function frozenInvoiceDocument(input: {
   invoice: LedgerInvoiceRecord
   lines: LedgerInvoiceLineRecord[]
   order: { id: number; tid: string; paymentStatus: string | null }
   creditNotes: CreditNoteSummary[]
+  fulfilledByName?: string | null
 }) {
   const { invoice } = input
   const status: InvoiceStatus = toInvoiceStatus(invoice.status) ?? "ISSUED"
+  const fulfilledByName = text(input.fulfilledByName)
   return {
     frozen: true,
     invoiceNumber: invoice.number,
@@ -135,6 +139,7 @@ export function frozenInvoiceDocument(input: {
     placedByName: text(invoice.participants.placedByName) ?? "N/A",
     placedByPhone: text(invoice.participants.placedByPhone) ?? null,
     approvedByName: text(invoice.participants.approvedByName) ?? "N/A",
+    ...(fulfilledByName ? { fulfilledByName } : {}),
     items: asItems(input.lines.map((line) => printableLine({
       description: line.productName,
       quantity: line.quantity,

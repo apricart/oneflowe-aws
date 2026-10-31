@@ -27,6 +27,8 @@
  * See plans/OF-FINANCE-finance-role.md.
  */
 
+import { PROCUREMENT_HOME, isFinanceProcurementApiRequestAllowed } from "@/lib/procurement-access"
+
 export const FINANCE_ROLE = "FINANCE" as const
 export const FINANCE_LABEL = "Finance"
 
@@ -38,7 +40,9 @@ export const FINANCE_HOME = "/finance"
  * an order's own page and `/reports` every report. `/change-password` is
  * handled ahead of this in `proxy.ts`.
  */
-export const FINANCE_AREAS: readonly string[] = [FINANCE_HOME, "/orders", "/invoices", "/reports"]
+// `/procurement` read-only, plus recording and deciding supplier invoices
+// (plans/OF-PROCUREMENT-purchasing.md).
+export const FINANCE_AREAS: readonly string[] = [FINANCE_HOME, "/orders", "/invoices", "/reports", PROCUREMENT_HOME]
 
 /** Report pages that are not view-only, or not for this role. */
 export const FINANCE_EXCLUDED_REPORT_AREAS: readonly string[] = ["/reports/group-orders"]
@@ -180,6 +184,7 @@ export function isFinanceApiRequestAllowed(method: string, pathname: string): bo
   const verb = method.toUpperCase()
   const allowsVerb = (rule: FinanceApiRule) => rule.methods.includes(verb) || (verb === "HEAD" && rule.methods.includes("GET"))
   return FINANCE_API_RULES.some((rule) => allowsVerb(rule) && rule.pattern.test(normalized))
+    || isFinanceProcurementApiRequestAllowed(method, pathname)
 }
 
 // ---------------------------------------------------------------------------

@@ -79,6 +79,8 @@ const MOVEMENT_LABELS: Record<string, string> = {
   OPENING: "Opening figure",
   ADJUSTMENT: "Adjusted",
   ORDER_ISSUE: "Order processed",
+  PURCHASE_RECEIPT: "Goods received",
+  CUSTOMER_RETURN: "Customer return",
 }
 
 const MODE_LABELS: Record<StockAdjustmentMode, string> = {
@@ -297,7 +299,14 @@ export function WarehouseStockManager() {
           <Label htmlFor="warehouse-stock-warehouse">Warehouse</Label>
           <Select
             value={selectedId === null ? "" : String(selectedId)}
-            onValueChange={(value) => { setWarehouseId(Number(value)); setPage(1) }}
+            onValueChange={(value) => {
+              // Radix Select can emit "" while its value matches no option (the list is still
+              // loading); Number("") is 0, which the route refuses as an invalid warehouse.
+              const id = Number(value)
+              if (!Number.isInteger(id) || id <= 0) return
+              setWarehouseId(id)
+              setPage(1)
+            }}
           >
             <SelectTrigger id="warehouse-stock-warehouse" className="w-64">
               <SelectValue placeholder="Choose a warehouse" />

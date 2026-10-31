@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react"
 import dynamic from "next/dynamic"
 import { useSession } from "next-auth/react"
-import { Bike, ChevronDown, ChevronUp, ClipboardList, LayoutDashboard, Package, Warehouse } from "lucide-react"
+import { Bike, ChevronDown, ChevronUp, ClipboardList, LayoutDashboard, Package, PackageCheck, ShoppingCart, Undo2, Warehouse } from "lucide-react"
 
 import { OrderPortalProfileMenu } from "@/components/auth/order-portal-profile-menu"
 import { DeliveryDashboard } from "@/components/delivery-dashboard/delivery-dashboard"
+import { WarehouseReceiving, WarehouseRequisitions, WarehouseReturns } from "@/components/procurement/warehouse-purchasing"
 import { WarehouseGroupProducts } from "@/components/warehouse/catalog/warehouse-group-products"
 import { WarehouseOrganizationProducts } from "@/components/warehouse/catalog/warehouse-organization-products"
 import { WarehouseProductRequests } from "@/components/warehouse/catalog/warehouse-product-requests"
@@ -42,12 +43,17 @@ export const CATALOG_SECTIONS = [
 ] as const
 
 type CatalogSection = (typeof CATALOG_SECTIONS)[number]["key"]
-type Section = "dashboard" | "orders" | "riders" | CatalogSection
+type Section = "dashboard" | "orders" | "riders" | "requisitions" | "receiving" | "returns" | CatalogSection
 
 const TOP_SECTIONS: ReadonlyArray<{ key: Exclude<Section, CatalogSection>; label: string; icon: LucideIcon }> = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { key: "orders", label: "Orders", icon: ClipboardList },
   { key: "riders", label: "Riders", icon: Bike },
+  // Purchasing for the Apricart warehouses it works, never a cost
+  // (plans/OF-PROCUREMENT-purchasing.md).
+  { key: "requisitions", label: "Requisitions", icon: ShoppingCart },
+  { key: "receiving", label: "Receiving", icon: PackageCheck },
+  { key: "returns", label: "Customer returns", icon: Undo2 },
 ]
 
 const ALL_SECTION_KEYS: readonly string[] = [...TOP_SECTIONS.map((section) => section.key), ...CATALOG_SECTIONS.map((section) => section.key)]
@@ -206,6 +212,9 @@ export function WarehouseWorkspace() {
             )}
             {section === "orders" && <WarehouseOrders />}
             {section === "riders" && <WarehouseRiders />}
+            {section === "requisitions" && <WarehouseRequisitions />}
+            {section === "receiving" && <WarehouseReceiving />}
+            {section === "returns" && <WarehouseReturns />}
             {section === "catalog" && <WarehouseCatalog />}
             {section === "catalog-price-history" && (
               <ProductPriceHistoryView role="WAREHOUSE" endpoint="/api/v1/warehouse/catalog/price-history" />

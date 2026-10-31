@@ -18,7 +18,7 @@ import { formatQuantity, roundQuantity } from "@/lib/quantity"
  * warehouse together: all their stock, less every open order's lines.
  */
 
-export const STOCK_MOVEMENT_TYPES = ["OPENING", "ADJUSTMENT", "ORDER_ISSUE"] as const
+export const STOCK_MOVEMENT_TYPES = ["OPENING", "ADJUSTMENT", "ORDER_ISSUE", "PURCHASE_RECEIPT", "CUSTOMER_RETURN"] as const
 export type StockMovementType = (typeof STOCK_MOVEMENT_TYPES)[number]
 
 export const STOCK_ADJUSTMENT_MODES = ["set", "add", "remove"] as const

@@ -280,9 +280,11 @@ the order row is locked:
   address, NTN, status or refund (closes defect 7).
 - Bill To prints the customer's **NTN and STRN** from the issue-time
   snapshot, each only when present.
-- **"Fulfiller" is removed from the tax invoice.** Fulfilment happens after
-  issue, so it cannot be part of a document frozen at issue. It remains on
-  the order and the delivery challan.
+- **"Fulfiller" is not part of the frozen record.** Fulfilment happens after
+  issue, so it is never stored on the invoice. Once the order is fulfilled the
+  preview and the PDF add it live, from the same participant rule as before
+  (`loadInvoiceParticipants`); before fulfilment no Fulfiller line is printed.
+  (Changed 2026-10-28 at the business's request.)
 - **Overlays outside the document body, clearly marked:** the existing PAID
   stamp, and a band "Credit notes issued against this invoice: UBL-CN-000004
   (PKR 2,000.00)". The content itself is identical on every reprint.

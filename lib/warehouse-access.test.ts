@@ -417,6 +417,7 @@ describe("the API allowlist", () => {
     ["PATCH", "/api/v1/support/threads/42"],
     ["POST", "/api/v1/support/threads/42/messages"],
     ["GET", "/api/v1/support/stats"],
+    ["GET", "/api/v1/support/filters"],
     ["POST", "/api/v1/support/attachments"],
     ["GET", "/api/v1/support/attachments/7"],
   ])("admits %s %s", (method, path) => {
@@ -516,8 +517,10 @@ describe("the API allowlist", () => {
       if (rule.route.startsWith("app/api/v1/warehouse/")) {
         expect(source, rule.route).toContain('requireApiRole(["WAREHOUSE"])')
         if (!WAREHOUSE_CATALOG_ROUTES.includes(rule.route)) {
-          // Every order read or write is fenced to the user's branches.
-          expect(source, rule.route).toMatch(/loadWarehouseReach\(|loadWarehouseOrderInReach\(|isOrderInWarehouseReach\(|loadWarehouseOrderReach\(|listWarehouseOrders\(|loadWarehouseOrder\(|loadWarehouseCatalogFence\(/)
+          // Every order read or write is fenced to the user's branches; every
+          // purchasing call to the warehouses it is an operator of
+          // (plans/OF-PROCUREMENT-purchasing.md).
+          expect(source, rule.route).toMatch(/loadWarehouseReach\(|loadWarehouseOrderInReach\(|isOrderInWarehouseReach\(|loadWarehouseOrderReach\(|listWarehouseOrders\(|loadWarehouseOrder\(|loadWarehouseCatalogFence\(|loadWarehouseMemberships\(/)
         }
         for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
           const exported = new RegExp(`export async function ${method}\\b`).test(source)
