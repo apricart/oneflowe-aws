@@ -42,12 +42,15 @@ beforeEach(() => window.history.replaceState(null, "", "/warehouse"))
 afterEach(() => cleanup())
 
 describe("the warehouse side menu", () => {
-  it("offers the four sections in order and opens on the Dashboard", () => {
+  it("offers the sections in order and opens on the Dashboard", () => {
     render(<WarehouseWorkspace />)
     expect(menu().getAllByRole("button").map((button) => button.textContent)).toEqual([
       "Dashboard",
       "Orders",
       "Riders",
+      "Requisitions",
+      "Receiving",
+      "Customer returns",
       "Product Catalog",
     ])
     expect(menu().getByRole("button", { name: "Product Catalog" }).getAttribute("aria-expanded")).toBe("false")
